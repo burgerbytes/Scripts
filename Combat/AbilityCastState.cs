@@ -1,10 +1,5 @@
 using UnityEngine;
 
-/// <summary>
-/// Shared combat targeting state.
-/// AbilityMenuUI sets this when the player confirms an ability.
-/// Monsters (or anything) can query it to know if we're currently targeting.
-/// </summary>
 public class AbilityCastState : MonoBehaviour
 {
     public static AbilityCastState Instance { get; private set; }
@@ -23,7 +18,6 @@ public class AbilityCastState : MonoBehaviour
         }
 
         Instance = this;
-        // Optional: keep across scenes if you want
         // DontDestroyOnLoad(gameObject);
     }
 
@@ -32,7 +26,10 @@ public class AbilityCastState : MonoBehaviour
         CurrentCaster = caster;
         CurrentAbility = ability;
 
-        Debug.Log($"[AbilityCastState] BeginCast: caster={(caster != null ? caster.name : "null")}, ability={(ability != null ? ability.name : "null")}", this);
+        Debug.Log(
+            $"[AbilityCastState] BeginCast: caster={(caster != null ? caster.name : "null")}, ability={(ability != null ? ability.name : "null")}",
+            this
+        );
     }
 
     public void ClearCast()

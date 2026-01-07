@@ -112,6 +112,7 @@ public class AbilityMenuUI : MonoBehaviour
 
                 var btn = Instantiate(buttonPrefab, listParent);
 
+                // ✅ Matches your AbilityButtonUI API
                 btn.Bind(
                     ability,
                     topStatusBar,
@@ -149,6 +150,7 @@ public class AbilityMenuUI : MonoBehaviour
 
         if (AbilityCastState.Instance != null)
         {
+            // ✅ FIX: use currentHero (not _currentHero)
             AbilityCastState.Instance.BeginCast(currentHero, ability);
         }
         else
@@ -162,6 +164,7 @@ public class AbilityMenuUI : MonoBehaviour
         if (battleManager == null || currentHero == null)
             return;
 
+        // BattleManager will now wait for enemy click if targetType==Enemy.
         battleManager.BeginAbilityUseFromMenu(currentHero, ability);
 
         Close();
@@ -176,7 +179,8 @@ public class AbilityMenuUI : MonoBehaviour
     public void RefreshAffordability()
     {
         foreach (var b in buttons)
-            if (b != null) b.RefreshInteractable();
+            if (b != null)
+                b.RefreshInteractable(); // ✅ Matches your AbilityButtonUI API
     }
 
     private void ClearButtons()

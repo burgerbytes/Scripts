@@ -22,7 +22,6 @@ public class BattleManager : MonoBehaviour
         public HeroStats stats;
 
         public bool hasActedThisRound;
-
         public bool IsDead => stats == null || stats.CurrentHp <= 0;
     }
 
@@ -44,10 +43,7 @@ public class BattleManager : MonoBehaviour
         public bool IsDead;
         public bool HasActedThisRound;
 
-        // PartyHUDSlot expects this
         public bool IsBlocking;
-
-        // Optional: shield amount
         public int Shield;
 
         public float HP01 => MaxHP <= 0 ? 0f : Mathf.Clamp01((float)HP / MaxHP);
@@ -81,12 +77,11 @@ public class BattleManager : MonoBehaviour
 
     [SerializeField] private PostBattleRewardPanel startRewardPanel;
     [SerializeField] private PlayerInventory inventory;
-    [SerializeField] private ReelSpinSystem reels;
+    [SerializeField] private PostBattleFlowController postBattleFlow;
 
     [Header("External Systems")]
     [SerializeField] private StretchController stretchController;
     [SerializeField] private ScrollingBackground scrollingBackground;
-    [SerializeField] private PostBattleFlowController postBattleFlow;
 
     [Header("Input / Targeting")]
     [SerializeField] private bool allowClickToSelectMonsterTarget = true;
@@ -104,12 +99,6 @@ public class BattleManager : MonoBehaviour
     public bool IsPlayerPhase => _state == BattleState.PlayerPhase;
     public int PartyCount => _party != null ? _party.Count : 0;
     public int ActivePartyIndex => _activePartyIndex;
-
-    // NEW: expose targeting state (Monster click can call SelectEnemyTarget regardless;
-    // this is still useful for debugging / UI)
-    public bool IsAwaitingEnemyTarget => _awaitingEnemyTarget;
-    public AbilityDefinitionSO PendingAbility => _pendingAbility;
-    public int PendingActorIndex => _pendingActorIndex;
 
     private BattleState _state = BattleState.Idle;
 
@@ -129,33 +118,45 @@ public class BattleManager : MonoBehaviour
     private bool _resolving;
     private Camera _mainCam;
 
-    private bool _startupRewardHandled;
     private Coroutine _startBattleRoutine;
+
+    private bool _startupRewardHandled;
+
+    // ✅ IMPORTANT: finds inactive objects too (e.g., UI panels disabled by default)
+    private static T FindInSceneIncludingInactive<T>() where T : UnityEngine.Object
+    {
+        var all = Resources.FindObjectsOfTypeAll<T>();
+        for (int i = 0; i < all.Length; i++)
+        {
+            var obj = all[i];
+            if (obj == null) continue;
+
+            if (obj is Component c)
+            {
+                if (c.gameObject != null && c.gameObject.scene.IsValid())
+                    return obj;
+            }
+            else if (obj is GameObject go)
+            {
+                if (go.scene.IsValid())
+                    return obj;
+            }
+        }
+        return null;
+    }
 
     private void Awake()
     {
         _mainCam = Camera.main;
 
-        if (resourcePool == null) resourcePool = FindFirstObjectByType<ResourcePool>();
-        if (stretchController == null) stretchController = FindFirstObjectByType<StretchController>();
-        if (postBattleFlow == null) postBattleFlow = FindFirstObjectByType<PostBattleFlowController>();
-        if (inventory == null) inventory = FindFirstObjectByType<PlayerInventory>();
-        if (reels == null) reels = FindFirstObjectByType<ReelSpinSystem>();
-        if (startRewardPanel == null) startRewardPanel = FindFirstObjectByType<PostBattleRewardPanel>();
+        // Prefer inspector refs; if missing, auto-find (INCLUDING INACTIVE)
+        if (resourcePool == null) resourcePool = FindInSceneIncludingInactive<ResourcePool>();
+        if (stretchController == null) stretchController = FindInSceneIncludingInactive<StretchController>();
+        if (postBattleFlow == null) postBattleFlow = FindInSceneIncludingInactive<PostBattleFlowController>();
+        if (inventory == null) inventory = FindInSceneIncludingInactive<PlayerInventory>();
+        if (startRewardPanel == null) startRewardPanel = FindInSceneIncludingInactive<PostBattleRewardPanel>();
 
         StartNewRun();
-    }
-
-    private void OnEnable()
-    {
-        if (stretchController != null)
-            stretchController.OnBattleRequested += HandleBattleRequested;
-    }
-
-    private void OnDisable()
-    {
-        if (stretchController != null)
-            stretchController.OnBattleRequested -= HandleBattleRequested;
     }
 
     private void Start()
@@ -165,8 +166,6 @@ public class BattleManager : MonoBehaviour
 
     private void Update()
     {
-        // Keep this as a fallback click path (robust pick code),
-        // but Monster.OnMouseDown can also call SelectEnemyTarget directly.
         if (!IsPlayerPhase || !_awaitingEnemyTarget || _resolving || !allowClickToSelectMonsterTarget)
             return;
 
@@ -179,18 +178,9 @@ public class BattleManager : MonoBehaviour
             return;
         }
 
-        if (logFlow)
-            Debug.Log($"[Battle] Click while awaiting target. Pending ability: {(_pendingAbility != null ? _pendingAbility.abilityName : "NULL")}");
-
         Monster clicked = TryGetClickedMonster();
-
-        if (logFlow)
-            Debug.Log($"[Battle] Click hit monster: {(clicked != null ? clicked.name : "NONE")}");
-
         if (clicked != null && _activeMonsters.Contains(clicked) && !clicked.IsDead)
             SelectEnemyTarget(clicked);
-        else if (logFlow && clicked != null)
-            Debug.Log($"[Battle] Clicked monster '{clicked.name}' is not active/dead. ActiveCount={_activeMonsters.Count}");
     }
 
     public void StartNewRun()
@@ -251,7 +241,6 @@ public class BattleManager : MonoBehaviour
         }
     }
 
-    // Required by PartyHUDSlot.cs
     public PartyMemberSnapshot GetPartyMemberSnapshot(int index)
     {
         if (!IsValidPartyIndex(index))
@@ -331,23 +320,15 @@ public class BattleManager : MonoBehaviour
 
     public void SelectEnemyTarget(Monster target)
     {
-        if (logFlow) Debug.Log("[Battle] SelectEnemyTarget called");
-
+        Debug.Log("SelectEnemyTarget called");
         if (!IsPlayerPhase) return;
         if (!_awaitingEnemyTarget || _pendingAbility == null) return;
         if (target == null || target.IsDead) return;
-
-        if (!_activeMonsters.Contains(target)) return;
 
         _selectedEnemyTarget = target;
         _awaitingEnemyTarget = false;
 
         StartCoroutine(ResolvePendingAbility());
-    }
-
-    private void HandleBattleRequested()
-    {
-        StartBattle();
     }
 
     public void StartBattle()
@@ -404,9 +385,12 @@ public class BattleManager : MonoBehaviour
 
                 if (chosen != null && chosen.item != null && inventory != null)
                     inventory.Add(chosen.item, chosen.quantity);
-
-                if (reels != null)
-                    yield return SpinReelsOnce();
+            }
+            else if (logFlow)
+            {
+                Debug.Log(
+                    $"[Battle] Start reward skipped. poolCount={(pool != null ? pool.Count : -1)}, startRewardPanel={(startRewardPanel != null ? startRewardPanel.name : "NULL")}",
+                    this);
             }
         }
 
@@ -417,50 +401,6 @@ public class BattleManager : MonoBehaviour
         OnActivePartyMemberChanged?.Invoke(_activePartyIndex);
 
         NotifyPartyChanged();
-    }
-
-    private static List<ItemOptionSO> RollUnique(List<ItemOptionSO> pool, int count)
-    {
-        List<ItemOptionSO> temp = new List<ItemOptionSO>(pool);
-        List<ItemOptionSO> result = new List<ItemOptionSO>(count);
-
-        count = Mathf.Clamp(count, 0, temp.Count);
-
-        for (int i = 0; i < count; i++)
-        {
-            int swapIndex = UnityEngine.Random.Range(i, temp.Count);
-            (temp[i], temp[swapIndex]) = (temp[swapIndex], temp[i]);
-            result.Add(temp[i]);
-        }
-
-        return result;
-    }
-
-    private ItemOptionSO BuildRuntimeSkipOption()
-    {
-        ItemOptionSO skip = ScriptableObject.CreateInstance<ItemOptionSO>();
-        skip.optionName = "Skip";
-        skip.description = "Skip this reward and start the battle.";
-        skip.pros = Array.Empty<string>();
-        skip.cons = Array.Empty<string>();
-        skip.item = null;
-        skip.quantity = 0;
-        skip.icon = null;
-        return skip;
-    }
-
-    private IEnumerator SpinReelsOnce()
-    {
-        bool done = false;
-
-        void MarkDone(Dictionary<string, ReelSymbolSO> _) { done = true; }
-
-        reels.OnSpinFinished += MarkDone;
-        reels.SpinAll();
-
-        yield return new WaitUntil(() => done);
-
-        reels.OnSpinFinished -= MarkDone;
     }
 
     private IEnumerator ResolvePendingAbility()
@@ -479,13 +419,12 @@ public class BattleManager : MonoBehaviour
             yield break;
         }
 
-        Monster enemyTarget = null;
+        Monster enemyTarget = _selectedEnemyTarget;
         if (_pendingAbility.targetType == AbilityTargetType.Enemy)
         {
-            enemyTarget = _selectedEnemyTarget;
             if (enemyTarget == null || enemyTarget.IsDead)
             {
-                CancelPendingAbility();
+                _awaitingEnemyTarget = true;
                 yield break;
             }
         }
@@ -499,7 +438,6 @@ public class BattleManager : MonoBehaviour
 
         _resolving = true;
 
-        // SLASH
         if (_pendingAbility.targetType == AbilityTargetType.Enemy && enemyTarget != null)
         {
             int dealt = enemyTarget.TakeDamageFromAbility(
@@ -518,7 +456,6 @@ public class BattleManager : MonoBehaviour
             }
         }
 
-        // BLOCK (shield)
         if (_pendingAbility.targetType == AbilityTargetType.Self && _pendingAbility.shieldAmount > 0)
         {
             actorStats.AddShield(_pendingAbility.shieldAmount);
@@ -528,7 +465,6 @@ public class BattleManager : MonoBehaviour
 
         _resolving = false;
 
-        // NEW: ensure pending cast state is cleared once we resolve (success path)
         if (AbilityCastState.Instance != null)
             AbilityCastState.Instance.ClearCast();
 
@@ -539,20 +475,7 @@ public class BattleManager : MonoBehaviour
     private ResourceCost GetEffectiveCost(HeroStats actor, AbilityDefinitionSO ability)
     {
         if (ability == null) return default;
-        ResourceCost c = ability.cost;
-
-        if (ability.freeIfHidden && actor != null && actor.IsHidden)
-            c.attack = 0;
-
-        return c;
-    }
-
-    private int GetPartyIndexForHero(HeroStats hero)
-    {
-        if (hero == null || _party == null) return -1;
-        for (int i = 0; i < _party.Count; i++)
-            if (_party[i] != null && _party[i].stats == hero) return i;
-        return -1;
+        return ability.cost;
     }
 
     private void CancelPendingAbility()
@@ -563,7 +486,6 @@ public class BattleManager : MonoBehaviour
         _awaitingEnemyTarget = false;
         _selectedEnemyTarget = null;
 
-        // NEW: ensure cast state cannot remain stuck on cancel paths
         if (AbilityCastState.Instance != null)
             AbilityCastState.Instance.ClearCast();
     }
@@ -641,13 +563,7 @@ public class BattleManager : MonoBehaviour
             GameObject go = Instantiate(prefab, pos, Quaternion.identity);
             Monster m = go.GetComponentInChildren<Monster>(true);
             if (m != null) _activeMonsters.Add(m);
-
-            if (logFlow && m != null)
-                Debug.Log($"[Battle] Spawned monster '{m.name}' at {pos}. Layer={m.gameObject.layer}");
         }
-
-        if (logFlow)
-            Debug.Log($"[Battle] Active monsters count: {_activeMonsters.Count}");
     }
 
     private void RemoveMonster(Monster m)
@@ -664,9 +580,9 @@ public class BattleManager : MonoBehaviour
 
         _activeMonsters.Clear();
         _plannedIntents.Clear();
+        CancelPendingAbility();
     }
 
-    // robust click picking for BOTH 2D and 3D colliders
     private Monster TryGetClickedMonster()
     {
         if (_mainCam == null) _mainCam = Camera.main;
@@ -674,7 +590,6 @@ public class BattleManager : MonoBehaviour
 
         Physics.queriesHitTriggers = true;
 
-        // --------------- 2D ---------------
         Vector3 world = _mainCam.ScreenToWorldPoint(Input.mousePosition);
         Vector2 p2 = new Vector2(world.x, world.y);
 
@@ -687,15 +602,10 @@ public class BattleManager : MonoBehaviour
                 if (c == null) continue;
 
                 Monster m = c.GetComponentInParent<Monster>();
-                if (m != null)
-                {
-                    if (logFlow) Debug.Log($"[Battle] 2D pick hit '{m.name}' via collider '{c.name}' (layer {c.gameObject.layer}).");
-                    return m;
-                }
+                if (m != null) return m;
             }
         }
 
-        // --------------- 3D ---------------
         Ray ray = _mainCam.ScreenPointToRay(Input.mousePosition);
         RaycastHit[] hits3D = Physics.RaycastAll(ray, 500f, ~0, QueryTriggerInteraction.Collide);
 
@@ -703,7 +613,6 @@ public class BattleManager : MonoBehaviour
         {
             float best = float.MaxValue;
             Monster bestMonster = null;
-            Collider bestCollider = null;
 
             for (int i = 0; i < hits3D.Length; i++)
             {
@@ -717,17 +626,10 @@ public class BattleManager : MonoBehaviour
                 {
                     best = hits3D[i].distance;
                     bestMonster = m;
-                    bestCollider = c;
                 }
             }
 
-            if (bestMonster != null)
-            {
-                if (logFlow && bestCollider != null)
-                    Debug.Log($"[Battle] 3D pick hit '{bestMonster.name}' via collider '{bestCollider.name}' (layer {bestCollider.gameObject.layer}).");
-
-                return bestMonster;
-            }
+            return bestMonster;
         }
 
         return null;
@@ -789,10 +691,47 @@ public class BattleManager : MonoBehaviour
         dn.gameObject.SendMessage("SetValue", amount, SendMessageOptions.DontRequireReceiver);
     }
 
-    // Required by PartyHUD
+    private int GetPartyIndexForHero(HeroStats hero)
+    {
+        if (hero == null || _party == null) return -1;
+        for (int i = 0; i < _party.Count; i++)
+            if (_party[i] != null && _party[i].stats == hero) return i;
+        return -1;
+    }
+
     public HeroStats GetHeroAtPartyIndex(int index)
     {
         if (!IsValidPartyIndex(index)) return null;
         return _party[index].stats;
+    }
+
+    private static List<ItemOptionSO> RollUnique(List<ItemOptionSO> pool, int count)
+    {
+        List<ItemOptionSO> temp = new List<ItemOptionSO>(pool);
+        List<ItemOptionSO> result = new List<ItemOptionSO>(count);
+
+        count = Mathf.Clamp(count, 0, temp.Count);
+
+        for (int i = 0; i < count; i++)
+        {
+            int swapIndex = UnityEngine.Random.Range(i, temp.Count);
+            (temp[i], temp[swapIndex]) = (temp[swapIndex], temp[i]);
+            result.Add(temp[i]);
+        }
+
+        return result;
+    }
+
+    private ItemOptionSO BuildRuntimeSkipOption()
+    {
+        ItemOptionSO skip = ScriptableObject.CreateInstance<ItemOptionSO>();
+        skip.optionName = "Skip";
+        skip.description = "Skip this reward and start the battle.";
+        skip.pros = Array.Empty<string>();
+        skip.cons = Array.Empty<string>();
+        skip.item = null;
+        skip.quantity = 0;
+        skip.icon = null;
+        return skip;
     }
 }

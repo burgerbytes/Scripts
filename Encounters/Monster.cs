@@ -1,6 +1,7 @@
 // PATH: Assets/Scripts/Encounters/Monster.cs
 using System;
 using System.Collections;
+using System.Reflection;
 using UnityEngine;
 
 public class Monster : MonoBehaviour
@@ -40,6 +41,7 @@ public class Monster : MonoBehaviour
     [Header("Runtime")]
     [SerializeField] private int _currentHp = 10;
 
+    // ✅ These are required by MonsterHpBar.cs
     public int MaxHp => maxHp;
     public int CurrentHp => _currentHp;
     public int Defense => defense;
@@ -57,6 +59,7 @@ public class Monster : MonoBehaviour
         OnHpChanged?.Invoke(_currentHp, maxHp);
     }
 
+    // ✅ Click-to-target: if an ability is pending, this click selects the target and resolves damage.
     private void OnMouseDown()
     {
         // Requires Collider (3D) or Collider2D (2D) on this GameObject.
@@ -85,13 +88,12 @@ public class Monster : MonoBehaviour
 
             if (_battleManager != null)
             {
-                // This is the key link for Option A:
-                // BattleManager is already awaiting target when an enemy ability was selected.
+                // Option A: BattleManager is awaiting a target; this resolves the cast.
                 _battleManager.SelectEnemyTarget(this);
             }
             else
             {
-                Debug.LogWarning("[Combat Click] BattleManager not found; cannot select enemy target.", this);
+                Debug.LogWarning("[Combat Click] BattleManager not found; cannot resolve ability.", this);
             }
         }
         else
@@ -99,7 +101,7 @@ public class Monster : MonoBehaviour
             Debug.Log($"[Combat Click] No pending cast | Clicked monster: {gameObject.name}", this);
         }
 
-        //Debug.Log(BuildMonsterDebugString(), this);
+        Debug.Log(BuildMonsterDebugString(), this);
     }
 
     private string BuildMonsterDebugString()
@@ -139,22 +141,7 @@ public class Monster : MonoBehaviour
         return attacks[idx];
     }
 
-    public float PlayDeathEffects()
-    {
-        if (destroyOnDeath)
-            StartCoroutine(DeathRoutine());
-
-        return Mathf.Max(0f, destroyDelaySeconds);
-    }
-
-    private IEnumerator DeathRoutine()
-    {
-        if (destroyDelaySeconds > 0f)
-            yield return new WaitForSeconds(destroyDelaySeconds);
-
-        Destroy(gameObject);
-    }
-
+    // ✅ Required by MonsterEncounterManager + PoisonReceiver
     public int TakeDamage(int incomingDamage)
     {
         if (_currentHp <= 0)
@@ -173,6 +160,23 @@ public class Monster : MonoBehaviour
         return ApplyRawDamage(actual);
     }
 
+    // ✅ Required by MonsterEncounterManager
+    public float PlayDeathEffects()
+    {
+        if (destroyOnDeath)
+            StartCoroutine(DeathRoutine());
+
+        return Mathf.Max(0f, destroyDelaySeconds);
+    }
+
+    private IEnumerator DeathRoutine()
+    {
+        if (destroyDelaySeconds > 0f)
+            yield return new WaitForSeconds(destroyDelaySeconds);
+
+        Destroy(gameObject);
+    }
+
     public float GetResistance(ElementType element)
     {
         switch (element)
@@ -183,6 +187,10 @@ public class Monster : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// TotalDamage = ((abilityDamage * classAttackModifier) - enemyDefense) * elementalResistance
+    /// Returns HP damage applied.
+    /// </summary>
     public int TakeDamageFromAbility(int abilityBaseDamage, float classAttackModifier, ElementType element)
     {
         if (_currentHp <= 0)
