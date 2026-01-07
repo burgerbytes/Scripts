@@ -1,4 +1,3 @@
-// PATH: Assets/Scripts/UI/Reels/ReelSpinSystem.cs
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -31,8 +30,11 @@ public class ReelSpinSystem : MonoBehaviour
     [Header("RNG")]
     [SerializeField] private int seed = 12345;
 
-    [Header("Payout Targets (optional)")]
-    [Tooltip("If set, payouts add here. If null, we try to FindFirstObjectByType<TopStatusBar>().")]
+    [Header("Payout Targets")]
+    [Tooltip("Authoritative resource store. If null, we use ResourcePool.Instance or find one in scene.")]
+    [SerializeField] private ResourcePool resourcePool;
+
+    [Tooltip("Optional UI-only target. Not used as authority anymore.")]
     [SerializeField] private TopStatusBar topStatusBar;
 
     [Header("Symbol → Resource Mapping (REQUIRED)")]
@@ -55,6 +57,9 @@ public class ReelSpinSystem : MonoBehaviour
     {
         rng = new System.Random(seed);
 
+        if (resourcePool == null)
+            resourcePool = ResourcePool.Instance != null ? ResourcePool.Instance : FindFirstObjectByType<ResourcePool>();
+
         if (topStatusBar == null)
             topStatusBar = FindFirstObjectByType<TopStatusBar>();
 
@@ -63,7 +68,6 @@ public class ReelSpinSystem : MonoBehaviour
 
     private void OnValidate()
     {
-        // Keep lookup sane in editor changes (play mode rebuild in Awake).
         if (!Application.isPlaying)
             BuildMappingLookup();
     }
@@ -91,7 +95,6 @@ public class ReelSpinSystem : MonoBehaviour
         spinning = true;
         OnSpinStarted?.Invoke();
 
-        // Ensure mapping is ready (in case assets changed after Awake)
         if (mapLookup == null || mapLookup.Count == 0)
             BuildMappingLookup();
 
@@ -135,7 +138,6 @@ public class ReelSpinSystem : MonoBehaviour
 
         int cntA = 0, cntD = 0, cntM = 0, cntW = 0;
 
-        // Base payout + counts
         foreach (var t in midRow)
         {
             switch (t)
@@ -147,25 +149,33 @@ public class ReelSpinSystem : MonoBehaviour
             }
         }
 
-        // Bonus logic: 3-of-a-kind, and wild substitution only if wilds exist.
         if (midRow.Count >= 3)
         {
-            // Pure matches
             if (cntA >= 3) addA += 1;
             else if (cntD >= 3) addD += 1;
             else if (cntM >= 3) addM += 1;
             else if (cntW >= 3) addW += 1;
             else if (cntW > 0)
             {
-                // Wild substitution (only if at least one wild is present)
                 if (cntA + cntW >= 3 && cntA > 0) addA += 1;
                 else if (cntD + cntW >= 3 && cntD > 0) addD += 1;
                 else if (cntM + cntW >= 3 && cntM > 0) addM += 1;
             }
         }
 
-        if (topStatusBar != null)
-            topStatusBar.AddResources(addA, addD, addM, addW);
+        // ✅ AUTHORITATIVE ADD: gameplay resource pool
+        if (resourcePool != null)
+        {
+            resourcePool.Add(addA, addD, addM, addW);
+        }
+        else
+        {
+            // Fallback: UI-only add (won't enable gameplay spending, but avoids silent behavior)
+            if (topStatusBar != null)
+                topStatusBar.AddResources(addA, addD, addM, addW);
+
+            Debug.LogWarning("[ReelSpinSystem] No ResourcePool found. Resources were applied to UI only. Add a ResourcePool to the scene.");
+        }
     }
 
     private void BuildMappingLookup()
@@ -182,8 +192,6 @@ public class ReelSpinSystem : MonoBehaviour
         {
             var e = symbolResourceMap[i];
             if (e == null || e.symbol == null) continue;
-
-            // Last one wins if duplicates exist.
             mapLookup[e.symbol] = e.resourceType;
         }
     }

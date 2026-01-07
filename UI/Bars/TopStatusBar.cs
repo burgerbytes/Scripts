@@ -11,6 +11,9 @@ public class TopStatusBar : MonoBehaviour
     [Header("Player Vitals Bars (HP + Stamina)")]
     [SerializeField] private PlayerVitalsBarUI vitalsBar;
 
+    [Header("Resource Source (authoritative)")]
+    [SerializeField] private ResourcePool resourcePool;
+
     [Header("Test Mode")]
     [SerializeField] private bool useTestValues = false;
     [SerializeField] private float testRefreshInterval = 0.25f;
@@ -27,18 +30,28 @@ public class TopStatusBar : MonoBehaviour
 
     private float _nextRefreshTime;
 
-    private long _attack;
-    private long _defense;
-    private long _magic;
-    private long _wild;
-
     private float _hp01 = 1f;
     private float _stamina01 = 1f;
 
+    private void Awake()
+    {
+        if (resourcePool == null)
+            resourcePool = ResourcePool.Instance != null ? ResourcePool.Instance : FindFirstObjectByType<ResourcePool>();
+    }
+
     private void OnEnable()
     {
+        if (resourcePool != null)
+            resourcePool.OnChanged += RefreshUI;
+
         RefreshUI();
         _nextRefreshTime = Time.unscaledTime + testRefreshInterval;
+    }
+
+    private void OnDisable()
+    {
+        if (resourcePool != null)
+            resourcePool.OnChanged -= RefreshUI;
     }
 
     private void Update()
@@ -60,35 +73,32 @@ public class TopStatusBar : MonoBehaviour
         }
     }
 
+    // Kept for compatibility; now writes to the authoritative pool.
     public void SetValues(long attack, long defense, long magic, long wild, float hp01, float stamina01)
     {
-        _attack = attack;
-        _defense = defense;
-        _magic = magic;
-        _wild = wild;
-
         _hp01 = Mathf.Clamp01(hp01);
         _stamina01 = Mathf.Clamp01(stamina01);
 
-        if (!useTestValues)
-            RefreshUI();
+        if (!useTestValues && resourcePool != null)
+            resourcePool.ResetForNewRun(attack, defense, magic, wild);
+
+        RefreshUI();
     }
 
+    // Kept for compatibility; now adds to the authoritative pool.
     public void AddResources(long addAttack, long addDefense, long addMagic, long addWild)
     {
-        _attack += addAttack;
-        _defense += addDefense;
-        _magic += addMagic;
-        _wild += addWild;
+        if (!useTestValues && resourcePool != null)
+            resourcePool.Add(addAttack, addDefense, addMagic, addWild);
 
-        if (!useTestValues)
-            RefreshUI();
+        RefreshUI();
     }
 
-    public long GetAttack() => _attack;
-    public long GetDefense() => _defense;
-    public long GetMagic() => _magic;
-    public long GetWild() => _wild;
+    // These now reflect authoritative values
+    public long GetAttack() => useTestValues ? testAttack : (resourcePool != null ? resourcePool.Attack : 0);
+    public long GetDefense() => useTestValues ? testDefense : (resourcePool != null ? resourcePool.Defense : 0);
+    public long GetMagic() => useTestValues ? testMagic : (resourcePool != null ? resourcePool.Magic : 0);
+    public long GetWild() => useTestValues ? testWild : (resourcePool != null ? resourcePool.Wild : 0);
 
     public void RefreshUI()
     {
@@ -108,10 +118,15 @@ public class TopStatusBar : MonoBehaviour
             return;
         }
 
-        SetSlotValue(attackSlot, _attack);
-        SetSlotValue(defenseSlot, _defense);
-        SetSlotValue(magicSlot, _magic);
-        SetSlotValue(wildSlot, _wild);
+        long a = resourcePool != null ? resourcePool.Attack : 0;
+        long d = resourcePool != null ? resourcePool.Defense : 0;
+        long m = resourcePool != null ? resourcePool.Magic : 0;
+        long w = resourcePool != null ? resourcePool.Wild : 0;
+
+        SetSlotValue(attackSlot, a);
+        SetSlotValue(defenseSlot, d);
+        SetSlotValue(magicSlot, m);
+        SetSlotValue(wildSlot, w);
 
         if (vitalsBar != null)
         {

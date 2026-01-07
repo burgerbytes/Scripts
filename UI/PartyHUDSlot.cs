@@ -118,8 +118,7 @@ public class PartyHUDSlot : MonoBehaviour
         if (statusText != null)
         {
             if (snapshot.IsDead) statusText.text = "Status: DEAD";
-            else if (snapshot.IsBlocking && snapshot.HasActedThisRound) statusText.text = "Status: BLOCKING";
-            else if (snapshot.HasActedThisRound) statusText.text = "Status: ACTED";
+            else if (snapshot.IsBlocking) statusText.text = "Status: BLOCKING";
             else statusText.text = "Status: READY";
         }
 
@@ -175,4 +174,3 @@ public class PartyHUDSlot : MonoBehaviour
         }
     }
 }
-

@@ -1,4 +1,4 @@
-// PATH: Assets/Scripts/Encounters/Monster.cs
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Reflection;
@@ -52,7 +52,7 @@ public class Monster : MonoBehaviour
 
     private void Awake()
     {
-        _battleManager = FindFirstObjectByType<BattleManager>();
+        _battleManager = BattleManager.Instance != null ? BattleManager.Instance : FindFirstObjectByType<BattleManager>();
 
         if (_currentHp <= 0) _currentHp = maxHp;
         _currentHp = Mathf.Clamp(_currentHp, 0, maxHp);
@@ -62,43 +62,34 @@ public class Monster : MonoBehaviour
     // ✅ Click-to-target: if an ability is pending, this click selects the target and resolves damage.
     private void OnMouseDown()
     {
-        // Requires Collider (3D) or Collider2D (2D) on this GameObject.
+        // Requires Collider (3D) or Collider2D on this monster (or a child).
+        // Always forward clicks to BattleManager; BattleManager will ignore if not currently awaiting a target.
+        if (_battleManager == null)
+            _battleManager = BattleManager.Instance != null ? BattleManager.Instance : FindFirstObjectByType<BattleManager>();
 
-        var state = AbilityCastState.Instance;
-
-        if (state == null)
+        if (_battleManager != null)
         {
-            Debug.LogWarning($"[Combat Click] No AbilityCastState in scene | Clicked monster: {gameObject.name}", this);
-        }
-        else if (state.HasPendingCast)
-        {
-            var ability = state.CurrentAbility;
-            var caster = state.CurrentCaster;
-
-            Debug.Log(
-                $"[Combat Click] Pending ability cast detected!\n" +
-                $"Caster: {(caster != null ? caster.name : "null")}\n" +
-                $"Ability: {(ability != null ? ability.name : "null")}\n" +
-                $"Clicked Monster: {gameObject.name}",
-                this
-            );
-
-            if (_battleManager == null)
-                _battleManager = FindFirstObjectByType<BattleManager>();
-
-            if (_battleManager != null)
-            {
-                // Option A: BattleManager is awaiting a target; this resolves the cast.
-                _battleManager.SelectEnemyTarget(this);
-            }
-            else
-            {
-                Debug.LogWarning("[Combat Click] BattleManager not found; cannot resolve ability.", this);
-            }
+            Debug.Log($"[Combat Click] Forwarding click to BattleManager.SelectEnemyTarget | Monster={name}", this);
+            _battleManager.SelectEnemyTarget(this);
+            Debug.Log($"[Combat Click] Called SelectEnemyTarget on BattleManager={_battleManager.name} ({_battleManager.GetInstanceID()}) | Monster={name}", this);
         }
         else
         {
-            Debug.Log($"[Combat Click] No pending cast | Clicked monster: {gameObject.name}", this);
+            Debug.LogWarning($"[Combat Click] Could not forward click (BattleManager not found) | Monster={name}", this);
+        }
+
+        // Debug-only: print pending cast state if present.
+        var state = AbilityCastState.Instance;
+        if (state != null && state.HasPendingCast)
+        {
+            Debug.Log("[Combat Click] Pending ability cast detected!\n" +
+                      $"Caster: {(state.CurrentCaster != null ? state.CurrentCaster.name : "NULL")}\n" +
+                      $"Ability: {(state.CurrentAbility != null ? state.CurrentAbility.abilityName : "NULL")}\n" +
+                      $"Clicked Monster: {name}", this);
+        }
+        else
+        {
+            Debug.Log($"[Combat Click] No pending cast | Clicked monster: {name}", this);
         }
 
         Debug.Log(BuildMonsterDebugString(), this);
@@ -227,3 +218,6 @@ public class Monster : MonoBehaviour
         return Mathf.Max(0, before - _currentHp);
     }
 }
+
+
+/////////////////////

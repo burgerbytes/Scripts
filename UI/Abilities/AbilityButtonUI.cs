@@ -7,15 +7,15 @@ public class AbilityButtonUI : MonoBehaviour
 {
     [Header("Core UI")]
     [SerializeField] private Button button;
-    [SerializeField] private Image buttonBackground;      // optional: set this to your button bg Image
+    [SerializeField] private Image buttonBackground;
     [SerializeField] private TMP_Text nameText;
     [SerializeField] private TMP_Text costText;
 
     [Header("Cost Sprite Indices (match TMP Sprite Asset table)")]
-    [SerializeField] private int attackSpriteIndex = 2;   // sword
-    [SerializeField] private int defenseSpriteIndex = 0;  // shield
-    [SerializeField] private int magicSpriteIndex = 1;    // diamond
-    [SerializeField] private int wildSpriteIndex = 3;     // star
+    [SerializeField] private int attackSpriteIndex = 2;
+    [SerializeField] private int defenseSpriteIndex = 0;
+    [SerializeField] private int magicSpriteIndex = 1;
+    [SerializeField] private int wildSpriteIndex = 3;
 
     [Header("Formatting")]
     [SerializeField] private string separator = "  ";
@@ -38,10 +38,10 @@ public class AbilityButtonUI : MonoBehaviour
     [SerializeField] private bool debugLogs = false;
 
     private AbilityDefinitionSO ability;
-    private TopStatusBar resources;
+    private ResourcePool resourcePool;
 
-    private System.Action<AbilityButtonUI> onSelected; // menu uses this to enforce single selection
-    private System.Action<AbilityDefinitionSO> onClickedConfirm; // optional "confirm" action if you want
+    private System.Action<AbilityButtonUI> onSelected;
+    private System.Action<AbilityDefinitionSO> onClickedConfirm;
 
     private bool isSelected;
 
@@ -54,13 +54,13 @@ public class AbilityButtonUI : MonoBehaviour
 
     public void Bind(
         AbilityDefinitionSO ability,
-        TopStatusBar resources,
+        ResourcePool resourcePool,
         System.Action<AbilityButtonUI> onSelectedCallback,
         System.Action<AbilityDefinitionSO> onClickedConfirmCallback = null
     )
     {
         this.ability = ability;
-        this.resources = resources;
+        this.resourcePool = resourcePool;
         this.onSelected = onSelectedCallback;
         this.onClickedConfirm = onClickedConfirmCallback;
 
@@ -81,7 +81,6 @@ public class AbilityButtonUI : MonoBehaviour
             button.onClick.AddListener(OnClicked);
         }
 
-        // default state
         SetSelected(false);
         RefreshInteractable();
     }
@@ -94,7 +93,6 @@ public class AbilityButtonUI : MonoBehaviour
         if (costText != null) originalCostColor = costText.color;
         if (buttonBackground != null) originalBgColor = buttonBackground.color;
 
-        // If you left affordable colors as white, inherit originals so we don't override your prefab styling.
         if (affordableTextColor == Color.white && nameText != null) affordableTextColor = originalNameColor;
         if (affordableBackgroundColor == Color.white && buttonBackground != null) affordableBackgroundColor = originalBgColor;
 
@@ -103,27 +101,20 @@ public class AbilityButtonUI : MonoBehaviour
 
     private void OnClicked()
     {
-        // First select/highlight the button in the list
         onSelected?.Invoke(this);
-
-        // Optional: if you later want click to "confirm/cast", you can use this.
         onClickedConfirm?.Invoke(ability);
     }
 
     public void SetSelected(bool selected)
     {
         isSelected = selected;
-
-        // If unaffordable, we keep the gray-out look (unless you want selection to override that)
         bool affordable = IsAffordable();
 
-        // Name text styling
         if (nameText != null)
         {
             if (boldNameWhenSelected)
                 nameText.fontStyle = selected ? FontStyles.Bold : FontStyles.Normal;
 
-            // Color priority: unaffordable > selected > normal
             if (grayOutWhenUnaffordable && !affordable)
                 nameText.color = unaffordableTextColor;
             else if (selected)
@@ -132,7 +123,6 @@ public class AbilityButtonUI : MonoBehaviour
                 nameText.color = affordableTextColor;
         }
 
-        // Cost text color (icons follow vertex color)
         if (costText != null)
         {
             if (grayOutWhenUnaffordable && !affordable)
@@ -141,7 +131,6 @@ public class AbilityButtonUI : MonoBehaviour
                 costText.color = affordableTextColor;
         }
 
-        // Background
         if (buttonBackground != null)
         {
             if (grayOutWhenUnaffordable && !affordable)
@@ -163,24 +152,16 @@ public class AbilityButtonUI : MonoBehaviour
         if (button != null)
             button.interactable = affordable;
 
-        // Re-apply visuals (keeps selection + gray-out consistent)
         SetSelected(isSelected);
     }
 
     private bool IsAffordable()
     {
-        if (ability == null || resources == null) return false;
+        if (ability == null || resourcePool == null) return false;
 
-        long cA = AbilityDefSOReader.GetCostAttack(ability);
-        long cD = AbilityDefSOReader.GetCostDefense(ability);
-        long cM = AbilityDefSOReader.GetCostMagic(ability);
-        long cW = AbilityDefSOReader.GetCostWild(ability);
-
-        return
-            resources.GetAttack() >= cA &&
-            resources.GetDefense() >= cD &&
-            resources.GetMagic() >= cM &&
-            resources.GetWild() >= cW;
+        // ✅ SAME DATA + SAME RULES as spending:
+        // BattleManager spends: resourcePool.TrySpend(ability.cost) (effective cost currently equals ability.cost)
+        return resourcePool.CanAfford(ability.cost);
     }
 
     private string BuildCostString(AbilityDefinitionSO ability)

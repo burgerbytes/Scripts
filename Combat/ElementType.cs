@@ -2,5 +2,6 @@
 public enum ElementType
 {
     Physical,
-    Electric
+    Electric,
+    Fire
 }

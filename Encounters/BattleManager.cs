@@ -1,3 +1,5 @@
+// GUID: 30f201f35d336bf4d840162cd6fd1fde
+////////////////////////////////////////////////////////////
 // Assets/Scripts/Encounters/BattleManager.cs
 
 using System;
@@ -6,9 +8,12 @@ using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using System.Runtime.CompilerServices;
 
 public class BattleManager : MonoBehaviour
 {
+    public static BattleManager Instance { get; private set; }
+
     public enum BattleState { Idle, BattleStart, PlayerPhase, EnemyPhase, BattleEnd }
     public enum PlayerActionType { None, Ability1, Ability2 }
     public enum IntentType { Attack }
@@ -116,6 +121,10 @@ public class BattleManager : MonoBehaviour
     private Monster _selectedEnemyTarget;
 
     private bool _resolving;
+    // Used to sync damage/removal to the exact impact frame of the caster's animation.
+    private bool _waitingForImpact;
+    private bool _impactFired;
+    private bool _attackFinished;
     private Camera _mainCam;
 
     private Coroutine _startBattleRoutine;
@@ -147,7 +156,13 @@ public class BattleManager : MonoBehaviour
 
     private void Awake()
     {
-        _mainCam = Camera.main;
+        
+        if (Instance != null && Instance != this)
+        {
+            Debug.LogWarning($"[BattleManager] Duplicate instance detected. Existing={Instance.name} ({Instance.GetInstanceID()}), New={name} ({GetInstanceID()}). Using the new instance.", this);
+        }
+        Instance = this;
+_mainCam = Camera.main;
 
         // Prefer inspector refs; if missing, auto-find (INCLUDING INACTIVE)
         if (resourcePool == null) resourcePool = FindInSceneIncludingInactive<ResourcePool>();
@@ -172,7 +187,11 @@ public class BattleManager : MonoBehaviour
         if (!Input.GetMouseButtonDown(0))
             return;
 
-        if (ignoreClicksOverUI && EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
+        // NOTE: When selecting an enemy target, we intentionally DO NOT block clicks just because the pointer is over UI.
+        // In many Unity UI setups, an invisible full-screen Image/Panel may still be a raycast target, causing
+        // EventSystem.current.IsPointerOverGameObject() to return true everywhere and breaking targeting.
+        // If you truly want to block clicks on specific UI, do it via a dedicated input-blocker overlay.
+        if (ignoreClicksOverUI && !_awaitingEnemyTarget && EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
         {
             if (logFlow) Debug.Log("[Battle] Click ignored because pointer is over UI.");
             return;
@@ -181,6 +200,18 @@ public class BattleManager : MonoBehaviour
         Monster clicked = TryGetClickedMonster();
         if (clicked != null && _activeMonsters.Contains(clicked) && !clicked.IsDead)
             SelectEnemyTarget(clicked);
+    }
+
+    // Called by AnimatorImpactEvents (Animation Events).
+    public void NotifyAttackImpact()
+    {
+        _impactFired = true;
+    }
+
+    // Optional: call via animation event at the end of the attack animation if desired.
+    public void NotifyAttackFinished()
+    {
+        _attackFinished = true;
     }
 
     public void StartNewRun()
@@ -243,6 +274,7 @@ public class BattleManager : MonoBehaviour
 
     public PartyMemberSnapshot GetPartyMemberSnapshot(int index)
     {
+        Debug.Log($"[BattleManager] GetPartyMemberSnapshot.");
         if (!IsValidPartyIndex(index))
             return default;
 
@@ -283,6 +315,7 @@ public class BattleManager : MonoBehaviour
 
     public void BeginAbilityUseFromMenu(HeroStats hero, AbilityDefinitionSO ability)
     {
+        Debug.Log($"[BattleManager] BeginAbilityUseFromMenu");
         if (!IsPlayerPhase || _resolving) return;
         if (hero == null || ability == null) return;
 
@@ -291,16 +324,19 @@ public class BattleManager : MonoBehaviour
 
         PartyMemberRuntime actor = _party[actorIndex];
         if (actor.IsDead) return;
-        if (actor.hasActedThisRound) return;
 
         if (_pendingAction != PlayerActionType.None) return;
 
         ResourceCost cost = GetEffectiveCost(actor.stats, ability);
-        if (resourcePool == null || !resourcePool.CanAfford(cost)) return;
 
         _pendingActorIndex = actorIndex;
         _pendingAbility = ability;
         _selectedEnemyTarget = null;
+
+        // Reset animation-sync flags for this cast.
+        _waitingForImpact = false;
+        _impactFired = false;
+        _attackFinished = false;
 
         _pendingAction = PlayerActionType.Ability1;
 
@@ -405,6 +441,7 @@ public class BattleManager : MonoBehaviour
 
     private IEnumerator ResolvePendingAbility()
     {
+        Debug.Log($"[BattleManager] Confirmed/casting ability: {_pendingAbility.name}", this);
         if (_pendingAbility == null || !IsValidPartyIndex(_pendingActorIndex))
         {
             CancelPendingAbility();
@@ -430,16 +467,57 @@ public class BattleManager : MonoBehaviour
         }
 
         ResourceCost cost = GetEffectiveCost(actorStats, _pendingAbility);
+        //int actorPoolId = actorStats.ResourcePool.GetInstanceID();
+        int id = RuntimeHelpers.GetHashCode(resourcePool);
         if (resourcePool == null || !resourcePool.TrySpend(cost))
         {
             CancelPendingAbility();
             yield break;
         }
-
+        // From this point, the cast is committed (resources spent). Block other actions.
         _resolving = true;
+
+        // Trigger fighter attack animation when casting Slash.
+        // Damage/removal will be synced to an Animation Event (impact frame) if configured.
+        bool isSlash = (_pendingAbility != null && _pendingAbility.name == "Slash");
+        Animator anim = null;
+        if (isSlash)
+        {
+            anim = actor.animator;
+            if (anim == null && actor.avatarGO != null)
+                anim = actor.avatarGO.GetComponentInChildren<Animator>(true);
+
+            // Reset flags for this cast.
+            _waitingForImpact = false;
+            _impactFired = false;
+            _attackFinished = false;
+
+            if (anim != null)
+                anim.Play("fighter_basic_attack", 0, 0f);
+        }
 
         if (_pendingAbility.targetType == AbilityTargetType.Enemy && enemyTarget != null)
         {
+            // If this is Slash and the caster has an animator playing the attack,
+            // wait for the impact frame event before applying damage.
+            if (isSlash && anim != null)
+            {
+                _waitingForImpact = true;
+
+                // Give the animator one frame to enter the state.
+                yield return null;
+
+                float elapsed = 0f;
+                const float failSafeSeconds = 3.0f; // prevents a soft-lock if the animation event is missing.
+                while (!_impactFired && elapsed < failSafeSeconds)
+                {
+                    elapsed += Time.deltaTime;
+                    yield return null;
+                }
+
+                _waitingForImpact = false;
+            }
+
             int dealt = enemyTarget.TakeDamageFromAbility(
                 abilityBaseDamage: _pendingAbility.baseDamage,
                 classAttackModifier: actorStats.ClassAttackModifier,
@@ -485,6 +563,10 @@ public class BattleManager : MonoBehaviour
         _pendingActorIndex = -1;
         _awaitingEnemyTarget = false;
         _selectedEnemyTarget = null;
+
+        _waitingForImpact = false;
+        _impactFired = false;
+        _attackFinished = false;
 
         if (AbilityCastState.Instance != null)
             AbilityCastState.Instance.ClearCast();
@@ -735,3 +817,7 @@ public class BattleManager : MonoBehaviour
         return skip;
     }
 }
+
+
+
+////////////////////////////////////////////////////////////

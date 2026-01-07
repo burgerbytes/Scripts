@@ -1,17 +1,22 @@
 using System.Collections.Generic;
-using UnityEngine;
 using TMPro;
+using UnityEngine;
 
+/// <summary>
+/// Ability menu that populates ability buttons and initiates casting via BattleManager.
+/// IMPORTANT: BattleManager is the authority for targeting state. We always call BattleManager.BeginAbilityUseFromMenu
+/// whenever an ability is confirmed, every time.
+/// </summary>
 public class AbilityMenuUI : MonoBehaviour
 {
     [Header("UI")]
-    [SerializeField] private GameObject root;          // AbilityMenuPanel
-    [SerializeField] private TMP_Text headerText;      // HeaderText TMP
-    [SerializeField] private Transform listParent;     // AbilityList transform
+    [SerializeField] private GameObject root;
+    [SerializeField] private TMP_Text headerText;
+    [SerializeField] private Transform listParent;
     [SerializeField] private AbilityButtonUI buttonPrefab;
 
     [Header("Refs")]
-    [SerializeField] private TopStatusBar topStatusBar;
+    [SerializeField] private ResourcePool resourcePool;
     [SerializeField] private BattleManager battleManager;
 
     [Header("Debug")]
@@ -24,11 +29,12 @@ public class AbilityMenuUI : MonoBehaviour
 
     private void Awake()
     {
-        if (topStatusBar == null)
-            topStatusBar = FindFirstObjectByType<TopStatusBar>();
+        if (resourcePool == null)
+            resourcePool = ResourcePool.Instance != null ? ResourcePool.Instance : FindFirstObjectByType<ResourcePool>();
 
+        // ✅ Always prefer BattleManager.Instance to avoid stale/duplicate references.
         if (battleManager == null)
-            battleManager = FindFirstObjectByType<BattleManager>();
+            battleManager = BattleManager.Instance != null ? BattleManager.Instance : FindFirstObjectByType<BattleManager>();
 
         AutoWireIfNeeded();
 
@@ -36,6 +42,8 @@ public class AbilityMenuUI : MonoBehaviour
         {
             Debug.Log(
                 $"[AbilityMenuUI] Awake on '{name}'. " +
+                $"resourcePool={(resourcePool ? resourcePool.name : "NULL")}, " +
+                $"battleManager={(battleManager ? battleManager.name : "NULL")}, " +
                 $"root={(root ? root.name : "NULL")}, " +
                 $"headerText={(headerText ? headerText.name : "NULL")}, " +
                 $"listParent={(listParent ? listParent.name : "NULL")}, " +
@@ -72,11 +80,18 @@ public class AbilityMenuUI : MonoBehaviour
     {
         AutoWireIfNeeded();
 
+        if (resourcePool == null)
+            resourcePool = ResourcePool.Instance != null ? ResourcePool.Instance : FindFirstObjectByType<ResourcePool>();
+
+        if (battleManager == null)
+            battleManager = BattleManager.Instance != null ? BattleManager.Instance : FindFirstObjectByType<BattleManager>();
+
         if (debugLogs)
         {
             Debug.Log(
                 $"[AbilityMenuUI] OpenForHero called. hero={(hero ? hero.name : "NULL")}, " +
                 $"abilitiesCount={(abilities != null ? abilities.Count : -1)}, " +
+                $"battleManager={(battleManager ? battleManager.name : "NULL")}, " +
                 $"root={(root ? root.name : "NULL")} (activeSelf={(root ? root.activeSelf.ToString() : "n/a")})",
                 this);
         }
@@ -112,10 +127,10 @@ public class AbilityMenuUI : MonoBehaviour
 
                 var btn = Instantiate(buttonPrefab, listParent);
 
-                // ✅ Matches your AbilityButtonUI API
+                // Bind to the resource pool used for affordability display.
                 btn.Bind(
                     ability,
-                    topStatusBar,
+                    resourcePool,
                     OnAbilityButtonSelected,
                     OnAbilityConfirmed
                 );
@@ -148,24 +163,23 @@ public class AbilityMenuUI : MonoBehaviour
         if (debugLogs)
             Debug.Log($"[AbilityMenuUI] Confirmed/casting ability: {ability.name}", this);
 
-        if (AbilityCastState.Instance != null)
-        {
-            // ✅ FIX: use currentHero (not _currentHero)
-            AbilityCastState.Instance.BeginCast(currentHero, ability);
-        }
-        else
-        {
-            Debug.LogWarning("[AbilityMenuUI] No AbilityCastState in scene. Add it to a GameObject.");
-        }
-
         if (battleManager == null)
-            battleManager = FindFirstObjectByType<BattleManager>();
+            battleManager = BattleManager.Instance != null ? BattleManager.Instance : FindFirstObjectByType<BattleManager>();
 
         if (battleManager == null || currentHero == null)
+        {
+            Debug.LogWarning($"[AbilityMenuUI] Cannot begin cast: battleManager={(battleManager ? battleManager.name : "NULL")}, currentHero={(currentHero ? currentHero.name : "NULL")}", this);
             return;
+        }
 
-        // BattleManager will now wait for enemy click if targetType==Enemy.
+        // ✅ BattleManager is the authority for pending target state.
         battleManager.BeginAbilityUseFromMenu(currentHero, ability);
+
+        // Debug-only: keep AbilityCastState in sync AFTER BattleManager is told to begin.
+        if (AbilityCastState.Instance != null)
+        {
+            AbilityCastState.Instance.BeginCast(currentHero, ability);
+        }
 
         Close();
     }
@@ -180,7 +194,7 @@ public class AbilityMenuUI : MonoBehaviour
     {
         foreach (var b in buttons)
             if (b != null)
-                b.RefreshInteractable(); // ✅ Matches your AbilityButtonUI API
+                b.RefreshInteractable();
     }
 
     private void ClearButtons()
