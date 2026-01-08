@@ -477,30 +477,72 @@ _mainCam = Camera.main;
         // From this point, the cast is committed (resources spent). Block other actions.
         _resolving = true;
 
-        // Trigger fighter attack animation when casting Slash.
-        // Damage/removal will be synced to an Animation Event (impact frame) if configured.
-        bool isSlash = (_pendingAbility != null && _pendingAbility.name == "Slash");
-        Animator anim = null;
-        if (isSlash)
+        // Trigger caster attack animation for the pending ability.
+        // Some abilities may use impact-sync (Animation Event) and others may not.
+
+        Animator anim = actor.animator;
+        if (anim == null && actor.avatarGO != null)
+            anim = actor.avatarGO.GetComponentInChildren<Animator>(true);
+
+        // Reset flags for this cast (only matters if we choose to wait for impact).
+        _waitingForImpact = false;
+        _impactFired = false;
+        _attackFinished = false;
+        // Decide behavior by ability name
+        bool useImpactSync = false;
+        string stateToPlay = null;
+
+        if (anim != null && _pendingAbility != null)
         {
-            anim = actor.animator;
-            if (anim == null && actor.avatarGO != null)
-                anim = actor.avatarGO.GetComponentInChildren<Animator>(true);
+            // Per-character profile (Option B)
+            var profile = anim.GetComponentInParent<CasterAnimationProfile>();
 
-            // Reset flags for this cast.
-            _waitingForImpact = false;
-            _impactFired = false;
-            _attackFinished = false;
+            switch (_pendingAbility.name)
+            {
+                case "Slash":
+                    useImpactSync = true;
+                    // Allow per-character override/mapping if profile exists
+                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("Slash") : null;
+                    if (string.IsNullOrWhiteSpace(stateToPlay))
+                        stateToPlay = "fighter_basic_attack"; // fallback
+                    break;
 
-            if (anim != null)
-                anim.Play("fighter_basic_attack", 0, 0f);
+                case "Pyre":
+                    useImpactSync = true; // if you want damage to happen on a specific frame
+                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("Pyre") : null;
+                    if (string.IsNullOrWhiteSpace(stateToPlay))
+                        stateToPlay = "mage_basic_attack"; // fallback example
+                    break;
+
+                case "Backstab":
+                    useImpactSync = true; // if you want damage to happen on a specific frame
+                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("Backstab") : null;
+                    if (string.IsNullOrWhiteSpace(stateToPlay))
+                        stateToPlay = "ninja_backstab"; // fallback example
+                    break;
+
+                default:
+                    // Default: still play *something* (or skip animation if you prefer)
+                    useImpactSync = false; // default to immediate apply unless you want all abilities synced
+                    stateToPlay = profile != null ? profile.GetAttackStateForAbility(_pendingAbility.name) : null;
+                    // If profile doesn't have an entry, you can fall back to a generic cast/attack
+                    if (string.IsNullOrWhiteSpace(stateToPlay))
+                        stateToPlay = "fighter_basic_attack"; // safe default until you add more states
+                    break;
+            }
+
+            if (useImpactSync)
+                _waitingForImpact = true; // your existing coroutine should wait until _impactFired (or timeout)
+
+            anim.Play(stateToPlay, 0, 0f);
         }
+
 
         if (_pendingAbility.targetType == AbilityTargetType.Enemy && enemyTarget != null)
         {
-            // If this is Slash and the caster has an animator playing the attack,
+            // If this ability uses impact-sync and the caster has an animator playing the attack,
             // wait for the impact frame event before applying damage.
-            if (isSlash && anim != null)
+            if (useImpactSync && anim != null)
             {
                 _waitingForImpact = true;
 
@@ -533,6 +575,7 @@ _mainCam = Camera.main;
                 PlanEnemyIntents();
             }
         }
+
 
         if (_pendingAbility.targetType == AbilityTargetType.Self && _pendingAbility.shieldAmount > 0)
         {
