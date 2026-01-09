@@ -92,6 +92,9 @@ public class BattleManager : MonoBehaviour
     [SerializeField] private StretchController stretchController;
     [SerializeField] private ScrollingBackground scrollingBackground;
 
+
+    [Header("Reels / Spins")]
+    [SerializeField] private ReelSpinSystem reelSpinSystem;
     [Header("Input / Targeting")]
     [SerializeField] private bool allowClickToSelectMonsterTarget = true;
     [SerializeField] private bool ignoreClicksOverUI = true;
@@ -193,6 +196,7 @@ _mainCam = Camera.main;
         if (postBattleRewardPanel == null) postBattleRewardPanel = startRewardPanel;
 
 
+        if (reelSpinSystem == null) reelSpinSystem = FindInSceneIncludingInactive<ReelSpinSystem>();
         StartNewRun();
     }
 
@@ -511,6 +515,11 @@ NotifyPartyChanged();
 
         SetState(BattleState.PlayerPhase);
 
+
+        // New player turn: reset reel spins.
+        if (reelSpinSystem != null)
+            reelSpinSystem.BeginTurn();
+
         _activePartyIndex = GetFirstAlivePartyIndex();
         OnActivePartyMemberChanged?.Invoke(_activePartyIndex);
 
@@ -687,6 +696,11 @@ private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, Action app
         PlanEnemyIntents();
 
         SetState(BattleState.PlayerPhase);
+
+        // New player turn: reset reel spins.
+        if (reelSpinSystem != null)
+            reelSpinSystem.BeginTurn();
+
         _activePartyIndex = GetFirstAlivePartyIndex();
         OnActivePartyMemberChanged?.Invoke(_activePartyIndex);
 
