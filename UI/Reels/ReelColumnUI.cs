@@ -1,3 +1,6 @@
+// GUID: 1ef221263915ab6479bd1711f913c918
+////////////////////////////////////////////////////////////
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -12,61 +15,47 @@ namespace UI.Reels
         [SerializeField] private RectTransform stripContent;
 
         [Tooltip("Visible row images (odd length: 3/5/7). If left empty, will auto-pull Image components from StripContent children in sibling order.")]
-        [SerializeField] private Image[] rowImages; // MUST be odd length (5 or 7)
+        [SerializeField] private Image[] rowImages;
 
         [Header("Initial Setup (Fallback)")]
-        [Tooltip("If your ReelSpinSystem no longer calls SetStrip(), assign this so the column can initialize itself.")]
         [SerializeField] private ReelStripSO initialStrip;
-
-        [Tooltip("Starting center index when using Initial Strip.")]
         [SerializeField] private int initialStartIndex = 0;
 
         [Header("Appearance")]
-        [Tooltip("If a ReelSymbolSO is missing an icon, this sprite is used instead.")]
         [SerializeField] private Sprite missingIconFallback;
 
         [Header("Spin Tuning")]
-        [Tooltip("Height of a row in UI units. Must match Symbol image size/spacing.")]
         [SerializeField] private float rowHeight = 64f;
-
-        [Tooltip("Total time of the spin animation.")]
         [SerializeField] private float spinDuration = 0.35f;
-
-        [Tooltip("How many full strip loops before landing on the target.")]
         [SerializeField] private int extraLoops = 2;
 
-        [Tooltip("If true, uses unscaled time (ignores Time.timeScale).")]
+        [Header("Stop Bounce")]
+        [SerializeField] private bool stopBounceEnabled = true;
+        [SerializeField] private float stopBouncePixels = 10f;
+        [SerializeField] private float stopBounceSeconds = 0.12f;
         [SerializeField] private bool useUnscaledTime = false;
 
         [Header("Debug")]
         [SerializeField] private bool debugLog = false;
 
         private ReelStripSO strip;
-
-        // This is the "resolved" center symbol index in the strip (0..n-1)
         private int currentCenterIndex = 0;
-
-        // Visual scroll offset within a single row [0, rowHeight)
-        // We keep it bounded so the strip never runs out of children.
         private float scrollOffset = 0f;
-
-        // Used to prevent overlapping spins
         private bool spinning = false;
-
         private bool hasInitialized = false;
+
+        /* ============================================================
+         * Unity
+         * ============================================================ */
 
         private void Awake()
         {
-            // Auto-wire rowImages if user didn’t set them (or prefab changes broke them).
             AutoWireRowImagesIfNeeded();
-
-            // Self-init if ReelSpinSystem doesn't call SetStrip anymore.
             TryInitializeFromInspector();
         }
 
         private void OnEnable()
         {
-            // In case this object gets enabled after Awake (e.g., UI panels toggled)
             AutoWireRowImagesIfNeeded();
             TryInitializeFromInspector();
         }
@@ -74,66 +63,75 @@ namespace UI.Reels
 #if UNITY_EDITOR
         private void OnValidate()
         {
-            // Helps keep inspector wiring resilient during edits.
             if (!Application.isPlaying)
-            {
                 AutoWireRowImagesIfNeeded();
-            }
         }
 #endif
 
         /* ============================================================
-         * Public API
+         * Public API (used by ReelSpinSystem)
          * ============================================================ */
+
+        public float ConfiguredSpinDuration => spinDuration;
+
+        public bool HasValidStrip => strip != null && strip.symbols != null && strip.symbols.Count > 0;
+
+        public bool IsSpinning() => spinning;
 
         public void SetStrip(ReelStripSO newStrip, int startIndex = 0)
         {
             strip = newStrip;
-
             AutoWireRowImagesIfNeeded();
 
-            if (!ValidateSetup(logErrors: true))
-                return;
-
+            // If strip is null, allow wiring/layout to still run, but don’t hard fail.
             ApplyRectTransformConventions();
             PositionRows();
+
+            if (!HasValidStrip)
+            {
+                if (debugLog)
+                    Debug.LogWarning($"{name}: SetStrip called but strip has no symbols yet.", this);
+                return;
+            }
 
             int n = strip.symbols.Count;
             currentCenterIndex = Mathf.Clamp(startIndex, 0, n - 1);
 
             scrollOffset = 0f;
-            stripContent.anchoredPosition = new Vector2(stripContent.anchoredPosition.x, 0f);
+            stripContent.anchoredPosition = Vector2.zero;
 
             RefreshRows(currentCenterIndex);
-
             hasInitialized = true;
         }
 
-        /// <summary>
-        /// Spins the reel and lands on a random symbol.
-        /// MUST be started via StartCoroutine().
-        /// </summary>
         public IEnumerator SpinToRandom(System.Random rng)
         {
-            AutoWireRowImagesIfNeeded();
-
-            if (!ValidateSetup(logErrors: true))
+            if (!EnsureReadyForSpin(logErrors: true))
                 yield break;
 
             int n = strip.symbols.Count;
             int target = rng.Next(0, n);
-            yield return SpinToIndex(target);
+            yield return SpinToIndex(target, -1f);
         }
 
-        /// <summary>
-        /// Spins the reel and lands on a specific symbol index.
-        /// MUST be started via StartCoroutine().
-        /// </summary>
+        public IEnumerator SpinToRandom(System.Random rng, float durationOverrideSeconds)
+        {
+            if (!EnsureReadyForSpin(logErrors: true))
+                yield break;
+
+            int n = strip.symbols.Count;
+            int target = rng.Next(0, n);
+            yield return SpinToIndex(target, durationOverrideSeconds);
+        }
+
         public IEnumerator SpinToIndex(int targetIndex)
         {
-            AutoWireRowImagesIfNeeded();
+            yield return SpinToIndex(targetIndex, -1f);
+        }
 
-            if (!ValidateSetup(logErrors: true))
+        public IEnumerator SpinToIndex(int targetIndex, float durationOverrideSeconds)
+        {
+            if (!EnsureReadyForSpin(logErrors: true))
                 yield break;
 
             if (spinning)
@@ -150,25 +148,24 @@ namespace UI.Reels
 
             float totalDistance = totalSteps * rowHeight;
 
-            // We'll move totalDistance over spinDuration, but with ease-out (fast then slow).
             float elapsed = 0f;
             float remaining = totalDistance;
 
-            // Start fully "snapped"
             scrollOffset = Mathf.Clamp(scrollOffset, 0f, rowHeight);
-            stripContent.anchoredPosition = new Vector2(stripContent.anchoredPosition.x, -scrollOffset);
+            stripContent.anchoredPosition = new Vector2(0f, -scrollOffset);
 
-            while (elapsed < spinDuration && remaining > 0.0001f)
+            float duration = (durationOverrideSeconds > 0f) ? durationOverrideSeconds : spinDuration;
+
+            while (elapsed < duration && remaining > 0.0001f)
             {
                 float dt = useUnscaledTime ? Time.unscaledDeltaTime : Time.deltaTime;
                 elapsed += dt;
 
-                float t = Mathf.Clamp01(elapsed / Mathf.Max(0.0001f, spinDuration));
+                float t = Mathf.Clamp01(elapsed / Mathf.Max(0.0001f, duration));
 
-                // Speed curve: fast at start, slows near the end (no bounce)
+                // fast -> slow
                 float speedFactor = Mathf.Lerp(2.0f, 0.35f, SmoothStep01(t));
-
-                float baseSpeed = totalDistance / Mathf.Max(0.0001f, spinDuration);
+                float baseSpeed = totalDistance / Mathf.Max(0.0001f, duration);
                 float speed = baseSpeed * speedFactor;
 
                 float move = Mathf.Min(speed * dt, remaining);
@@ -179,11 +176,14 @@ namespace UI.Reels
                 yield return null;
             }
 
-            // Hard snap to final target (no blank space, always looped)
+            // Snap cleanly to final
             currentCenterIndex = targetIndex;
             scrollOffset = 0f;
-            stripContent.anchoredPosition = new Vector2(stripContent.anchoredPosition.x, 0f);
+            stripContent.anchoredPosition = Vector2.zero;
             RefreshRows(currentCenterIndex);
+
+            if (stopBounceEnabled)
+                yield return PlayStopBounce();
 
             if (debugLog)
                 Debug.Log($"{name}: Spin complete. Landed on {currentCenterIndex}", this);
@@ -192,101 +192,100 @@ namespace UI.Reels
         }
 
         /// <summary>
-        /// Returns the symbol currently in the CENTER of the visible window.
-        /// In the default setup (odd rowImages length, centered), this is your "middle row" symbol.
+        /// Uses what is VISUALLY centered in the viewport (closest row image to viewport center).
         /// </summary>
         public ReelSymbolSO GetMiddleRowSymbol()
         {
-            if (strip == null || strip.symbols == null || strip.symbols.Count == 0)
+            if (!HasValidStrip)
                 return null;
 
-            return strip.symbols[currentCenterIndex];
-        }
+            // Fallback: logical center if we can't evaluate visuals
+            if (viewport == null || rowImages == null || rowImages.Length == 0)
+                return strip.symbols[currentCenterIndex];
 
-        /// <summary>
-        /// Legacy name kept so older code continues to compile.
-        /// </summary>
-        public ReelSymbolSO GetCurrentSymbol()
-        {
-            return GetMiddleRowSymbol();
-        }
+            Vector3 viewportCenterWorld = viewport.TransformPoint(viewport.rect.center);
 
-        /// <summary>
-        /// Returns true while this reel is currently spinning.
-        /// </summary>
-        public bool IsSpinning()
-        {
-            return spinning;
-        }
+            int bestRow = -1;
+            float bestSqr = float.PositiveInfinity;
 
-        /* ============================================================
-         * Core looping scroll mechanic
-         * ============================================================ */
-
-        private void AdvanceVisualScroll(float deltaDistance, int stripCount)
-        {
-            // We scroll "down" visually by increasing scrollOffset.
-            scrollOffset += deltaDistance;
-
-            // Every time we pass a full row, we:
-            // - wrap scrollOffset back
-            // - advance the center symbol index
-            // - refresh sprites so it looks like an infinite loop
-            while (scrollOffset >= rowHeight)
+            for (int i = 0; i < rowImages.Length; i++)
             {
-                scrollOffset -= rowHeight;
-                currentCenterIndex = (currentCenterIndex + 1) % stripCount;
+                var img = rowImages[i];
+                if (img == null) continue;
 
-                RefreshRows(currentCenterIndex);
+                RectTransform imgRt = img.rectTransform;
+                Vector3 imgCenterWorld = imgRt.TransformPoint(imgRt.rect.center);
+
+                float sqr = (imgCenterWorld - viewportCenterWorld).sqrMagnitude;
+                if (sqr < bestSqr)
+                {
+                    bestSqr = sqr;
+                    bestRow = i;
+                }
             }
 
-            // Apply offset (negative y because our rows are laid out downward)
-            stripContent.anchoredPosition = new Vector2(stripContent.anchoredPosition.x, -scrollOffset);
+            if (bestRow < 0)
+                return strip.symbols[currentCenterIndex];
+
+            int n = strip.symbols.Count;
+            int mid = rowImages.Length / 2;
+
+            int offsetFromLogicalCenter = bestRow - mid;
+            int idx = (currentCenterIndex + offsetFromLogicalCenter) % n;
+            if (idx < 0) idx += n;
+
+            return strip.symbols[idx];
         }
 
         /* ============================================================
-         * Layout / Visual
+         * Layout / Visual (top-aligned fix)
          * ============================================================ */
 
         private void ApplyRectTransformConventions()
         {
-            // Keep StripContent anchored at the top so our row positions are stable.
+            if (stripContent == null) return;
+
             stripContent.anchorMin = new Vector2(0f, 1f);
             stripContent.anchorMax = new Vector2(1f, 1f);
             stripContent.pivot = new Vector2(0.5f, 1f);
+            stripContent.localScale = Vector3.one;
+            stripContent.anchoredPosition = Vector2.zero;
         }
 
         private void PositionRows()
         {
-            // Rows are stacked downward: y = -i * rowHeight
+            if (rowImages == null) return;
+
             for (int i = 0; i < rowImages.Length; i++)
             {
-                Image img = rowImages[i];
+                var img = rowImages[i];
                 if (img == null) continue;
 
                 RectTransform rt = img.rectTransform;
 
-                rt.anchorMin = new Vector2(0.5f, 1f);
-                rt.anchorMax = new Vector2(0.5f, 1f);
+                // Ensure each row is top-anchored/pivoted so y=0 starts at top of viewport.
+                rt.anchorMin = new Vector2(0f, 1f);
+                rt.anchorMax = new Vector2(1f, 1f);
                 rt.pivot = new Vector2(0.5f, 1f);
 
-                rt.sizeDelta = new Vector2(rowHeight, rowHeight);
-                rt.anchoredPosition = new Vector2(0f, -i * rowHeight);
+                rt.localScale = Vector3.one;
+                rt.sizeDelta = new Vector2(rt.sizeDelta.x, rowHeight);
 
-                img.enabled = true;
-                img.color = Color.white;
-                img.preserveAspect = true;
+                rt.anchoredPosition = new Vector2(0f, -i * rowHeight);
             }
 
-            // This strip only needs to be tall enough for the visible rows.
-            // The mask provides the "window"; we never scroll beyond one rowHeight visually.
-            stripContent.sizeDelta = new Vector2(stripContent.sizeDelta.x, rowImages.Length * rowHeight);
+            if (stripContent != null)
+            {
+                stripContent.sizeDelta = new Vector2(
+                    stripContent.sizeDelta.x,
+                    rowImages.Length * rowHeight
+                );
+            }
         }
 
         private void RefreshRows(int centerIndex)
         {
-            if (strip == null || strip.symbols == null || strip.symbols.Count == 0)
-                return;
+            if (!HasValidStrip) return;
 
             int n = strip.symbols.Count;
             int mid = rowImages.Length / 2;
@@ -296,136 +295,121 @@ namespace UI.Reels
                 Image img = rowImages[i];
                 if (img == null) continue;
 
-                int offset = i - mid;
-                int symbolIndex = (centerIndex + offset) % n;
-                if (symbolIndex < 0) symbolIndex += n;
+                int idx = (centerIndex + (i - mid)) % n;
+                if (idx < 0) idx += n;
 
-                ReelSymbolSO sym = strip.symbols[symbolIndex];
+                ReelSymbolSO sym = strip.symbols[idx];
+                Sprite sprite = sym != null && sym.icon != null ? sym.icon : missingIconFallback;
 
-                Sprite s = null;
-                if (sym != null && sym.icon != null) s = sym.icon;
-                else s = missingIconFallback;
-
-                img.sprite = s;
-                img.enabled = (img.sprite != null);
-                img.color = Color.white;
+                img.enabled = sprite != null;
+                img.sprite = sprite;
                 img.preserveAspect = true;
-
-                if (debugLog && sym != null && sym.icon == null)
-                    Debug.LogWarning($"{name}: Symbol '{sym.name}' has no icon. Using fallback.", this);
+                img.color = Color.white;
             }
         }
 
         /* ============================================================
-         * Auto-init / Auto-wire
+         * Core looping scroll
          * ============================================================ */
 
-        private void TryInitializeFromInspector()
+        private void AdvanceVisualScroll(float delta, int stripCount)
         {
-            // If another system already called SetStrip, don't stomp it.
-            if (hasInitialized)
-                return;
+            scrollOffset += delta;
 
-            // Only attempt if we have something assigned in inspector.
-            if (strip == null && initialStrip != null)
+            while (scrollOffset >= rowHeight)
             {
-                if (debugLog) Debug.Log($"{name}: Initializing from inspector initialStrip.", this);
-                SetStrip(initialStrip, initialStartIndex);
+                scrollOffset -= rowHeight;
+                currentCenterIndex = (currentCenterIndex + 1) % stripCount;
+                RefreshRows(currentCenterIndex);
             }
+
+            stripContent.anchoredPosition = new Vector2(0f, -scrollOffset);
         }
+
+        /* ============================================================
+         * Helpers / Validation
+         * ============================================================ */
 
         private void AutoWireRowImagesIfNeeded()
         {
-            if (stripContent == null)
+            if (rowImages != null && rowImages.Length > 0)
+            {
+                foreach (var img in rowImages)
+                    if (img == null) goto rebuild;
                 return;
-
-            // If rowImages is already correctly assigned, do nothing.
-            if (rowImages != null && rowImages.Length >= 3 && (rowImages.Length % 2) == 1)
-            {
-                bool anyNull = false;
-                for (int i = 0; i < rowImages.Length; i++)
-                {
-                    if (rowImages[i] == null) { anyNull = true; break; }
-                }
-
-                if (!anyNull)
-                    return;
             }
 
-            // Pull direct child Images under StripContent in sibling order.
-            // This matches your hierarchy: StripContent -> Symbol_0, Symbol_0 (1), ...
+        rebuild:
+            if (!stripContent) return;
+
             List<Image> found = new List<Image>();
-            for (int i = 0; i < stripContent.childCount; i++)
-            {
-                Transform child = stripContent.GetChild(i);
-                Image img = child.GetComponent<Image>();
-                if (img != null)
+            foreach (Transform t in stripContent)
+                if (t.TryGetComponent(out Image img))
                     found.Add(img);
-            }
 
-            if (found.Count >= 3)
-            {
-                // Ensure odd length.
-                if (found.Count % 2 == 0)
-                    found.RemoveAt(found.Count - 1);
-
-                rowImages = found.ToArray();
-
-                if (debugLog)
-                    Debug.Log($"{name}: Auto-wired rowImages from StripContent children. Count={rowImages.Length}", this);
-            }
+            rowImages = found.ToArray();
         }
 
-        /* ============================================================
-         * Validation / Helpers
-         * ============================================================ */
-
-        private bool ValidateSetup(bool logErrors)
+        private void TryInitializeFromInspector()
         {
-            bool ok = true;
+            if (hasInitialized || strip != null) return;
+            if (initialStrip != null && initialStrip.symbols != null && initialStrip.symbols.Count > 0)
+                SetStrip(initialStrip, initialStartIndex);
+        }
 
-            if (viewport == null)
+        private bool EnsureReadyForSpin(bool logErrors)
+        {
+            AutoWireRowImagesIfNeeded();
+            ApplyRectTransformConventions();
+            PositionRows();
+
+            if (viewport == null || stripContent == null || rowImages == null || rowImages.Length < 3)
             {
-                ok = false;
-                if (logErrors) Debug.LogError($"{name}: viewport not assigned.", this);
+                if (logErrors)
+                    Debug.LogError($"{name}: ReelColumnUI not wired correctly (viewport/stripContent/rows).", this);
+                return false;
             }
 
-            if (stripContent == null)
+            if (!HasValidStrip)
             {
-                ok = false;
-                if (logErrors) Debug.LogError($"{name}: stripContent not assigned.", this);
+                if (logErrors)
+                    Debug.LogError($"{name}: ReelColumnUI has no strip assigned (or strip has 0 symbols).", this);
+                return false;
             }
 
-            if (rowImages == null || rowImages.Length < 3 || rowImages.Length % 2 == 0)
+            return true;
+        }
+
+        private IEnumerator PlayStopBounce()
+        {
+            if (!stopBounceEnabled || stripContent == null)
+                yield break;
+
+            float dur = Mathf.Max(0.01f, stopBounceSeconds);
+            float amp = Mathf.Max(0f, stopBouncePixels);
+
+            Vector2 basePos = stripContent.anchoredPosition;
+            float t = 0f;
+
+            while (t < dur)
             {
-                ok = false;
-                if (logErrors) Debug.LogError($"{name}: rowImages must be odd length (3/5/7) and >= 3.", this);
-            }
-            else
-            {
-                for (int i = 0; i < rowImages.Length; i++)
-                {
-                    if (rowImages[i] == null)
-                    {
-                        ok = false;
-                        if (logErrors) Debug.LogError($"{name}: rowImages[{i}] is NULL. Wire Symbol_{i}.", this);
-                    }
-                }
+                t += Time.unscaledDeltaTime;
+                float u = Mathf.Clamp01(t / dur);
+
+                float y = Mathf.Sin(u * Mathf.PI) * amp;
+                stripContent.anchoredPosition = new Vector2(basePos.x, basePos.y - y);
+
+                yield return null;
             }
 
-            if (strip == null || strip.symbols == null || strip.symbols.Count == 0)
-            {
-                ok = false;
-                if (logErrors) Debug.LogError($"{name}: strip is null or has 0 symbols.", this);
-            }
-
-            return ok;
+            stripContent.anchoredPosition = basePos;
         }
 
         private static float SmoothStep01(float t)
         {
-            // smoothstep 0..1
+            t = Mathf.Clamp01(t);
             return t * t * (3f - 2f * t);
         }
     }
 }
+////////////////////////////////////////////////////////////

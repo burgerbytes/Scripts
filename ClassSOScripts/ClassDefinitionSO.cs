@@ -14,7 +14,13 @@ public class ClassDefinitionSO : ScriptableObject
     [Header("Identity")]
     public string className;
     [TextArea(2, 6)] public string description;
+
+    [Tooltip("Small icon used in menus, lists, or ability UIs")]
     public Sprite icon;
+
+    [Header("UI")]
+    [Tooltip("Larger portrait used on Party HUD buttons")]
+    public Sprite portraitSprite;
 
     [Header("Tiering")]
     public Tier tier = Tier.Base;

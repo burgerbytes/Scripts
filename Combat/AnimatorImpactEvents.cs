@@ -1,3 +1,5 @@
+// GUID: f6b70521b03faa34aae1b74cbc6b0046
+////////////////////////////////////////////////////////////
 // Assets/Scripts/Combat/AnimatorImpactEvents.cs
 // Attach this to the SAME GameObject that has the Animator component playing the attack clip.
 // Then add an Animation Event on the attack clip that calls AttackImpact() at the exact impact frame.
@@ -20,3 +22,6 @@ public class AnimatorImpactEvents : MonoBehaviour
         if (bm != null) bm.NotifyAttackFinished();
     }
 }
+
+
+////////////////////////////////////////////////////////////

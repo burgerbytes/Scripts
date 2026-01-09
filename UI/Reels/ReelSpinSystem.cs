@@ -28,9 +28,17 @@ public class ReelSpinSystem : MonoBehaviour
     [SerializeField] private List<ReelEntry> reels = new List<ReelEntry>();
 
     [Header("RNG")]
-    [SerializeField] private int seed = 12345;
+    [Tooltip("If enabled, the reel results will be deterministic across play sessions (useful for debugging).")]
+    [SerializeField] private bool useFixedSeed = false;
 
-    [Header("Payout Targets")]
+    [Tooltip("Only used when Use Fixed Seed is enabled.")]
+    [SerializeField] private int fixedSeed = 12345;
+
+    
+    [Header("Spin Timing")]
+    [Tooltip("Time between successive reel stops. Reels start together but stop one-by-one in a random order.")]
+    [SerializeField] private float stopStaggerSeconds = 0.25f;
+[Header("Payout Targets")]
     [Tooltip("Authoritative resource store. If null, we use ResourcePool.Instance or find one in scene.")]
     [SerializeField] private ResourcePool resourcePool;
 
@@ -44,6 +52,9 @@ public class ReelSpinSystem : MonoBehaviour
     [Tooltip("If true, logs warnings when a symbol has no mapping entry.")]
     [SerializeField] private bool warnOnMissingMapping = true;
 
+    [Header("Symbol Behavior")]
+    [SerializeField]
+    private List<ReelSymbolSO> noPayoutSymbols = new List<ReelSymbolSO>();
     public event Action OnSpinStarted;
     public event Action<Dictionary<string, ReelSymbolSO>> OnSpinFinished;
 
@@ -55,7 +66,14 @@ public class ReelSpinSystem : MonoBehaviour
 
     private void Awake()
     {
-        rng = new System.Random(seed);
+        // If you always seed with the same number, you'll always get the same spin sequence
+        // every time you press Play (first spin identical, second spin identical, etc.).
+        // Default behavior: randomize seed each run.
+        int runtimeSeed = useFixedSeed
+            ? fixedSeed
+            : unchecked(Environment.TickCount * 31 + GetInstanceID());
+
+        rng = new System.Random(runtimeSeed);
 
         if (resourcePool == null)
             resourcePool = ResourcePool.Instance != null ? ResourcePool.Instance : FindFirstObjectByType<ResourcePool>();
@@ -98,19 +116,35 @@ public class ReelSpinSystem : MonoBehaviour
         if (mapLookup == null || mapLookup.Count == 0)
             BuildMappingLookup();
 
-        List<Coroutine> running = new List<Coroutine>();
-
-        foreach (var r in reels)
+        
+        // Start all reels together, but make them STOP one-by-one in a random order
+        // by overriding each reel's duration (longer duration => later stop).
+        List<ReelEntry> active = new List<ReelEntry>();
+        for (int i = 0; i < reels.Count; i++)
         {
+            var r = reels[i];
             if (r == null || r.ui == null) continue;
-            running.Add(StartCoroutine(r.ui.SpinToRandom(rng)));
+            active.Add(r);
+        }
+
+        // Build a shuffled stop order.
+        List<int> order = new List<int>();
+        for (int i = 0; i < active.Count; i++) order.Add(i);
+        Shuffle(order, rng);
+
+        List<Coroutine> running = new List<Coroutine>();
+        for (int stopRank = 0; stopRank < order.Count; stopRank++)
+        {
+            ReelEntry r = active[order[stopRank]];
+            float baseDuration = r.ui.ConfiguredSpinDuration;
+            float durationOverride = baseDuration + (stopRank * Mathf.Max(0f, stopStaggerSeconds));
+            running.Add(StartCoroutine(r.ui.SpinToRandom(rng, durationOverride)));
         }
 
         foreach (var c in running)
             yield return c;
-
         Dictionary<string, ReelSymbolSO> resolved = new Dictionary<string, ReelSymbolSO>();
-        List<ResourceType> midRowTypes = new List<ResourceType>();
+                List<ResourceType> midRowTypes = new List<ResourceType>();
 
         foreach (var r in reels)
         {
@@ -203,6 +237,11 @@ public class ReelSpinSystem : MonoBehaviour
         if (sym == null)
             return false;
 
+        // Explicit "null/blank" (or other) symbols that intentionally award nothing.
+        // These should not warn or map to a resource.
+        if (noPayoutSymbols != null && noPayoutSymbols.Contains(sym))
+            return false;
+
         if (mapLookup != null && mapLookup.TryGetValue(sym, out t))
             return true;
 
@@ -211,4 +250,16 @@ public class ReelSpinSystem : MonoBehaviour
 
         return false;
     }
+
+
+    private static void Shuffle<T>(IList<T> list, System.Random rng)
+    {
+        // Fisher–Yates shuffle
+        for (int i = list.Count - 1; i > 0; i--)
+        {
+            int j = rng.Next(0, i + 1);
+            (list[i], list[j]) = (list[j], list[i]);
+        }
+    }
+
 }

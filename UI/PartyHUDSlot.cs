@@ -10,6 +10,16 @@ public class PartyHUDSlot : MonoBehaviour
     [Header("UI Root")]
     [SerializeField] private Button slotButton;
 
+    [Header("Portrait")]
+    [Tooltip("Image used to display the hero/class portrait on this slot button.")]
+    [SerializeField] private Image portraitImage;
+
+    [Tooltip("Optional fallback portrait if none is set.")]
+    [SerializeField] private Sprite fallbackPortrait;
+
+    [Tooltip("If true, portraitImage will be disabled when no portrait is available.")]
+    [SerializeField] private bool hidePortraitWhenNull = true;
+
     [Header("Texts")]
     [SerializeField] private TMP_Text nameText;
     [SerializeField] private TMP_Text hpText;
@@ -43,6 +53,30 @@ public class PartyHUDSlot : MonoBehaviour
     public int PartyIndex => partyIndex;
     public RectTransform RectTransform => (RectTransform)transform;
 
+    /// <summary>
+    /// Set the portrait sprite shown on this slot. Call this from PartyHUD / wherever you bind heroes to slots.
+    /// </summary>
+    public void SetPortrait(Sprite portrait)
+    {
+        if (portraitImage == null)
+            return;
+
+        Sprite s = portrait != null ? portrait : fallbackPortrait;
+
+        if (s == null && hidePortraitWhenNull)
+        {
+            portraitImage.enabled = false;
+            portraitImage.sprite = null;
+            return;
+        }
+
+        portraitImage.enabled = true;
+        portraitImage.sprite = s;
+
+        // Optional: keep portrait proportions sane
+        portraitImage.preserveAspect = true;
+    }
+
     public void Initialize(System.Action<int> onSlotClicked)
     {
         if (slotButton == null)
@@ -58,6 +92,9 @@ public class PartyHUDSlot : MonoBehaviour
         SetActionPanelVisible(false);
 
         SetDamagePreviewVisible(false);
+
+        // Ensure portrait starts in a reasonable state
+        SetPortrait(null);
     }
 
     public void Render(

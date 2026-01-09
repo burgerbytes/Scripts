@@ -46,11 +46,37 @@ public class PartyHUD : MonoBehaviour
             for (int i = 0; i < slots.Length; i++)
             {
                 if (slots[i] == null) continue;
+
                 slots[i].Initialize(OnSlotClicked);
+
+                // 🔹 NEW: assign portrait immediately
+                AssignPortraitToSlot(i);
+
                 if (debugLogs)
                     Debug.Log($"[PartyHUD] Initialized slot index {i} ({slots[i].name})", slots[i]);
             }
         }
+    }
+
+    private void AssignPortraitToSlot(int index)
+    {
+        if (battleManager == null || slots == null) return;
+        if (index < 0 || index >= slots.Length) return;
+
+        HeroStats hero = battleManager.GetHeroAtPartyIndex(index);
+        if (hero == null)
+        {
+            slots[index].SetPortrait(null);
+            return;
+        }
+
+        // Resolve class definition safely
+        ClassDefinitionSO classDef =
+            hero.AdvancedClassDef != null ? hero.AdvancedClassDef : hero.BaseClassDef;
+
+        Sprite portrait = classDef != null ? classDef.portraitSprite : null;
+
+        slots[index].SetPortrait(portrait);
     }
 
     private void OnSlotClicked(int index)
@@ -64,8 +90,7 @@ public class PartyHUD : MonoBehaviour
             return;
         }
 
-        if (battleManager != null)
-            battleManager.SetActivePartyMember(index);
+        battleManager.SetActivePartyMember(index);
 
         if (togglePanelWhenClickingSelectedSlot && _selectedIndex == index)
             _panelVisible = !_panelVisible;
@@ -88,10 +113,9 @@ public class PartyHUD : MonoBehaviour
             return;
         }
 
-        // Resolve active class definition without touching private fields
-        ClassDefinitionSO classDef = null;
-        if (hero.AdvancedClassDef != null) classDef = hero.AdvancedClassDef;
-        else classDef = hero.BaseClassDef;
+        // Resolve active class definition
+        ClassDefinitionSO classDef =
+            hero.AdvancedClassDef != null ? hero.AdvancedClassDef : hero.BaseClassDef;
 
         var abilities = BuildAbilityListFromClassDef(classDef);
 
@@ -112,7 +136,6 @@ public class PartyHUD : MonoBehaviour
         var results = new List<AbilityDefinitionSO>();
         if (classDef == null) return results;
 
-        // Prefer the new list if it has entries
         if (classDef.abilities != null && classDef.abilities.Count > 0)
         {
             for (int i = 0; i < classDef.abilities.Count; i++)
@@ -123,7 +146,6 @@ public class PartyHUD : MonoBehaviour
             }
         }
 
-        // Legacy fallback (or additive if you want both)
         if (classDef.ability1 != null && !results.Contains(classDef.ability1))
             results.Add(classDef.ability1);
 
@@ -145,4 +167,3 @@ public class PartyHUD : MonoBehaviour
         return slots[index].GetComponent<RectTransform>();
     }
 }
-

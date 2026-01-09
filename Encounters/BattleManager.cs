@@ -1,6 +1,5 @@
 // GUID: 30f201f35d336bf4d840162cd6fd1fde
 ////////////////////////////////////////////////////////////
-// Assets/Scripts/Encounters/BattleManager.cs
 
 using System;
 using System.Collections;
@@ -84,6 +83,14 @@ public class BattleManager : MonoBehaviour
     [SerializeField] private PlayerInventory inventory;
     [SerializeField] private PostBattleFlowController postBattleFlow;
 
+    [Header("Post-Battle Rewards (After Each Victory)")]
+    [SerializeField] private bool enablePostBattleRewards = true;
+    [SerializeField] private Vector2Int postBattleRewardChoicesRange = new Vector2Int(2, 5);
+    [SerializeField] private bool includeSkipOptionPostBattle = false;
+
+    [Tooltip("Optional override. If null, BattleManager will reuse Start Reward Panel.")]
+    [SerializeField] private PostBattleRewardPanel postBattleRewardPanel;
+
     [Header("External Systems")]
     [SerializeField] private StretchController stretchController;
     [SerializeField] private ScrollingBackground scrollingBackground;
@@ -92,7 +99,18 @@ public class BattleManager : MonoBehaviour
     [SerializeField] private bool allowClickToSelectMonsterTarget = true;
     [SerializeField] private bool ignoreClicksOverUI = true;
 
-    [Header("Debug")]
+    
+    [Header("Enemy Lunge (No Animation Clips)")]
+    [Tooltip("How far the enemy sprite/visual lunges toward the target during an attack (world units).")]
+    [SerializeField] private float enemyLungeDistance = 0.35f;
+    [Tooltip("Seconds to move from start to lunge peak.")]
+    [SerializeField] private float enemyLungeForwardSeconds = 0.12f;
+    [Tooltip("Seconds to hold at the lunge peak before returning.")]
+    [SerializeField] private float enemyLungeHoldSeconds = 0.05f;
+    [Tooltip("Seconds to move from lunge peak back to start.")]
+    [SerializeField] private float enemyLungeBackSeconds = 0.12f;
+
+[Header("Debug")]
     [SerializeField] private bool logFlow = false;
 
     public event Action<BattleState> OnBattleStateChanged;
@@ -102,6 +120,8 @@ public class BattleManager : MonoBehaviour
 
     public BattleState CurrentState => _state;
     public bool IsPlayerPhase => _state == BattleState.PlayerPhase;
+    public bool IsEnemyPhase => _state == BattleState.EnemyPhase;
+    public bool IsResolving => _resolving;
     public int PartyCount => _party != null ? _party.Count : 0;
     public int ActivePartyIndex => _activePartyIndex;
 
@@ -128,8 +148,11 @@ public class BattleManager : MonoBehaviour
     private Camera _mainCam;
 
     private Coroutine _startBattleRoutine;
+    private Coroutine _enemyTurnRoutine;
 
     private bool _startupRewardHandled;
+
+    private bool _postBattleRunning;
 
     // ✅ IMPORTANT: finds inactive objects too (e.g., UI panels disabled by default)
     private static T FindInSceneIncludingInactive<T>() where T : UnityEngine.Object
@@ -170,6 +193,8 @@ _mainCam = Camera.main;
         if (postBattleFlow == null) postBattleFlow = FindInSceneIncludingInactive<PostBattleFlowController>();
         if (inventory == null) inventory = FindInSceneIncludingInactive<PlayerInventory>();
         if (startRewardPanel == null) startRewardPanel = FindInSceneIncludingInactive<PostBattleRewardPanel>();
+        if (postBattleRewardPanel == null) postBattleRewardPanel = startRewardPanel;
+
 
         StartNewRun();
     }
@@ -377,6 +402,194 @@ _mainCam = Camera.main;
         _startBattleRoutine = StartCoroutine(StartBattleRoutine());
     }
 
+    /// <summary>
+    /// Ends the player's turn immediately and begins the enemy phase.
+    /// Intended to be called by the End Turn button.
+    /// </summary>
+    public void EndTurn()
+    {
+        // Only allow during player phase and when not already mid-resolution/enemy turn.
+        if (!IsPlayerPhase) return;
+        if (_resolving) return;
+        if (_enemyTurnRoutine != null) return;
+
+        // If there are no enemies, nothing to do.
+        if (_activeMonsters == null || _activeMonsters.Count == 0) return;
+
+        _enemyTurnRoutine = StartCoroutine(EnemyPhaseRoutine());
+    }
+
+    private IEnumerator EnemyPhaseRoutine()
+    {
+        // Enter enemy phase.
+        SetState(BattleState.EnemyPhase);
+
+        // Make sure no pending target selection / casts linger.
+        CancelPendingAbility();
+
+        // If intents were never planned (or were cleared), plan them now.
+        if (_plannedIntents.Count == 0) PlanEnemyIntents();
+
+        // Copy, so if visuals subscribe and mutate we still have a stable execution list.
+        var intentsToExecute = new List<EnemyIntent>(_plannedIntents);
+
+        // Clear visuals immediately after we commit to executing them.
+        _plannedIntents.Clear();
+        OnEnemyIntentsPlanned?.Invoke(new List<EnemyIntent>(_plannedIntents));
+        NotifyPartyChanged();
+
+        // Execute each intent.
+        for (int i = 0; i < intentsToExecute.Count; i++)
+        {
+            var intent = intentsToExecute[i];
+            if (intent.enemy == null || intent.enemy.IsDead) continue;
+
+            int targetIdx = intent.targetPartyIndex;
+
+            // If target is invalid/dead, retarget to a living hero.
+            if (!IsValidPartyIndex(targetIdx) || _party[targetIdx].IsDead)
+                targetIdx = GetRandomLivingTargetIndex();
+
+            if (!IsValidPartyIndex(targetIdx)) break;
+
+            
+HeroStats targetStats = _party[targetIdx].stats;
+GameObject targetGO = _party[targetIdx].avatarGO;
+
+Transform targetTf = targetGO != null ? targetGO.transform : (targetStats != null ? targetStats.transform : null);
+
+// Lunge/translate attack (no animation clips required). Damage is applied at the lunge peak.
+yield return EnemyLungeAttack(intent.enemy, targetTf, () =>
+{
+    if (targetStats == null) return;
+
+    int hpBefore = targetStats.CurrentHp;
+    int raw = intent.enemy.GetDamage();
+
+    // Apply damage (HeroStats handles defense).
+    targetStats.TakeDamage(raw);
+
+    int dealt = Mathf.Max(0, hpBefore - targetStats.CurrentHp);
+
+    if (targetGO != null)
+        SpawnDamageNumber(targetGO.transform.position, dealt);
+});
+
+NotifyPartyChanged();
+
+// If all heroes are dead, end battle for now (you can wire a defeat flow later). (you can wire a defeat flow later).
+            if (IsPartyDefeated())
+            {
+                Debug.Log("[BattleManager] Party defeated (enemy phase).", this);
+                SetState(BattleState.BattleEnd);
+                _enemyTurnRoutine = null;
+                yield break;
+            }
+        }
+
+        // Back to player phase: reset round flags and re-plan intents for the next enemy phase preview.
+        ResetPartyRoundFlags();
+        PlanEnemyIntents();
+
+        SetState(BattleState.PlayerPhase);
+
+        _activePartyIndex = GetFirstAlivePartyIndex();
+        OnActivePartyMemberChanged?.Invoke(_activePartyIndex);
+
+        NotifyPartyChanged();
+
+        _enemyTurnRoutine = null;
+    }
+
+    private bool IsPartyDefeated()
+    {
+        for (int i = 0; i < PartyCount; i++)
+        {
+            if (_party[i] != null && !_party[i].IsDead)
+                return false;
+        }
+        return true;
+    }
+
+private Transform GetEnemyVisualTransform(Monster enemy)
+{
+    if (enemy == null) return null;
+
+    // Prefer a SpriteRenderer child (most 2D enemies).
+    var sr = enemy.GetComponentInChildren<SpriteRenderer>(true);
+    if (sr != null) return sr.transform;
+
+    // Fallback: any child transform (so we don't move a shared root if that's undesirable).
+    if (enemy.transform.childCount > 0) return enemy.transform.GetChild(0);
+
+    return enemy.transform;
+}
+
+private IEnumerator LungeTranslate(Transform mover, Vector3 from, Vector3 to, float seconds)
+{
+    if (mover == null) yield break;
+
+    if (seconds <= 0f)
+    {
+        mover.position = to;
+        yield break;
+    }
+
+    float t = 0f;
+    while (t < seconds)
+    {
+        t += Time.deltaTime;
+        float a = Mathf.Clamp01(t / seconds);
+        mover.position = Vector3.Lerp(from, to, a);
+        yield return null;
+    }
+    mover.position = to;
+}
+
+private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, Action applyDamage)
+{
+    // This reproduces the old "rudimentary" translation attack:
+    // - Move enemy visual toward the target (lunge)
+    // - Apply damage at peak/impact
+    // - Move back to start
+
+    if (enemy == null) yield break;
+
+    Transform visual = GetEnemyVisualTransform(enemy);
+    if (visual == null)
+    {
+        applyDamage?.Invoke();
+        yield break;
+    }
+
+    Vector3 start = visual.position;
+
+    Vector3 targetPos = target != null ? target.position : start;
+    Vector3 dir = (targetPos - start);
+    dir.z = 0f;
+    if (dir.sqrMagnitude < 0.0001f) dir = Vector3.right;
+
+    dir.Normalize();
+
+    Vector3 peak = start + dir * Mathf.Max(0f, enemyLungeDistance);
+
+    // Forward
+    yield return LungeTranslate(visual, start, peak, enemyLungeForwardSeconds);
+
+    // Impact
+    applyDamage?.Invoke();
+
+    // Small hold at peak (feel/snap)
+    if (enemyLungeHoldSeconds > 0f)
+        yield return new WaitForSeconds(enemyLungeHoldSeconds);
+
+    // Back
+    yield return LungeTranslate(visual, peak, start, enemyLungeBackSeconds);
+}
+
+
+
+
     private IEnumerator StartBattleRoutine()
     {
         CleanupExistingEncounter();
@@ -441,12 +654,16 @@ _mainCam = Camera.main;
 
     private IEnumerator ResolvePendingAbility()
     {
-        Debug.Log($"[BattleManager] Confirmed/casting ability: {_pendingAbility.name}", this);
         if (_pendingAbility == null || !IsValidPartyIndex(_pendingActorIndex))
         {
             CancelPendingAbility();
             yield break;
         }
+
+        // Capture references up-front so end-of-battle cleanup (or other flows)
+        // can't null out _pendingAbility mid-coroutine.
+        AbilityDefinitionSO ability = _pendingAbility;
+        Debug.Log($"[BattleManager] Confirmed/casting ability: {ability.name}", this);
 
         PartyMemberRuntime actor = _party[_pendingActorIndex];
         HeroStats actorStats = actor.stats;
@@ -457,7 +674,7 @@ _mainCam = Camera.main;
         }
 
         Monster enemyTarget = _selectedEnemyTarget;
-        if (_pendingAbility.targetType == AbilityTargetType.Enemy)
+        if (ability.targetType == AbilityTargetType.Enemy)
         {
             if (enemyTarget == null || enemyTarget.IsDead)
             {
@@ -466,7 +683,7 @@ _mainCam = Camera.main;
             }
         }
 
-        ResourceCost cost = GetEffectiveCost(actorStats, _pendingAbility);
+        ResourceCost cost = GetEffectiveCost(actorStats, ability);
         //int actorPoolId = actorStats.ResourcePool.GetInstanceID();
         int id = RuntimeHelpers.GetHashCode(resourcePool);
         if (resourcePool == null || !resourcePool.TrySpend(cost))
@@ -492,12 +709,12 @@ _mainCam = Camera.main;
         bool useImpactSync = false;
         string stateToPlay = null;
 
-        if (anim != null && _pendingAbility != null)
+        if (anim != null)
         {
             // Per-character profile (Option B)
             var profile = anim.GetComponentInParent<CasterAnimationProfile>();
 
-            switch (_pendingAbility.name)
+            switch (ability.name)
             {
                 case "Slash":
                     useImpactSync = true;
@@ -524,7 +741,7 @@ _mainCam = Camera.main;
                 default:
                     // Default: still play *something* (or skip animation if you prefer)
                     useImpactSync = false; // default to immediate apply unless you want all abilities synced
-                    stateToPlay = profile != null ? profile.GetAttackStateForAbility(_pendingAbility.name) : null;
+                    stateToPlay = profile != null ? profile.GetAttackStateForAbility(ability.name) : null;
                     // If profile doesn't have an entry, you can fall back to a generic cast/attack
                     if (string.IsNullOrWhiteSpace(stateToPlay))
                         stateToPlay = "fighter_basic_attack"; // safe default until you add more states
@@ -538,7 +755,7 @@ _mainCam = Camera.main;
         }
 
 
-        if (_pendingAbility.targetType == AbilityTargetType.Enemy && enemyTarget != null)
+		if (ability.targetType == AbilityTargetType.Enemy && enemyTarget != null)
         {
             // If this ability uses impact-sync and the caster has an animator playing the attack,
             // wait for the impact frame event before applying damage.
@@ -561,9 +778,9 @@ _mainCam = Camera.main;
             }
 
             int dealt = enemyTarget.TakeDamageFromAbility(
-                abilityBaseDamage: _pendingAbility.baseDamage,
+				abilityBaseDamage: ability.baseDamage,
                 classAttackModifier: actorStats.ClassAttackModifier,
-                element: _pendingAbility.element);
+				element: ability.element);
 
             SpawnDamageNumber(enemyTarget.transform.position, dealt);
             actorStats.ApplyOnHitEffectsTo(enemyTarget);
@@ -577,9 +794,9 @@ _mainCam = Camera.main;
         }
 
 
-        if (_pendingAbility.targetType == AbilityTargetType.Self && _pendingAbility.shieldAmount > 0)
+		if (ability.targetType == AbilityTargetType.Self && ability.shieldAmount > 0)
         {
-            actorStats.AddShield(_pendingAbility.shieldAmount);
+			actorStats.AddShield(ability.shieldAmount);
         }
 
         actor.hasActedThisRound = true;
@@ -694,8 +911,80 @@ _mainCam = Camera.main;
     private void RemoveMonster(Monster m)
     {
         if (m == null) return;
+
         _activeMonsters.Remove(m);
         if (m.gameObject != null) Destroy(m.gameObject);
+
+        // If all enemies are dead, trigger the post-battle reward loop.
+        if (_activeMonsters.Count == 0)
+        {
+            StartCoroutine(HandleEncounterVictoryRoutine());
+        }
+    }
+
+
+    private IEnumerator HandleEncounterVictoryRoutine()
+    {
+        if (_postBattleRunning)
+            yield break;
+
+        _postBattleRunning = true;
+
+        if (logFlow)
+            Debug.Log("[Battle] Encounter cleared. Entering post-battle rewards.", this);
+
+        SetState(BattleState.BattleEnd);
+
+        // Ensure no pending actions linger while the reward panel is open.
+        CancelPendingAbility();
+
+        if (stretchController != null)
+            stretchController.SetEncounterActive(false);
+
+        // Unpause world visuals between fights so scroll segments (and the walk loop) can show.
+        if (scrollingBackground != null)
+            scrollingBackground.SetPaused(false);
+
+        // Roll and present post-battle rewards.
+        if (enablePostBattleRewards)
+        {
+            List<ItemOptionSO> pool = postBattleFlow != null ? postBattleFlow.GetItemOptionPool() : null;
+            PostBattleRewardPanel panel = postBattleRewardPanel != null ? postBattleRewardPanel : startRewardPanel;
+
+            if (pool != null && pool.Count > 0 && panel != null)
+            {
+                int min = Mathf.Clamp(postBattleRewardChoicesRange.x, 1, pool.Count);
+                int max = Mathf.Clamp(postBattleRewardChoicesRange.y, min, pool.Count);
+                int desired = UnityEngine.Random.Range(min, max + 1);
+
+                List<ItemOptionSO> rolled = RollUnique(pool, desired);
+                if (includeSkipOptionPostBattle)
+                    rolled.Add(BuildRuntimeSkipOption());
+
+                ItemOptionSO chosen = null;
+                bool picked = false;
+
+                panel.Show(rolled, opt =>
+                {
+                    chosen = opt;
+                    picked = true;
+                });
+
+                yield return new WaitUntil(() => picked);
+
+                panel.Hide();
+
+                if (chosen != null && chosen.item != null && inventory != null)
+                    inventory.Add(chosen.item, chosen.quantity);
+            }
+        }
+
+        // Start the next encounter.
+        yield return null;
+
+        _postBattleRunning = false;
+
+        StartBattle();
     }
 
     private void CleanupExistingEncounter()
@@ -860,7 +1149,3 @@ _mainCam = Camera.main;
         return skip;
     }
 }
-
-
-
-////////////////////////////////////////////////////////////
