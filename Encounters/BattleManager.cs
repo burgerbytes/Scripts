@@ -1,5 +1,7 @@
 // GUID: 30f201f35d336bf4d840162cd6fd1fde
 ////////////////////////////////////////////////////////////
+// GUID: 30f201f35d336bf4d840162cd6fd1fde
+////////////////////////////////////////////////////////////
 
 using System;
 using System.Collections;
@@ -328,7 +330,28 @@ _mainCam = Camera.main;
         };
     }
 
-    public void SetActivePartyMember(int index)
+    
+    /// <summary>
+    /// Sum of raw incoming damage from currently planned enemy intents that target this party index.
+    /// Used for HP damage preview segments in PartyHUDSlot.
+    /// </summary>
+    public int GetIncomingDamagePreviewForPartyIndex(int index)
+    {
+        if (!IsValidPartyIndex(index)) return 0;
+
+        int total = 0;
+        for (int i = 0; i < _plannedIntents.Count; i++)
+        {
+            var intent = _plannedIntents[i];
+            if (intent.enemy == null || intent.enemy.IsDead) continue;
+            if (intent.targetPartyIndex != index) continue;
+
+            total += Mathf.Max(0, intent.enemy.GetDamage());
+        }
+        return total;
+    }
+
+public void SetActivePartyMember(int index)
     {
         if (!IsPlayerPhase) return;
         if (!IsValidPartyIndex(index)) return;
@@ -548,46 +571,69 @@ private IEnumerator LungeTranslate(Transform mover, Vector3 from, Vector3 to, fl
 
 private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, Action applyDamage)
 {
-    // This reproduces the old "rudimentary" translation attack:
-    // - Move enemy visual toward the target (lunge)
-    // - Apply damage at peak/impact
-    // - Move back to start
+    // Translation-based attack (no animation clips required):
+    // 1) Lunge toward target
+    // 2) Apply damage at peak
+    // 3) Return to start
 
-    if (enemy == null) yield break;
+    if (enemy == null)
+        yield break;
 
     Transform visual = GetEnemyVisualTransform(enemy);
+
+    // If we can't find a visual transform, just apply damage immediately.
     if (visual == null)
     {
         applyDamage?.Invoke();
         yield break;
     }
 
-    Vector3 start = visual.position;
+    Vector3 startPos = visual.position;
 
-    Vector3 targetPos = target != null ? target.position : start;
-    Vector3 dir = (targetPos - start);
-    dir.z = 0f;
-    if (dir.sqrMagnitude < 0.0001f) dir = Vector3.right;
+    // If no target, just do a small "nudge" forward (or none), still apply damage.
+    Vector3 dir = Vector3.right;
+    if (target != null)
+    {
+        Vector3 toTarget = (target.position - startPos);
+        if (toTarget.sqrMagnitude > 0.0001f)
+            dir = toTarget.normalized;
+    }
 
-    dir.Normalize();
-
-    Vector3 peak = start + dir * Mathf.Max(0f, enemyLungeDistance);
+    Vector3 peakPos = startPos + dir * enemyLungeDistance;
 
     // Forward
-    yield return LungeTranslate(visual, start, peak, enemyLungeForwardSeconds);
+    float t = 0f;
+    float forward = Mathf.Max(0.0001f, enemyLungeForwardSeconds);
+    while (t < forward)
+    {
+        t += Time.deltaTime;
+        float a = Mathf.Clamp01(t / forward);
+        visual.position = Vector3.Lerp(startPos, peakPos, a);
+        yield return null;
+    }
 
-    // Impact
+    // Peak (impact)
+    visual.position = peakPos;
     applyDamage?.Invoke();
 
-    // Small hold at peak (feel/snap)
-    if (enemyLungeHoldSeconds > 0f)
-        yield return new WaitForSeconds(enemyLungeHoldSeconds);
+    // Hold
+    float hold = Mathf.Max(0f, enemyLungeHoldSeconds);
+    if (hold > 0f)
+        yield return new WaitForSeconds(hold);
 
     // Back
-    yield return LungeTranslate(visual, peak, start, enemyLungeBackSeconds);
+    t = 0f;
+    float back = Mathf.Max(0.0001f, enemyLungeBackSeconds);
+    while (t < back)
+    {
+        t += Time.deltaTime;
+        float a = Mathf.Clamp01(t / back);
+        visual.position = Vector3.Lerp(peakPos, startPos, a);
+        yield return null;
+    }
+
+    visual.position = startPos;
 }
-
-
 
 
     private IEnumerator StartBattleRoutine()
@@ -1149,3 +1195,4 @@ private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, Action app
         return skip;
     }
 }
+

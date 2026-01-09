@@ -1,3 +1,5 @@
+// GUID: 70f097a53128abb419f85d811ffa21eb
+////////////////////////////////////////////////////////////
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -211,3 +213,4 @@ public class PartyHUDSlot : MonoBehaviour
         }
     }
 }
+

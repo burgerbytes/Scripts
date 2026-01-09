@@ -49,7 +49,7 @@ public class PartyHUD : MonoBehaviour
 
                 slots[i].Initialize(OnSlotClicked);
 
-                // 🔹 NEW: assign portrait immediately
+                // assign portrait immediately
                 AssignPortraitToSlot(i);
 
                 if (debugLogs)
@@ -58,17 +58,49 @@ public class PartyHUD : MonoBehaviour
         }
     }
 
+    private void OnEnable()
+    {
+        if (battleManager != null)
+        {
+            battleManager.OnPartyChanged += RefreshAllSlots;
+            battleManager.OnActivePartyMemberChanged += OnActivePartyMemberChanged;
+            battleManager.OnBattleStateChanged += OnBattleStateChanged;
+        }
+
+        RefreshAllSlots();
+    }
+
+    private void OnDisable()
+    {
+        if (battleManager != null)
+        {
+            battleManager.OnPartyChanged -= RefreshAllSlots;
+            battleManager.OnActivePartyMemberChanged -= OnActivePartyMemberChanged;
+            battleManager.OnBattleStateChanged -= OnBattleStateChanged;
+        }
+    }
+
+    private void OnBattleStateChanged(BattleManager.BattleState _)
+    {
+        // Any state change can affect previews/selection UI.
+        RefreshAllSlots();
+    }
+
+    private void OnActivePartyMemberChanged(int newIndex)
+    {
+        // Keep HUD selection in sync with battle manager.
+        _selectedIndex = newIndex;
+        _panelVisible = true;
+        RefreshAllSlots();
+    }
+
     private void AssignPortraitToSlot(int index)
     {
-        if (battleManager == null || slots == null) return;
-        if (index < 0 || index >= slots.Length) return;
+        if (slots == null || index < 0 || index >= slots.Length) return;
+        if (battleManager == null) return;
 
         HeroStats hero = battleManager.GetHeroAtPartyIndex(index);
-        if (hero == null)
-        {
-            slots[index].SetPortrait(null);
-            return;
-        }
+        if (hero == null) return;
 
         // Resolve class definition safely
         ClassDefinitionSO classDef =
@@ -77,6 +109,25 @@ public class PartyHUD : MonoBehaviour
         Sprite portrait = classDef != null ? classDef.portraitSprite : null;
 
         slots[index].SetPortrait(portrait);
+    }
+
+    private void RefreshAllSlots()
+    {
+        if (battleManager == null || slots == null) return;
+
+        for (int i = 0; i < slots.Length; i++)
+        {
+            PartyHUDSlot slot = slots[i];
+            if (slot == null) continue;
+
+            var snapshot = battleManager.GetPartyMemberSnapshot(i);
+
+            // Use planned intents for preview while in player phase.
+            int incoming = battleManager.GetIncomingDamagePreviewForPartyIndex(i);
+
+            bool isSelected = (i == _selectedIndex);
+            slot.Render(snapshot, isSelected, incoming);
+        }
     }
 
     private void OnSlotClicked(int index)
@@ -100,24 +151,22 @@ public class PartyHUD : MonoBehaviour
             _panelVisible = true;
         }
 
-        if (!_panelVisible)
+        // Highlight + panel visibility
+        for (int i = 0; i < slots.Length; i++)
         {
-            abilityMenu.Close();
-            return;
+            if (slots[i] == null) continue;
+            slots[i].SetSelected(i == _selectedIndex);
+            slots[i].SetActionPanelVisible(_panelVisible && i == _selectedIndex);
         }
 
+        // Open ability menu for that hero
         HeroStats hero = battleManager.GetHeroAtPartyIndex(index);
-        if (hero == null)
-        {
-            Debug.LogWarning($"[PartyHUD] No hero at party index {index}");
-            return;
-        }
+        if (hero == null) return;
 
-        // Resolve active class definition
         ClassDefinitionSO classDef =
             hero.AdvancedClassDef != null ? hero.AdvancedClassDef : hero.BaseClassDef;
 
-        var abilities = BuildAbilityListFromClassDef(classDef);
+        List<AbilityDefinitionSO> abilities = BuildAbilityListFromClassDef(classDef);
 
         if (debugLogs)
         {
@@ -129,6 +178,8 @@ public class PartyHUD : MonoBehaviour
         }
 
         abilityMenu.OpenForHero(hero, abilities);
+
+        RefreshAllSlots();
     }
 
     private List<AbilityDefinitionSO> BuildAbilityListFromClassDef(ClassDefinitionSO classDef)
@@ -136,34 +187,45 @@ public class PartyHUD : MonoBehaviour
         var results = new List<AbilityDefinitionSO>();
         if (classDef == null) return results;
 
-        if (classDef.abilities != null && classDef.abilities.Count > 0)
+        if (classDef.abilities != null)
         {
             for (int i = 0; i < classDef.abilities.Count; i++)
             {
                 var a = classDef.abilities[i];
-                if (a != null && !results.Contains(a))
-                    results.Add(a);
+                if (a != null) results.Add(a);
             }
         }
-
-        if (classDef.ability1 != null && !results.Contains(classDef.ability1))
-            results.Add(classDef.ability1);
-
-        if (classDef.ability2 != null && !results.Contains(classDef.ability2))
-            results.Add(classDef.ability2);
 
         return results;
     }
 
-    // REQUIRED BY EnemyIntentVisualizer
-    public RectTransform GetSlotRectTransform(int index)
+    /// <summary>
+    /// Returns the RectTransform for the PartyHUD slot for the given party index.
+    /// Used by systems that want to position UI elements (e.g., enemy intent) relative to a slot.
+    /// </summary>
+    public RectTransform GetSlotRectTransform(int partyIndex)
     {
-        if (slots == null || index < 0 || index >= slots.Length)
+        if (slots == null || slots.Length == 0) return null;
+
+        // Fast path: array index matches party index
+        if (partyIndex >= 0 && partyIndex < slots.Length && slots[partyIndex] != null)
         {
-            Debug.LogWarning($"[PartyHUD] GetSlotRectTransform invalid index {index}", this);
-            return null;
+            // Only accept if the slot's configured PartyIndex matches, otherwise fall through to search.
+            if (slots[partyIndex].PartyIndex == partyIndex)
+                return slots[partyIndex].RectTransform;
         }
 
-        return slots[index].GetComponent<RectTransform>();
+        // Search path: find slot whose configured PartyIndex matches.
+        for (int i = 0; i < slots.Length; i++)
+        {
+            var s = slots[i];
+            if (s == null) continue;
+            if (s.PartyIndex == partyIndex)
+                return s.RectTransform;
+        }
+
+        return null;
     }
+
+
 }
