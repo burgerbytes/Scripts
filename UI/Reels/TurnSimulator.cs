@@ -8,12 +8,22 @@ public class TurnSimulator : MonoBehaviour
 
     private void Update()
     {
-        // Press T to simulate "start of turn"
-        if (Input.GetKeyDown(KeyCode.T))
+        // Debug helper:
+        // Press Y to start a new turn (resets spins to the per-turn limit and clears pending payouts).
+        if (Input.GetKeyDown(KeyCode.Y))
         {
             _turn++;
-            reels.SpinAll();
-            Debug.Log($"Turn {_turn}: spun reels.");
+            if (reels != null)
+                reels.BeginTurn();
+
+            Debug.Log($"Turn {_turn}: began new turn (spins reset).");
+        }
+
+        // Press T to spin (ReelSpinSystem enforces the per-turn limit).
+        if (Input.GetKeyDown(KeyCode.T))
+        {
+            if (reels != null)
+                reels.TrySpin();
         }
     }
 }

@@ -1,14 +1,13 @@
-// GUID: 1ef221263915ab6479bd1711f913c918
-////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 namespace UI.Reels
 {
-    public class ReelColumnUI : MonoBehaviour
+    public class ReelColumnUI : MonoBehaviour, IPointerDownHandler, IPointerUpHandler, IPointerExitHandler
     {
         [Header("References")]
         [SerializeField] private RectTransform viewport;
@@ -35,6 +34,16 @@ namespace UI.Reels
         [SerializeField] private float stopBounceSeconds = 0.12f;
         [SerializeField] private bool useUnscaledTime = false;
 
+        [Header("Reel Lock")]
+        [Tooltip("Hold the mouse/finger on this reel for this many seconds to toggle lock/unlock.")]
+        [SerializeField] private float holdToToggleSeconds = 0.25f;
+
+        [Tooltip("Optional root object (e.g., LockIcon + Checkbox) shown when locked.")]
+        [SerializeField] private GameObject lockVisualRoot;
+
+        [Tooltip("Optional checkbox toggle shown under the reel. Will be set to ON when locked.")]
+        [SerializeField] private Toggle lockCheckbox;
+
         [Header("Debug")]
         [SerializeField] private bool debugLog = false;
 
@@ -44,6 +53,10 @@ namespace UI.Reels
         private bool spinning = false;
         private bool hasInitialized = false;
 
+        private bool _locked = false;
+        private Coroutine _holdRoutine;
+        private bool _toggledThisPress;
+
         /* ============================================================
          * Unity
          * ============================================================ */
@@ -52,12 +65,14 @@ namespace UI.Reels
         {
             AutoWireRowImagesIfNeeded();
             TryInitializeFromInspector();
+            ApplyLockedVisual();
         }
 
         private void OnEnable()
         {
             AutoWireRowImagesIfNeeded();
             TryInitializeFromInspector();
+            ApplyLockedVisual();
         }
 
 #if UNITY_EDITOR
@@ -77,6 +92,19 @@ namespace UI.Reels
         public bool HasValidStrip => strip != null && strip.symbols != null && strip.symbols.Count > 0;
 
         public bool IsSpinning() => spinning;
+
+        public bool IsLocked => _locked;
+
+        public void SetLocked(bool locked)
+        {
+            _locked = locked;
+            ApplyLockedVisual();
+        }
+
+        public void ToggleLocked()
+        {
+            SetLocked(!_locked);
+        }
 
         public void SetStrip(ReelStripSO newStrip, int startIndex = 0)
         {
@@ -109,6 +137,9 @@ namespace UI.Reels
             if (!EnsureReadyForSpin(logErrors: true))
                 yield break;
 
+            if (_locked)
+                yield break;
+
             int n = strip.symbols.Count;
             int target = rng.Next(0, n);
             yield return SpinToIndex(target, -1f);
@@ -117,6 +148,9 @@ namespace UI.Reels
         public IEnumerator SpinToRandom(System.Random rng, float durationOverrideSeconds)
         {
             if (!EnsureReadyForSpin(logErrors: true))
+                yield break;
+
+            if (_locked)
                 yield break;
 
             int n = strip.symbols.Count;
@@ -132,6 +166,9 @@ namespace UI.Reels
         public IEnumerator SpinToIndex(int targetIndex, float durationOverrideSeconds)
         {
             if (!EnsureReadyForSpin(logErrors: true))
+                yield break;
+
+            if (_locked)
                 yield break;
 
             if (spinning)
@@ -235,6 +272,73 @@ namespace UI.Reels
             if (idx < 0) idx += n;
 
             return strip.symbols[idx];
+        }
+
+        /* ============================================================
+         * Pointer hold-to-lock
+         * ============================================================ */
+
+        public void OnPointerDown(PointerEventData eventData)
+        {
+            if (!isActiveAndEnabled) return;
+            if (spinning) return; // don't toggle mid-spin (keeps UX predictable)
+
+            _toggledThisPress = false;
+
+            if (_holdRoutine != null)
+                StopCoroutine(_holdRoutine);
+
+            _holdRoutine = StartCoroutine(HoldToToggleRoutine());
+        }
+
+        public void OnPointerUp(PointerEventData eventData)
+        {
+            CancelHoldRoutine();
+        }
+
+        public void OnPointerExit(PointerEventData eventData)
+        {
+            CancelHoldRoutine();
+        }
+
+        private void CancelHoldRoutine()
+        {
+            if (_holdRoutine != null)
+            {
+                StopCoroutine(_holdRoutine);
+                _holdRoutine = null;
+            }
+        }
+
+        private IEnumerator HoldToToggleRoutine()
+        {
+            float t = 0f;
+            while (t < holdToToggleSeconds)
+            {
+                t += Time.unscaledDeltaTime;
+                yield return null;
+            }
+
+            _toggledThisPress = true;
+            ToggleLocked();
+
+            if (debugLog)
+                Debug.Log($"{name}: Reel lock toggled -> {(_locked ? "LOCKED" : "UNLOCKED")}", this);
+
+            _holdRoutine = null;
+        }
+
+        private void ApplyLockedVisual()
+        {
+            // Root should always stay active so layout doesn't collapse
+            if (lockVisualRoot != null && !lockVisualRoot.activeSelf)
+                lockVisualRoot.SetActive(true);
+
+            if (lockCheckbox != null)
+            {
+                lockCheckbox.isOn = _locked;
+                lockCheckbox.interactable = false; // visual-only indicator
+            }
         }
 
         /* ============================================================
@@ -412,4 +516,3 @@ namespace UI.Reels
         }
     }
 }
-////////////////////////////////////////////////////////////

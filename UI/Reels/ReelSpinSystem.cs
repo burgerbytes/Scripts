@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
 using UI.Reels;
 
 public class ReelSpinSystem : MonoBehaviour
@@ -27,6 +28,17 @@ public class ReelSpinSystem : MonoBehaviour
     [Header("Reels")]
     [SerializeField] private List<ReelEntry> reels = new List<ReelEntry>();
 
+    [Header("Turn Spin Limit")]
+    [Tooltip("How many spins the player is allowed to perform per turn.")]
+    [SerializeField] private int spinsPerTurn = 3;
+
+    [Tooltip("If true, locked reels are automatically cleared when a new turn begins.")]
+    [SerializeField] private bool clearReelLocksOnNewTurn = true;
+
+    [Header("Optional UI Controls")]
+    [Tooltip("Optional: wire this to the new 'Stop spinning' button.")]
+    [SerializeField] private Button stopSpinningButton;
+
     [Header("RNG")]
     [Tooltip("If enabled, the reel results will be deterministic across play sessions (useful for debugging).")]
     [SerializeField] private bool useFixedSeed = false;
@@ -34,11 +46,11 @@ public class ReelSpinSystem : MonoBehaviour
     [Tooltip("Only used when Use Fixed Seed is enabled.")]
     [SerializeField] private int fixedSeed = 12345;
 
-    
     [Header("Spin Timing")]
     [Tooltip("Time between successive reel stops. Reels start together but stop one-by-one in a random order.")]
     [SerializeField] private float stopStaggerSeconds = 0.25f;
-[Header("Payout Targets")]
+
+    [Header("Payout Targets")]
     [Tooltip("Authoritative resource store. If null, we use ResourcePool.Instance or find one in scene.")]
     [SerializeField] private ResourcePool resourcePool;
 
@@ -53,16 +65,26 @@ public class ReelSpinSystem : MonoBehaviour
     [SerializeField] private bool warnOnMissingMapping = true;
 
     [Header("Symbol Behavior")]
-    [SerializeField]
-    private List<ReelSymbolSO> noPayoutSymbols = new List<ReelSymbolSO>();
+    [SerializeField] private List<ReelSymbolSO> noPayoutSymbols = new List<ReelSymbolSO>();
+
     public event Action OnSpinStarted;
     public event Action<Dictionary<string, ReelSymbolSO>> OnSpinFinished;
+
+    public event Action<int> OnSpinsRemainingChanged;
 
     private System.Random rng;
     private bool spinning;
 
     // Runtime lookup
     private Dictionary<ReelSymbolSO, ResourceType> mapLookup;
+
+    // Turn state
+    private int spinsRemaining;
+    private long pendingA, pendingD, pendingM, pendingW;
+    private bool _collectAfterCurrentSpin;
+    private bool _forceStopAfterCurrentSpin;
+
+    public int SpinsRemaining => spinsRemaining;
 
     private void Awake()
     {
@@ -82,21 +104,76 @@ public class ReelSpinSystem : MonoBehaviour
             topStatusBar = FindFirstObjectByType<TopStatusBar>();
 
         BuildMappingLookup();
+
+        BeginTurn(); // default start state
+    }
+
+    private void OnEnable()
+    {
+        if (stopSpinningButton != null)
+            stopSpinningButton.onClick.AddListener(StopSpinningAndCollect);
+    }
+
+    private void OnDisable()
+    {
+        if (stopSpinningButton != null)
+            stopSpinningButton.onClick.RemoveListener(StopSpinningAndCollect);
     }
 
     private void OnValidate()
     {
         if (!Application.isPlaying)
             BuildMappingLookup();
+
+        spinsPerTurn = Mathf.Max(0, spinsPerTurn);
     }
 
     private void Update()
     {
+        // Debug input: press T to spin (now limited by spinsRemaining)
         if (Input.GetKeyDown(KeyCode.T))
             TrySpin();
     }
 
-    // ✅ Compatibility for TurnSimulator (and any older callers)
+    /// <summary>
+    /// Call this at the start of the PLAYER turn.
+    /// Resets spin count, clears pending payouts, and (optionally) clears reel locks.
+    /// </summary>
+    public void BeginTurn()
+    {
+        spinsRemaining = spinsPerTurn;
+        pendingA = pendingD = pendingM = pendingW = 0;
+        _collectAfterCurrentSpin = false;
+        _forceStopAfterCurrentSpin = false;
+
+        if (clearReelLocksOnNewTurn)
+            ClearAllReelLocks();
+
+        OnSpinsRemainingChanged?.Invoke(spinsRemaining);
+    }
+
+    /// <summary>
+    /// Optional: wire to the new "Stop spinning" button.
+    /// Immediately collects pending resources if not currently spinning.
+    /// If currently spinning, collection happens right after the current spin resolves.
+    /// </summary>
+    public void StopSpinningAndCollect()
+    {
+        // If we're mid-spin, defer the collection until after results resolve.
+        if (spinning)
+        {
+            _collectAfterCurrentSpin = true;
+            _forceStopAfterCurrentSpin = true;
+            return;
+        }
+
+        spinsRemaining = 0;
+        OnSpinsRemainingChanged?.Invoke(spinsRemaining);
+
+        CollectPendingPayout();
+    }
+
+    // ✅ Compatibility for older callers
     public void SpinAll()
     {
         TrySpin();
@@ -104,7 +181,15 @@ public class ReelSpinSystem : MonoBehaviour
 
     public void TrySpin()
     {
-        if (spinning) return;
+        if (spinning)
+            return;
+
+        if (spinsRemaining <= 0)
+        {
+            // No spins left this turn. Do NOT award/collect anything automatically.
+            return;
+        }
+
         StartCoroutine(SpinRoutine());
     }
 
@@ -116,7 +201,6 @@ public class ReelSpinSystem : MonoBehaviour
         if (mapLookup == null || mapLookup.Count == 0)
             BuildMappingLookup();
 
-        
         // Start all reels together, but make them STOP one-by-one in a random order
         // by overriding each reel's duration (longer duration => later stop).
         List<ReelEntry> active = new List<ReelEntry>();
@@ -138,13 +222,16 @@ public class ReelSpinSystem : MonoBehaviour
             ReelEntry r = active[order[stopRank]];
             float baseDuration = r.ui.ConfiguredSpinDuration;
             float durationOverride = baseDuration + (stopRank * Mathf.Max(0f, stopStaggerSeconds));
+
+            // ReelColumnUI now handles "locked" reels by immediately yielding.
             running.Add(StartCoroutine(r.ui.SpinToRandom(rng, durationOverride)));
         }
 
         foreach (var c in running)
             yield return c;
+
         Dictionary<string, ReelSymbolSO> resolved = new Dictionary<string, ReelSymbolSO>();
-                List<ResourceType> midRowTypes = new List<ResourceType>();
+        List<ResourceType> midRowTypes = new List<ResourceType>();
 
         foreach (var r in reels)
         {
@@ -157,16 +244,45 @@ public class ReelSpinSystem : MonoBehaviour
                 midRowTypes.Add(t);
         }
 
-        ApplyMiddleRowPayout(midRowTypes);
+        // Defer payout (pending) instead of awarding immediately.
+        SetPendingFromMiddleRowPayout(midRowTypes);
+        // after evaluating middle-row symbols and adding to pending*
+        DebugLogSpinResult("AfterSpin_PendingSet");
+
+        // Consume 1 spin now that results are resolved.
+        spinsRemaining = Mathf.Max(0, spinsRemaining - 1);
+        OnSpinsRemainingChanged?.Invoke(spinsRemaining);
 
         OnSpinFinished?.Invoke(resolved);
+
         spinning = false;
+
+        // If the player pressed Stop Spinning during the spin, force collection now.
+        if (_collectAfterCurrentSpin)
+        {
+            _collectAfterCurrentSpin = false;
+            spinsRemaining = 0;
+            OnSpinsRemainingChanged?.Invoke(spinsRemaining);
+            CollectPendingPayout();
+            yield break;
+        }
+
+        // Auto-collect when we run out of spins.
+        if (spinsRemaining <= 0)
+            CollectPendingPayout();
     }
 
-    private void ApplyMiddleRowPayout(List<ResourceType> midRow)
+    private void SetPendingFromMiddleRowPayout(List<ResourceType> midRow)
     {
+        // We only award resources based on the FINAL reel state of the turn (after last spin / Stop Spinning).
+        // So each spin REPLACES the pending payout instead of accumulating across spins.
+        pendingA = pendingD = pendingM = pendingW = 0;
         if (midRow == null || midRow.Count == 0)
+        {
+            // No payout symbols: clear pending since only the latest spin matters.
+            pendingA = pendingD = pendingM = pendingW = 0;
             return;
+        }
 
         long addA = 0, addD = 0, addM = 0, addW = 0;
 
@@ -197,18 +313,44 @@ public class ReelSpinSystem : MonoBehaviour
             }
         }
 
+        // IMPORTANT: We do NOT want payouts to accumulate across spins within a turn.
+        // The player is effectively "rerolling" until they stop or run out of spins, so only the
+        // most recent (current) mid-row result should be pending for collection.
+        pendingA = addA;
+        pendingD = addD;
+        pendingM = addM;
+        pendingW = addW;
+    }
+
+    private void CollectPendingPayout()
+    {
+        Debug.Log($"[ReelSpinSystem] CollectPendingPayout CALLED. pendingA={pendingA}, pendingD={pendingD}, pendingM={pendingM}, pendingW={pendingW}, spinsRemaining={spinsRemaining}");
+        if (pendingA == 0 && pendingD == 0 && pendingM == 0 && pendingW == 0)
+            return;
+
         // ✅ AUTHORITATIVE ADD: gameplay resource pool
         if (resourcePool != null)
         {
-            resourcePool.Add(addA, addD, addM, addW);
+            resourcePool.Add(pendingA, pendingD, pendingM, pendingW);
         }
         else
         {
             // Fallback: UI-only add (won't enable gameplay spending, but avoids silent behavior)
             if (topStatusBar != null)
-                topStatusBar.AddResources(addA, addD, addM, addW);
+                topStatusBar.AddResources(pendingA, pendingD, pendingM, pendingW);
 
             Debug.LogWarning("[ReelSpinSystem] No ResourcePool found. Resources were applied to UI only. Add a ResourcePool to the scene.");
+        }
+
+        pendingA = pendingD = pendingM = pendingW = 0;
+    }
+
+    private void ClearAllReelLocks()
+    {
+        foreach (var r in reels)
+        {
+            if (r == null || r.ui == null) continue;
+            r.ui.SetLocked(false);
         }
     }
 
@@ -238,7 +380,6 @@ public class ReelSpinSystem : MonoBehaviour
             return false;
 
         // Explicit "null/blank" (or other) symbols that intentionally award nothing.
-        // These should not warn or map to a resource.
         if (noPayoutSymbols != null && noPayoutSymbols.Contains(sym))
             return false;
 
@@ -251,7 +392,6 @@ public class ReelSpinSystem : MonoBehaviour
         return false;
     }
 
-
     private static void Shuffle<T>(IList<T> list, System.Random rng)
     {
         // Fisher–Yates shuffle
@@ -262,4 +402,12 @@ public class ReelSpinSystem : MonoBehaviour
         }
     }
 
+    private void DebugLogSpinResult(string reason)
+    {
+        Debug.Log(
+            $"[SPIN RESULT] reason={reason} | " +
+            $"pending: A={pendingA}, D={pendingD}, M={pendingM}, W={pendingW} | " +
+            $"spinsRemaining={spinsRemaining}"
+        );
+    }
 }
