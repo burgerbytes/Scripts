@@ -1,8 +1,3 @@
-// GUID: 30f201f35d336bf4d840162cd6fd1fde
-////////////////////////////////////////////////////////////
-// GUID: 30f201f35d336bf4d840162cd6fd1fde
-////////////////////////////////////////////////////////////
-
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -835,7 +830,8 @@ private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, Action app
             {
                 actorStats.GainXP(5);
                 RemoveMonster(enemyTarget);
-                PlanEnemyIntents();
+                // Enemy intents are locked once planned at the start of the turn.
+                // Do not re-plan here, or surviving enemies' targets will change mid-turn.
             }
         }
 
@@ -954,9 +950,43 @@ private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, Action app
         }
     }
 
+
+
+    /// <summary>
+    /// Enemy intents should not change mid-turn once created.
+    /// If an enemy dies, we remove only that enemy's intent(s) (and any null/dead references)
+    /// without re-planning or changing the other intents.
+    /// </summary>
+    private void RemoveEnemyIntentsForMonster(Monster dead)
+    {
+        if (dead == null) return;
+        if (_plannedIntents == null || _plannedIntents.Count == 0) return;
+
+        bool removedAny = false;
+        for (int i = _plannedIntents.Count - 1; i >= 0; i--)
+        {
+            var intent = _plannedIntents[i];
+            if (intent.enemy == null || intent.enemy == dead || intent.enemy.IsDead)
+            {
+                _plannedIntents.RemoveAt(i);
+                removedAny = true;
+            }
+        }
+
+        if (removedAny)
+        {
+            OnEnemyIntentsPlanned?.Invoke(new List<EnemyIntent>(_plannedIntents));
+            NotifyPartyChanged();
+        }
+    }
+
     private void RemoveMonster(Monster m)
     {
         if (m == null) return;
+
+        // Intents are locked for the turn. If this enemy had a planned intent, remove only its intent(s)
+        // without changing the remaining enemies' intents.
+        RemoveEnemyIntentsForMonster(m);
 
         _activeMonsters.Remove(m);
         if (m.gameObject != null) Destroy(m.gameObject);
@@ -1196,3 +1226,6 @@ private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, Action app
     }
 }
 
+
+
+////////////////////////////////////////////////////////////
