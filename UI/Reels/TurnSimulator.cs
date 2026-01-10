@@ -1,8 +1,17 @@
 using UnityEngine;
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.UI;
 
 public class TurnSimulator : MonoBehaviour
 {
     [SerializeField] private ReelSpinSystem reels;
+
+    [Header("Optional UI Controls")]
+    [Tooltip("Optional: wire this to the'Spin' button.")]
+    [SerializeField] private Button spinButton;
 
     private int _turn = 0;
 
@@ -25,5 +34,7 @@ public class TurnSimulator : MonoBehaviour
             if (reels != null)
                 reels.TrySpin();
         }
+        if (spinButton != null)
+            spinButton.onClick.AddListener(reels.TrySpin);
     }
 }

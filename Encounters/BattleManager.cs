@@ -1,3 +1,4 @@
+// PATH: Assets/Scripts/Encounters/BattleManager.cs
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -66,6 +67,16 @@ public class BattleManager : MonoBehaviour
     [SerializeField] private int minMonstersPerEncounter = 1;
     [SerializeField] private int maxMonstersPerEncounter = 3;
 
+    [Header("Encounter / Enemy Party Compositions")]
+    [Tooltip("If set, ALWAYS use this composition for battles (ignores Enemy Party Pool).")]
+    [SerializeField] private EnemyPartyCompositionSO forcedEnemyParty;
+
+    [Tooltip("If Forced Enemy Party is null and this list has entries, BattleManager will choose from here per battle.")]
+    [SerializeField] private List<EnemyPartyCompositionSO> enemyPartyPool = new List<EnemyPartyCompositionSO>();
+
+    [Tooltip("If true, pick a random composition from the pool each battle. If false, iterate sequentially (looping).")]
+    [SerializeField] private bool randomizeEnemyPartyFromPool = true;
+
     [Header("Damage Numbers")]
     [SerializeField] private DamageNumber damageNumberPrefab;
     [SerializeField] private Vector3 damageNumberWorldOffset = new Vector3(0f, 1.2f, 0f);
@@ -99,7 +110,7 @@ public class BattleManager : MonoBehaviour
     [SerializeField] private bool allowClickToSelectMonsterTarget = true;
     [SerializeField] private bool ignoreClicksOverUI = true;
 
-    
+
     [Header("Enemy Lunge (No Animation Clips)")]
     [Tooltip("How far the enemy sprite/visual lunges toward the target during an attack (world units).")]
     [SerializeField] private float enemyLungeDistance = 0.35f;
@@ -110,7 +121,7 @@ public class BattleManager : MonoBehaviour
     [Tooltip("Seconds to move from lunge peak back to start.")]
     [SerializeField] private float enemyLungeBackSeconds = 0.12f;
 
-[Header("Debug")]
+    [Header("Debug")]
     [SerializeField] private bool logFlow = false;
 
     public event Action<BattleState> OnBattleStateChanged;
@@ -130,6 +141,12 @@ public class BattleManager : MonoBehaviour
     private readonly List<Monster> _activeMonsters = new List<Monster>();
     private readonly List<EnemyIntent> _plannedIntents = new List<EnemyIntent>();
 
+    // Enemy party selection (per encounter)
+    private EnemyPartyCompositionSO _activeEnemyParty;
+    private List<ItemOptionSO> _activeLootOverride;
+    private int _enemyPartyPoolIndex;
+    private EnemyPartyCompositionSO _nextEnemyPartyOverride;
+
     private List<PartyMemberRuntime> _party = new List<PartyMemberRuntime>(3);
     private int _activePartyIndex = 0;
 
@@ -139,6 +156,9 @@ public class BattleManager : MonoBehaviour
 
     private bool _awaitingEnemyTarget = false;
     private Monster _selectedEnemyTarget;
+
+    // Targeting preview: first click previews damage, second click confirms.
+    private Monster _previewEnemyTarget = null;
 
     private bool _resolving;
     // Used to sync damage/removal to the exact impact frame of the caster's animation.
@@ -179,13 +199,13 @@ public class BattleManager : MonoBehaviour
 
     private void Awake()
     {
-        
+
         if (Instance != null && Instance != this)
         {
             Debug.LogWarning($"[BattleManager] Duplicate instance detected. Existing={Instance.name} ({Instance.GetInstanceID()}), New={name} ({GetInstanceID()}). Using the new instance.", this);
         }
         Instance = this;
-_mainCam = Camera.main;
+        _mainCam = Camera.main;
 
         // Prefer inspector refs; if missing, auto-find (INCLUDING INACTIVE)
         if (resourcePool == null) resourcePool = FindInSceneIncludingInactive<ResourcePool>();
@@ -224,6 +244,14 @@ _mainCam = Camera.main;
         }
 
         Monster clicked = TryGetClickedMonster();
+
+        // Clicked empty space (or something non-monster): untarget + clear preview.
+        if (clicked == null)
+        {
+            ClearEnemyTargetPreview();
+            return;
+        }
+
         if (clicked != null && _activeMonsters.Contains(clicked) && !clicked.IsDead)
             SelectEnemyTarget(clicked);
     }
@@ -329,7 +357,7 @@ _mainCam = Camera.main;
         };
     }
 
-    
+
     /// <summary>
     /// Sum of raw incoming damage from currently planned enemy intents that target this party index.
     /// Used for HP damage preview segments in PartyHUDSlot.
@@ -350,7 +378,7 @@ _mainCam = Camera.main;
         return total;
     }
 
-public void SetActivePartyMember(int index)
+    public void SetActivePartyMember(int index)
     {
         if (!IsPlayerPhase) return;
         if (!IsValidPartyIndex(index)) return;
@@ -379,7 +407,7 @@ public void SetActivePartyMember(int index)
         _pendingActorIndex = actorIndex;
         _pendingAbility = ability;
         _selectedEnemyTarget = null;
-
+        ClearEnemyTargetPreview();
         // Reset animation-sync flags for this cast.
         _waitingForImpact = false;
         _impactFired = false;
@@ -390,6 +418,9 @@ public void SetActivePartyMember(int index)
         if (ability.targetType == AbilityTargetType.Enemy)
         {
             _awaitingEnemyTarget = true;
+            ClearEnemyTargetPreview();
+            _selectedEnemyTarget = null;
+            _previewEnemyTarget = null;
             if (logFlow) Debug.Log($"[Battle] Awaiting ENEMY target for {ability.abilityName}");
         }
         else
@@ -403,14 +434,22 @@ public void SetActivePartyMember(int index)
 
     public void SelectEnemyTarget(Monster target)
     {
-        Debug.Log("SelectEnemyTarget called");
         if (!IsPlayerPhase) return;
         if (!_awaitingEnemyTarget || _pendingAbility == null) return;
         if (target == null || target.IsDead) return;
 
+        // 1) First click OR retarget → preview only
+        if (_previewEnemyTarget != target)
+        {
+            SetEnemyTargetPreview(target);
+            return;
+        }
+
+        // 2) Second click on same target → confirm + resolve
         _selectedEnemyTarget = target;
         _awaitingEnemyTarget = false;
 
+        ClearEnemyTargetPreview(); // clear ghost before real damage applies
         StartCoroutine(ResolvePendingAbility());
     }
 
@@ -422,6 +461,15 @@ public void SetActivePartyMember(int index)
             StopCoroutine(_startBattleRoutine);
 
         _startBattleRoutine = StartCoroutine(StartBattleRoutine());
+    }
+
+    /// <summary>
+    /// Queue a specific enemy party to be used for the NEXT battle only.
+    /// If null is passed, clears the queued override.
+    /// </summary>
+    public void QueueNextEnemyParty(EnemyPartyCompositionSO party)
+    {
+        _nextEnemyPartyOverride = party;
     }
 
     /// <summary>
@@ -474,32 +522,32 @@ public void SetActivePartyMember(int index)
 
             if (!IsValidPartyIndex(targetIdx)) break;
 
-            
-HeroStats targetStats = _party[targetIdx].stats;
-GameObject targetGO = _party[targetIdx].avatarGO;
 
-Transform targetTf = targetGO != null ? targetGO.transform : (targetStats != null ? targetStats.transform : null);
+            HeroStats targetStats = _party[targetIdx].stats;
+            GameObject targetGO = _party[targetIdx].avatarGO;
 
-// Lunge/translate attack (no animation clips required). Damage is applied at the lunge peak.
-yield return EnemyLungeAttack(intent.enemy, targetTf, () =>
-{
-    if (targetStats == null) return;
+            Transform targetTf = targetGO != null ? targetGO.transform : (targetStats != null ? targetStats.transform : null);
 
-    int hpBefore = targetStats.CurrentHp;
-    int raw = intent.enemy.GetDamage();
+            // Lunge/translate attack (no animation clips required). Damage is applied at the lunge peak.
+            yield return EnemyLungeAttack(intent.enemy, targetTf, () =>
+            {
+                if (targetStats == null) return;
 
-    // Apply damage (HeroStats handles defense).
-    targetStats.TakeDamage(raw);
+                int hpBefore = targetStats.CurrentHp;
+                int raw = intent.enemy.GetDamage();
 
-    int dealt = Mathf.Max(0, hpBefore - targetStats.CurrentHp);
+                // Apply damage (HeroStats handles defense).
+                targetStats.TakeDamage(raw);
 
-    if (targetGO != null)
-        SpawnDamageNumber(targetGO.transform.position, dealt);
-});
+                int dealt = Mathf.Max(0, hpBefore - targetStats.CurrentHp);
 
-NotifyPartyChanged();
+                if (targetGO != null)
+                    SpawnDamageNumber(targetGO.transform.position, dealt);
+            });
 
-// If all heroes are dead, end battle for now (you can wire a defeat flow later). (you can wire a defeat flow later).
+            NotifyPartyChanged();
+
+            // If all heroes are dead, end battle for now (you can wire a defeat flow later). (you can wire a defeat flow later).
             if (IsPartyDefeated())
             {
                 Debug.Log("[BattleManager] Party defeated (enemy phase).", this);
@@ -538,106 +586,106 @@ NotifyPartyChanged();
         return true;
     }
 
-private Transform GetEnemyVisualTransform(Monster enemy)
-{
-    if (enemy == null) return null;
-
-    // Prefer a SpriteRenderer child (most 2D enemies).
-    var sr = enemy.GetComponentInChildren<SpriteRenderer>(true);
-    if (sr != null) return sr.transform;
-
-    // Fallback: any child transform (so we don't move a shared root if that's undesirable).
-    if (enemy.transform.childCount > 0) return enemy.transform.GetChild(0);
-
-    return enemy.transform;
-}
-
-private IEnumerator LungeTranslate(Transform mover, Vector3 from, Vector3 to, float seconds)
-{
-    if (mover == null) yield break;
-
-    if (seconds <= 0f)
+    private Transform GetEnemyVisualTransform(Monster enemy)
     {
+        if (enemy == null) return null;
+
+        // Prefer a SpriteRenderer child (most 2D enemies).
+        var sr = enemy.GetComponentInChildren<SpriteRenderer>(true);
+        if (sr != null) return sr.transform;
+
+        // Fallback: any child transform (so we don't move a shared root if that's undesirable).
+        if (enemy.transform.childCount > 0) return enemy.transform.GetChild(0);
+
+        return enemy.transform;
+    }
+
+    private IEnumerator LungeTranslate(Transform mover, Vector3 from, Vector3 to, float seconds)
+    {
+        if (mover == null) yield break;
+
+        if (seconds <= 0f)
+        {
+            mover.position = to;
+            yield break;
+        }
+
+        float t = 0f;
+        while (t < seconds)
+        {
+            t += Time.deltaTime;
+            float a = Mathf.Clamp01(t / seconds);
+            mover.position = Vector3.Lerp(from, to, a);
+            yield return null;
+        }
         mover.position = to;
-        yield break;
     }
 
-    float t = 0f;
-    while (t < seconds)
+    private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, Action applyDamage)
     {
-        t += Time.deltaTime;
-        float a = Mathf.Clamp01(t / seconds);
-        mover.position = Vector3.Lerp(from, to, a);
-        yield return null;
-    }
-    mover.position = to;
-}
+        // Translation-based attack (no animation clips required):
+        // 1) Lunge toward target
+        // 2) Apply damage at peak
+        // 3) Return to start
 
-private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, Action applyDamage)
-{
-    // Translation-based attack (no animation clips required):
-    // 1) Lunge toward target
-    // 2) Apply damage at peak
-    // 3) Return to start
+        if (enemy == null)
+            yield break;
 
-    if (enemy == null)
-        yield break;
+        Transform visual = GetEnemyVisualTransform(enemy);
 
-    Transform visual = GetEnemyVisualTransform(enemy);
+        // If we can't find a visual transform, just apply damage immediately.
+        if (visual == null)
+        {
+            applyDamage?.Invoke();
+            yield break;
+        }
 
-    // If we can't find a visual transform, just apply damage immediately.
-    if (visual == null)
-    {
+        Vector3 startPos = visual.position;
+
+        // If no target, just do a small "nudge" forward (or none), still apply damage.
+        Vector3 dir = Vector3.right;
+        if (target != null)
+        {
+            Vector3 toTarget = (target.position - startPos);
+            if (toTarget.sqrMagnitude > 0.0001f)
+                dir = toTarget.normalized;
+        }
+
+        Vector3 peakPos = startPos + dir * enemyLungeDistance;
+
+        // Forward
+        float t = 0f;
+        float forward = Mathf.Max(0.0001f, enemyLungeForwardSeconds);
+        while (t < forward)
+        {
+            t += Time.deltaTime;
+            float a = Mathf.Clamp01(t / forward);
+            visual.position = Vector3.Lerp(startPos, peakPos, a);
+            yield return null;
+        }
+
+        // Peak (impact)
+        visual.position = peakPos;
         applyDamage?.Invoke();
-        yield break;
+
+        // Hold
+        float hold = Mathf.Max(0f, enemyLungeHoldSeconds);
+        if (hold > 0f)
+            yield return new WaitForSeconds(hold);
+
+        // Back
+        t = 0f;
+        float back = Mathf.Max(0.0001f, enemyLungeBackSeconds);
+        while (t < back)
+        {
+            t += Time.deltaTime;
+            float a = Mathf.Clamp01(t / back);
+            visual.position = Vector3.Lerp(peakPos, startPos, a);
+            yield return null;
+        }
+
+        visual.position = startPos;
     }
-
-    Vector3 startPos = visual.position;
-
-    // If no target, just do a small "nudge" forward (or none), still apply damage.
-    Vector3 dir = Vector3.right;
-    if (target != null)
-    {
-        Vector3 toTarget = (target.position - startPos);
-        if (toTarget.sqrMagnitude > 0.0001f)
-            dir = toTarget.normalized;
-    }
-
-    Vector3 peakPos = startPos + dir * enemyLungeDistance;
-
-    // Forward
-    float t = 0f;
-    float forward = Mathf.Max(0.0001f, enemyLungeForwardSeconds);
-    while (t < forward)
-    {
-        t += Time.deltaTime;
-        float a = Mathf.Clamp01(t / forward);
-        visual.position = Vector3.Lerp(startPos, peakPos, a);
-        yield return null;
-    }
-
-    // Peak (impact)
-    visual.position = peakPos;
-    applyDamage?.Invoke();
-
-    // Hold
-    float hold = Mathf.Max(0f, enemyLungeHoldSeconds);
-    if (hold > 0f)
-        yield return new WaitForSeconds(hold);
-
-    // Back
-    t = 0f;
-    float back = Mathf.Max(0.0001f, enemyLungeBackSeconds);
-    while (t < back)
-    {
-        t += Time.deltaTime;
-        float a = Mathf.Clamp01(t / back);
-        visual.position = Vector3.Lerp(peakPos, startPos, a);
-        yield return null;
-    }
-
-    visual.position = startPos;
-}
 
 
     private IEnumerator StartBattleRoutine()
@@ -810,7 +858,7 @@ private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, Action app
         }
 
 
-		if (ability.targetType == AbilityTargetType.Enemy && enemyTarget != null)
+        if (ability.targetType == AbilityTargetType.Enemy && enemyTarget != null)
         {
             // If this ability uses impact-sync and the caster has an animator playing the attack,
             // wait for the impact frame event before applying damage.
@@ -833,9 +881,9 @@ private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, Action app
             }
 
             int dealt = enemyTarget.TakeDamageFromAbility(
-				abilityBaseDamage: ability.baseDamage,
+                abilityBaseDamage: ability.baseDamage,
                 classAttackModifier: actorStats.ClassAttackModifier,
-				element: ability.element);
+                element: ability.element);
 
             SpawnDamageNumber(enemyTarget.transform.position, dealt);
             actorStats.ApplyOnHitEffectsTo(enemyTarget);
@@ -850,9 +898,9 @@ private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, Action app
         }
 
 
-		if (ability.targetType == AbilityTargetType.Self && ability.shieldAmount > 0)
+        if (ability.targetType == AbilityTargetType.Self && ability.shieldAmount > 0)
         {
-			actorStats.AddShield(ability.shieldAmount);
+            actorStats.AddShield(ability.shieldAmount);
         }
 
         actor.hasActedThisRound = true;
@@ -871,6 +919,49 @@ private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, Action app
         if (ability == null) return default;
         return ability.cost;
     }
+
+    // ================= TARGET PREVIEW =================
+
+    private void SetEnemyTargetPreview(Monster target)
+    {
+        // Clear any previous preview
+        if (_previewEnemyTarget != null && _previewEnemyTarget != target)
+        {
+            var oldBar = _previewEnemyTarget.GetComponentInChildren<MonsterHpBar>(true);
+            if (oldBar != null) oldBar.ClearPreview();
+        }
+
+        _previewEnemyTarget = target;
+
+        if (target == null || _pendingAbility == null) return;
+        if (!IsValidPartyIndex(_pendingActorIndex)) return;
+
+        var actor = _party[_pendingActorIndex];
+        if (actor == null || actor.stats == null || actor.IsDead) return;
+
+        int predictedDamage = target.CalculateDamageFromAbility(
+            abilityBaseDamage: _pendingAbility.baseDamage,
+            classAttackModifier: actor.stats.ClassAttackModifier,
+            element: _pendingAbility.element);
+
+        int previewHp = Mathf.Max(0, target.CurrentHp - predictedDamage);
+
+        var bar = target.GetComponentInChildren<MonsterHpBar>(true);
+        if (bar != null)
+            bar.SetDamagePreview(previewHp);
+    }
+
+    private void ClearEnemyTargetPreview()
+    {
+        if (_previewEnemyTarget != null)
+        {
+            var bar = _previewEnemyTarget.GetComponentInChildren<MonsterHpBar>(true);
+            if (bar != null) bar.ClearPreview();
+        }
+        _previewEnemyTarget = null;
+    }
+
+
 
     private void CancelPendingAbility()
     {
@@ -942,10 +1033,71 @@ private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, Action app
     {
         _activeMonsters.Clear();
 
+        int maxSlots = (monsterSpawnPoints != null && monsterSpawnPoints.Length > 0) ? monsterSpawnPoints.Length : 1;
+
+        // --- Choose active enemy party (optional) ---
+        EnemyPartyCompositionSO chosen = null;
+
+        if (_nextEnemyPartyOverride != null)
+        {
+            chosen = _nextEnemyPartyOverride;
+            _nextEnemyPartyOverride = null;
+        }
+        else if (forcedEnemyParty != null)
+        {
+            chosen = forcedEnemyParty;
+        }
+        else if (enemyPartyPool != null && enemyPartyPool.Count > 0)
+        {
+            if (randomizeEnemyPartyFromPool)
+            {
+                chosen = enemyPartyPool[UnityEngine.Random.Range(0, enemyPartyPool.Count)];
+            }
+            else
+            {
+                if (_enemyPartyPoolIndex < 0) _enemyPartyPoolIndex = 0;
+                if (_enemyPartyPoolIndex >= enemyPartyPool.Count) _enemyPartyPoolIndex = 0;
+
+                chosen = enemyPartyPool[_enemyPartyPoolIndex];
+                _enemyPartyPoolIndex = (_enemyPartyPoolIndex + 1) % enemyPartyPool.Count;
+            }
+        }
+
+        _activeEnemyParty = chosen;
+
+        // Cache loot override for this encounter (optional)
+        if (_activeEnemyParty != null && _activeEnemyParty.lootTable != null && _activeEnemyParty.lootTable.Count > 0)
+            _activeLootOverride = _activeEnemyParty.lootTable;
+        else
+            _activeLootOverride = null;
+
+        // If we have a chosen party with enemies, spawn exactly those.
+        if (_activeEnemyParty != null && _activeEnemyParty.enemies != null && _activeEnemyParty.enemies.Count > 0)
+        {
+            int spawnCount = Mathf.Clamp(_activeEnemyParty.enemies.Count, 1, maxSlots);
+
+            for (int i = 0; i < spawnCount; i++)
+            {
+                GameObject prefab = _activeEnemyParty.enemies[i];
+                if (prefab == null) continue;
+
+                Transform spawn = (monsterSpawnPoints != null && i < monsterSpawnPoints.Length) ? monsterSpawnPoints[i] : null;
+                Vector3 pos = spawn != null ? spawn.position : Vector3.zero;
+
+                GameObject go = Instantiate(prefab, pos, Quaternion.identity);
+                Monster m = go.GetComponentInChildren<Monster>(true);
+                if (m != null) _activeMonsters.Add(m);
+            }
+
+            if (_activeEnemyParty.enemies.Count > maxSlots)
+                Debug.LogWarning($"[BattleManager] Enemy party '{_activeEnemyParty.name}' has {_activeEnemyParty.enemies.Count} enemies but only {maxSlots} spawn points. Extra enemies will be ignored.", this);
+
+            return;
+        }
+
+        // --- Fallback: your original random spawn behavior ---
         if (monsterPrefabs == null || monsterPrefabs.Length == 0)
             return;
-
-        int maxSlots = (monsterSpawnPoints != null && monsterSpawnPoints.Length > 0) ? monsterSpawnPoints.Length : 1;
 
         int count = UnityEngine.Random.Range(minMonstersPerEncounter, maxMonstersPerEncounter + 1);
         count = Mathf.Clamp(count, 1, maxSlots);
@@ -1038,7 +1190,12 @@ private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, Action app
         // Roll and present post-battle rewards.
         if (enablePostBattleRewards)
         {
-            List<ItemOptionSO> pool = postBattleFlow != null ? postBattleFlow.GetItemOptionPool() : null;
+            // Use encounter-specific loot if present; else fall back to global pool.
+            List<ItemOptionSO> pool =
+                (_activeLootOverride != null && _activeLootOverride.Count > 0)
+                    ? _activeLootOverride
+                    : (postBattleFlow != null ? postBattleFlow.GetItemOptionPool() : null);
+
             PostBattleRewardPanel panel = postBattleRewardPanel != null ? postBattleRewardPanel : startRewardPanel;
 
             if (pool != null && pool.Count > 0 && panel != null)
@@ -1084,6 +1241,10 @@ private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, Action app
 
         _activeMonsters.Clear();
         _plannedIntents.Clear();
+
+        _activeEnemyParty = null;
+        _activeLootOverride = null;
+
         CancelPendingAbility();
     }
 
@@ -1239,7 +1400,3 @@ private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, Action app
         return skip;
     }
 }
-
-
-
-////////////////////////////////////////////////////////////

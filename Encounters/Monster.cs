@@ -1,3 +1,6 @@
+// PATH: Assets/Scripts/Encounters/Monster.cs
+// GUID: ea47960c4ce364a4980645e51f542a03
+////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
@@ -62,37 +65,10 @@ public class Monster : MonoBehaviour
     // ✅ Click-to-target: if an ability is pending, this click selects the target and resolves damage.
     private void OnMouseDown()
     {
-        // Requires Collider (3D) or Collider2D on this monster (or a child).
-        // Always forward clicks to BattleManager; BattleManager will ignore if not currently awaiting a target.
-        if (_battleManager == null)
-            _battleManager = BattleManager.Instance != null ? BattleManager.Instance : FindFirstObjectByType<BattleManager>();
-
-        if (_battleManager != null)
-        {
-            Debug.Log($"[Combat Click] Forwarding click to BattleManager.SelectEnemyTarget | Monster={name}", this);
-            _battleManager.SelectEnemyTarget(this);
-            Debug.Log($"[Combat Click] Called SelectEnemyTarget on BattleManager={_battleManager.name} ({_battleManager.GetInstanceID()}) | Monster={name}", this);
-        }
-        else
-        {
-            Debug.LogWarning($"[Combat Click] Could not forward click (BattleManager not found) | Monster={name}", this);
-        }
-
-        // Debug-only: print pending cast state if present.
-        var state = AbilityCastState.Instance;
-        if (state != null && state.HasPendingCast)
-        {
-            Debug.Log("[Combat Click] Pending ability cast detected!\n" +
-                      $"Caster: {(state.CurrentCaster != null ? state.CurrentCaster.name : "NULL")}\n" +
-                      $"Ability: {(state.CurrentAbility != null ? state.CurrentAbility.abilityName : "NULL")}\n" +
-                      $"Clicked Monster: {name}", this);
-        }
-        else
-        {
-            Debug.Log($"[Combat Click] No pending cast | Clicked monster: {name}", this);
-        }
-
-        Debug.Log(BuildMonsterDebugString(), this);
+        // Targeting is handled centrally by BattleManager.Update() raycasts.
+        // IMPORTANT: Do NOT forward clicks from here, or a single click will be processed twice
+        // (OnMouseDown + BattleManager.Update), causing instant cast instead of preview.
+        return;
     }
 
     private string BuildMonsterDebugString()
@@ -182,6 +158,26 @@ public class Monster : MonoBehaviour
     /// TotalDamage = ((abilityDamage * classAttackModifier) - enemyDefense) * elementalResistance
     /// Returns HP damage applied.
     /// </summary>
+
+    /// <summary>
+    /// Same formula as TakeDamageFromAbility, but DOES NOT apply damage.
+    /// Useful for preview/ghost HP targeting UX.
+    /// TotalDamage = ((abilityDamage * classAttackModifier) - enemyDefense) * elementalResistance
+    /// </summary>
+    public int CalculateDamageFromAbility(int abilityBaseDamage, float classAttackModifier, ElementType element)
+    {
+        if (_currentHp <= 0)
+            return 0;
+
+        float scaled = Mathf.Max(0, abilityBaseDamage) * Mathf.Max(0f, classAttackModifier);
+        float afterDef = scaled - Mathf.Max(0, defense);
+        float resisted = afterDef * GetResistance(element);
+
+        int final = Mathf.RoundToInt(resisted);
+        if (final < 0) final = 0;
+        return final;
+    }
+
     public int TakeDamageFromAbility(int abilityBaseDamage, float classAttackModifier, ElementType element)
     {
         if (_currentHp <= 0)
@@ -221,3 +217,8 @@ public class Monster : MonoBehaviour
 
 
 /////////////////////
+
+////////////////////////////////////////////////////////////
+
+
+////////////////////////////////////////////////////////////

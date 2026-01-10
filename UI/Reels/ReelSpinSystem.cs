@@ -67,6 +67,8 @@ public class ReelSpinSystem : MonoBehaviour
     [Header("Symbol Behavior")]
     [SerializeField] private List<ReelSymbolSO> noPayoutSymbols = new List<ReelSymbolSO>();
 
+    [SerializeField] private AudioSource spinLoopAudio;
+    
     public event Action OnSpinStarted;
     public event Action<Dictionary<string, ReelSymbolSO>> OnSpinFinished;
 
@@ -103,6 +105,15 @@ public class ReelSpinSystem : MonoBehaviour
         if (topStatusBar == null)
             topStatusBar = FindFirstObjectByType<TopStatusBar>();
 
+        // Optional: auto-wire a looping AudioSource on the same GameObject.
+        if (spinLoopAudio == null)
+            spinLoopAudio = GetComponent<AudioSource>();
+        if (spinLoopAudio != null)
+        {
+            spinLoopAudio.playOnAwake = false;
+            spinLoopAudio.loop = true;
+            spinLoopAudio.spatialBlend = 0f; // 2D
+        }
         BuildMappingLookup();
 
         BeginTurn(); // default start state
@@ -118,6 +129,8 @@ public class ReelSpinSystem : MonoBehaviour
     {
         if (stopSpinningButton != null)
             stopSpinningButton.onClick.RemoveListener(StopSpinningAndCollect);
+
+        StopSpinLoopAudio();
     }
 
     private void OnValidate()
@@ -170,6 +183,7 @@ public class ReelSpinSystem : MonoBehaviour
         spinsRemaining = 0;
         OnSpinsRemainingChanged?.Invoke(spinsRemaining);
 
+        StopSpinLoopAudio();
         CollectPendingPayout();
     }
 
@@ -197,6 +211,7 @@ public class ReelSpinSystem : MonoBehaviour
     {
         spinning = true;
         OnSpinStarted?.Invoke();
+        StartSpinLoopAudio();
 
         if (mapLookup == null || mapLookup.Count == 0)
             BuildMappingLookup();
@@ -229,6 +244,9 @@ public class ReelSpinSystem : MonoBehaviour
 
         foreach (var c in running)
             yield return c;
+
+        // All reels have stopped; end the spin-loop SFX.
+        StopSpinLoopAudio();
 
         Dictionary<string, ReelSymbolSO> resolved = new Dictionary<string, ReelSymbolSO>();
         List<ResourceType> midRowTypes = new List<ResourceType>();
@@ -392,7 +410,31 @@ public class ReelSpinSystem : MonoBehaviour
         return false;
     }
 
-    private static void Shuffle<T>(IList<T> list, System.Random rng)
+    
+    private void StartSpinLoopAudio()
+    {
+        if (spinLoopAudio == null)
+            return;
+
+        // Ensure sane defaults even if the AudioSource was added without configuration.
+        spinLoopAudio.playOnAwake = false;
+        spinLoopAudio.loop = true;
+        spinLoopAudio.spatialBlend = 0f; // 2D
+
+        if (!spinLoopAudio.isPlaying)
+            spinLoopAudio.Play();
+    }
+
+    private void StopSpinLoopAudio()
+    {
+        if (spinLoopAudio == null)
+            return;
+
+        if (spinLoopAudio.isPlaying)
+            spinLoopAudio.Stop();
+    }
+
+private static void Shuffle<T>(IList<T> list, System.Random rng)
     {
         // Fisher–Yates shuffle
         for (int i = list.Count - 1; i > 0; i--)
