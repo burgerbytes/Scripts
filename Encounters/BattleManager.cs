@@ -476,6 +476,7 @@ public class BattleManager : MonoBehaviour
     /// Ends the player's turn immediately and begins the enemy phase.
     /// Intended to be called by the End Turn button.
     /// </summary>
+    /// 
     public void EndTurn()
     {
         // Only allow during player phase and when not already mid-resolution/enemy turn.
@@ -483,11 +484,16 @@ public class BattleManager : MonoBehaviour
         if (_resolving) return;
         if (_enemyTurnRoutine != null) return;
 
+        // Clear resources at end of player turn
+        if (resourcePool != null)
+            resourcePool.ClearAll();
+
         // If there are no enemies, nothing to do.
         if (_activeMonsters == null || _activeMonsters.Count == 0) return;
 
         _enemyTurnRoutine = StartCoroutine(EnemyPhaseRoutine());
     }
+
 
     private IEnumerator EnemyPhaseRoutine()
     {
@@ -1160,6 +1166,9 @@ public class BattleManager : MonoBehaviour
         // If all enemies are dead, trigger the post-battle reward loop.
         if (_activeMonsters.Count == 0)
         {
+            //  Clear resources between battles (immediate)
+            if (resourcePool != null)
+                resourcePool.ClearAll();
             StartCoroutine(HandleEncounterVictoryRoutine());
         }
     }

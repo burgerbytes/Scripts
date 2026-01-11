@@ -1,6 +1,3 @@
-// PATH: Assets/Scripts/Encounters/MonsterHpBar.cs
-// GUID: 8b44498d31cb14b4f92840ac4d24c890
-////////////////////////////////////////////////////////////
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -154,9 +151,9 @@ public class MonsterHpBar : MonoBehaviour
 
     /// <summary>
     /// Show a yellow segment representing HP that will be removed.
-    /// This matches the PartyHUDSlot style: bar shrinks to predicted HP and a segment shows the loss region.
+    /// IMPORTANT: This function expects the predicted HP AFTER damage (not "damage amount").
     /// </summary>
-    public void SetDamagePreview(int predictedDamage)
+    public void SetDamagePreview(int predictedHpAfterDamage)
     {
         if (monster == null) return;
         if (fillImage == null) AutoFindFillImage();
@@ -168,8 +165,11 @@ public class MonsterHpBar : MonoBehaviour
         int currentHP = monster.CurrentHp;
         int maxHP = Mathf.Max(1, monster.MaxHp);
 
-        int dmg = Mathf.Clamp(predictedDamage, 0, currentHP);
-        int predictedHP = Mathf.Max(0, currentHP - dmg);
+        // Clamp predicted HP into a valid range
+        int predictedHP = Mathf.Clamp(predictedHpAfterDamage, 0, currentHP);
+
+        // Derive damage from predicted HP
+        int dmg = Mathf.Max(0, currentHP - predictedHP);
 
         float current01 = Mathf.Clamp01((float)currentHP / maxHP);
         float predicted01 = Mathf.Clamp01((float)predictedHP / maxHP);

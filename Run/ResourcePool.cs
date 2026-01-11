@@ -1,4 +1,3 @@
-// PATH: Assets/Scripts/Run/ResourcePool.cs
 using System;
 using UnityEngine;
 
@@ -37,6 +36,19 @@ public class ResourcePool : MonoBehaviour
         defense = Math.Max(0, startDefense);
         magic = Math.Max(0, startMagic);
         wild = Math.Max(0, startWild);
+        OnChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Clears ALL resources (Attack/Defense/Magic/Wild) to 0.
+    /// Call at end of each turn.
+    /// </summary>
+    public void ClearAll()
+    {
+        attack = 0;
+        defense = 0;
+        magic = 0;
+        wild = 0;
         OnChanged?.Invoke();
     }
 
