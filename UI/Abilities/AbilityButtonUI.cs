@@ -1,3 +1,6 @@
+// PATH: Assets/Scripts/UI/Abilities/AbilityButtonUI.cs
+// GUID: 55d9a61f8cba7d34ba7f0c8ffb4a45f6
+////////////////////////////////////////////////////////////
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
@@ -101,7 +104,16 @@ public class AbilityButtonUI : MonoBehaviour
 
     private void OnClicked()
     {
+        // One-step interaction:
+        // - Click an ability to begin casting immediately.
+        // - UI still highlights and shows the description panel via onSelected.
+        if (debugLogs)
+            Debug.Log("[AbilityButtonUI] Click -> BeginCast " + (ability != null ? ability.name : "NULL"), this);
+
+        // Ensure selection visuals + description update.
         onSelected?.Invoke(this);
+
+        // Begin cast / targeting flow.
         onClickedConfirm?.Invoke(ability);
     }
 
@@ -185,3 +197,7 @@ public class AbilityButtonUI : MonoBehaviour
 
     private static string Sprite(int index) => $"<sprite index={index}>";
 }
+
+
+////////////////////////////////////////////////////////////
+// PATH: Assets/Scripts/UI/Abilities/AbilityDefSOReader.cs

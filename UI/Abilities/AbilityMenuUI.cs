@@ -4,8 +4,7 @@ using UnityEngine;
 
 /// <summary>
 /// Ability menu that populates ability buttons and initiates casting via BattleManager.
-/// IMPORTANT: BattleManager is the authority for targeting state. We always call BattleManager.BeginAbilityUseFromMenu
-/// whenever an ability is confirmed, every time.
+/// BattleManager is the authority for targeting/cast state.
 /// </summary>
 public class AbilityMenuUI : MonoBehaviour
 {
@@ -14,6 +13,11 @@ public class AbilityMenuUI : MonoBehaviour
     [SerializeField] private TMP_Text headerText;
     [SerializeField] private Transform listParent;
     [SerializeField] private AbilityButtonUI buttonPrefab;
+
+    [Header("Ability Description Panel")]
+    [SerializeField] private GameObject abilityDescPanel;
+    [SerializeField] private TMP_Text abilityNameText;
+    [SerializeField] private TMP_Text abilityDescriptionText;
 
     [Header("Refs")]
     [SerializeField] private ResourcePool resourcePool;
@@ -24,62 +28,45 @@ public class AbilityMenuUI : MonoBehaviour
 
     private readonly List<AbilityButtonUI> buttons = new();
     private AbilityButtonUI selectedButton;
-
     private HeroStats currentHero;
+
+    // While an ability is in targeting/cast state, keep the description panel visible.
+    private bool _descPinnedUntilCast = false;
+
 
     private void Awake()
     {
         if (resourcePool == null)
             resourcePool = ResourcePool.Instance != null ? ResourcePool.Instance : FindFirstObjectByType<ResourcePool>();
 
-        // ✅ Always prefer BattleManager.Instance to avoid stale/duplicate references.
         if (battleManager == null)
             battleManager = BattleManager.Instance != null ? BattleManager.Instance : FindFirstObjectByType<BattleManager>();
 
-        AutoWireIfNeeded();
-
-        if (debugLogs)
-        {
-            Debug.Log(
-                $"[AbilityMenuUI] Awake on '{name}'. " +
-                $"resourcePool={(resourcePool ? resourcePool.name : "NULL")}, " +
-                $"battleManager={(battleManager ? battleManager.name : "NULL")}, " +
-                $"root={(root ? root.name : "NULL")}, " +
-                $"headerText={(headerText ? headerText.name : "NULL")}, " +
-                $"listParent={(listParent ? listParent.name : "NULL")}, " +
-                $"buttonPrefab={(buttonPrefab ? buttonPrefab.name : "NULL")}",
-                this);
-        }
+        HideAbilityDescPanel();
 
         if (root != null)
             root.SetActive(false);
     }
 
-    private void AutoWireIfNeeded()
+    private void Update()
     {
-        if (root == null)
+        // If we pinned the description panel during targeting, hide it once the cast state clears.
+        if (_descPinnedUntilCast)
         {
-            Transform t = transform.Find("AbilityMenuPanel");
-            if (t != null) root = t.gameObject;
-        }
+            var cast = AbilityCastState.Instance;
+            bool hasPending = (cast != null && cast.HasPendingCast);
 
-        if (headerText == null && root != null)
-        {
-            Transform t = root.transform.Find("HeaderText");
-            if (t != null) headerText = t.GetComponent<TMP_Text>();
-        }
-
-        if (listParent == null && root != null)
-        {
-            Transform t = root.transform.Find("AbilityList");
-            if (t != null) listParent = t;
+            if (!hasPending)
+            {
+                if (debugLogs) Debug.Log("[AbilityMenuUI] Cast state cleared -> hiding AbilityDescPanel.", this);
+                _descPinnedUntilCast = false;
+                HideAbilityDescPanel();
+            }
         }
     }
 
     public void OpenForHero(HeroStats hero, List<AbilityDefinitionSO> abilities)
     {
-        AutoWireIfNeeded();
-
         if (resourcePool == null)
             resourcePool = ResourcePool.Instance != null ? ResourcePool.Instance : FindFirstObjectByType<ResourcePool>();
 
@@ -106,6 +93,8 @@ public class AbilityMenuUI : MonoBehaviour
         }
 
         root.SetActive(true);
+        _descPinnedUntilCast = false;
+        HideAbilityDescPanel();
 
         if (headerText != null)
             headerText.text = $"{hero.name} Abilities";
@@ -127,7 +116,6 @@ public class AbilityMenuUI : MonoBehaviour
 
                 var btn = Instantiate(buttonPrefab, listParent);
 
-                // Bind to the resource pool used for affordability display.
                 btn.Bind(
                     ability,
                     resourcePool,
@@ -154,6 +142,9 @@ public class AbilityMenuUI : MonoBehaviour
 
         if (debugLogs)
             Debug.Log($"[AbilityMenuUI] Selected ability button: {(btn.Ability ? btn.Ability.name : "NULL")}", this);
+
+        _descPinnedUntilCast = false;
+        ShowAbilityDescPanel(btn.Ability);
     }
 
     private void OnAbilityConfirmed(AbilityDefinitionSO ability)
@@ -161,32 +152,40 @@ public class AbilityMenuUI : MonoBehaviour
         if (ability == null) return;
 
         if (debugLogs)
-            Debug.Log($"[AbilityMenuUI] Confirmed/casting ability: {ability.name}", this);
+            Debug.Log($"[AbilityMenuUI] Confirmed/begin targeting for ability: {ability.name}", this);
 
         if (battleManager == null)
             battleManager = BattleManager.Instance != null ? BattleManager.Instance : FindFirstObjectByType<BattleManager>();
 
         if (battleManager == null || currentHero == null)
         {
-            Debug.LogWarning($"[AbilityMenuUI] Cannot begin cast: battleManager={(battleManager ? battleManager.name : "NULL")}, currentHero={(currentHero ? currentHero.name : "NULL")}", this);
+            Debug.LogWarning($"[AbilityMenuUI] Cannot begin cast...battleManager={(battleManager ? battleManager.name : "NULL")}, currentHero={(currentHero ? currentHero.name : "NULL")}", this);
             return;
         }
 
         // ✅ BattleManager is the authority for pending target state.
         battleManager.BeginAbilityUseFromMenu(currentHero, ability);
 
-        // Debug-only: keep AbilityCastState in sync AFTER BattleManager is told to begin.
-        if (AbilityCastState.Instance != null)
-        {
-            AbilityCastState.Instance.BeginCast(currentHero, ability);
-        }
+        if (debugLogs)
+            Debug.Log($"[AbilityMenuUI] Sent BeginAbilityUseFromMenu to BattleManager for ability={ability.name} caster={currentHero.name}", this);
 
-        Close();
+        // Keep the description panel up while targeting is active.
+        _descPinnedUntilCast = true;
+        ShowAbilityDescPanel(ability);
+
+        // Hide the list so the player can click enemies/party members.
+        if (root != null) root.SetActive(false);
+        selectedButton = null;
     }
 
     public void Close()
     {
         if (root != null) root.SetActive(false);
+
+        // If we're in targeting/cast, keep description panel visible until cast completes.
+        if (!_descPinnedUntilCast)
+            HideAbilityDescPanel();
+
         selectedButton = null;
     }
 
@@ -210,4 +209,38 @@ public class AbilityMenuUI : MonoBehaviour
 
         buttons.Clear();
     }
+
+    private void ShowAbilityDescPanel(AbilityDefinitionSO ability)
+    {
+        if (ability == null)
+        {
+            HideAbilityDescPanel();
+            return;
+        }
+
+        if (abilityDescPanel == null)
+            return;
+
+        abilityDescPanel.SetActive(true);
+
+        if (abilityNameText != null)
+            abilityNameText.text = string.IsNullOrWhiteSpace(ability.abilityName) ? ability.name : ability.abilityName;
+
+        if (abilityDescriptionText != null)
+            abilityDescriptionText.text = ability.description ?? string.Empty;
+    }
+
+    private void HideAbilityDescPanel()
+    {
+        if (abilityDescPanel != null)
+            abilityDescPanel.SetActive(false);
+
+        if (abilityNameText != null)
+            abilityNameText.text = string.Empty;
+
+        if (abilityDescriptionText != null)
+            abilityDescriptionText.text = string.Empty;
+    }
 }
+
+

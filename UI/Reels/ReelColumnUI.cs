@@ -1,6 +1,4 @@
-using System;
 using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
@@ -36,6 +34,7 @@ namespace UI.Reels
 
         public bool IsIdle => !isSpinning;
         public float ConfiguredSpinDuration => spinSeconds;
+        public ReelStripSO Strip => strip;
 
         private bool HasValidStrip => strip != null && strip.symbols != null && strip.symbols.Count > 0;
 
@@ -45,6 +44,23 @@ namespace UI.Reels
                 currentCenterIndex = Mod(initialStartIndex, strip.symbols.Count);
 
             RefreshVisibleRows();
+        }
+
+        /// <summary>
+        /// ✅ NEW: Allow BattleManager/ReelSpinSystem to assign strips based on party.
+        /// </summary>
+        public void SetStrip(ReelStripSO newStrip, int startIndex = 0, bool refreshNow = true)
+        {
+            strip = newStrip;
+            initialStartIndex = startIndex;
+
+            if (HasValidStrip)
+                currentCenterIndex = Mod(initialStartIndex, strip.symbols.Count);
+            else
+                currentCenterIndex = 0;
+
+            if (refreshNow)
+                RefreshVisibleRows();
         }
 
         private void Update()
@@ -153,10 +169,6 @@ namespace UI.Reels
             return strip.symbols[idx];
         }
 
-        /// <summary>
-        /// Returns the logical strip index currently considered the "middle row" (center) of this reel.
-        /// This lets other systems (like the 3D reel) stop on the EXACT same result the 2D reel landed on.
-        /// </summary>
         public int GetMiddleRowIndex()
         {
             if (!HasValidStrip)

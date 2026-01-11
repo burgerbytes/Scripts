@@ -7,7 +7,6 @@ public class MonsterEncounterManager : MonoBehaviour
 {
     [Header("Threat")]
     [SerializeField] private long threat = 0;
-    [SerializeField] private long threatThreshold = 100;
     [SerializeField] private long threatAfterEncounter = 0;
 
     [Header("Semi-Random Threat Gain")]

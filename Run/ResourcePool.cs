@@ -135,4 +135,20 @@ public class ResourcePool : MonoBehaviour
 
         return true;
     }
+
+
+    /// <summary>
+    /// Used by BattleManager Undo. Sets resource amounts directly.
+    /// </summary>
+    public void SetAmounts(long newAttack, long newDefense, long newMagic, long newWild)
+    {
+        attack = Math.Max(0, newAttack);
+        defense = Math.Max(0, newDefense);
+        magic = Math.Max(0, newMagic);
+        wild = Math.Max(0, newWild);
+        OnChanged?.Invoke();
+    }
+
 }
+
+

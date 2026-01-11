@@ -1,3 +1,5 @@
+// GUID: 5a8a06222baaa2b4883d4bb71239e8a6
+////////////////////////////////////////////////////////////
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -30,16 +32,6 @@ public class PartyHUD : MonoBehaviour
         if (slots == null || slots.Length == 0)
             slots = GetComponentsInChildren<PartyHUDSlot>(true);
 
-        if (debugLogs)
-        {
-            Debug.Log(
-                $"[PartyHUD] Awake on '{name}'. " +
-                $"battleManager={(battleManager ? battleManager.name : "NULL")}, " +
-                $"abilityMenu={(abilityMenu ? abilityMenu.name : "NULL")}, " +
-                $"slotsCount={(slots != null ? slots.Length : 0)}",
-                this);
-        }
-
         // Initialize slots
         if (slots != null)
         {
@@ -51,9 +43,6 @@ public class PartyHUD : MonoBehaviour
 
                 // assign portrait immediately
                 AssignPortraitToSlot(i);
-
-                if (debugLogs)
-                    Debug.Log($"[PartyHUD] Initialized slot index {i} ({slots[i].name})", slots[i]);
             }
         }
     }
@@ -102,13 +91,8 @@ public class PartyHUD : MonoBehaviour
         HeroStats hero = battleManager.GetHeroAtPartyIndex(index);
         if (hero == null) return;
 
-        // Resolve class definition safely
-        ClassDefinitionSO classDef =
-            hero.AdvancedClassDef != null ? hero.AdvancedClassDef : hero.BaseClassDef;
-
-        Sprite portrait = classDef != null ? classDef.portraitSprite : null;
-
-        slots[index].SetPortrait(portrait);
+        // ✅ Use HERO prefab portrait, not class portrait
+        slots[index].SetPortrait(hero.Portrait);
     }
 
     private void RefreshAllSlots()
@@ -138,6 +122,13 @@ public class PartyHUD : MonoBehaviour
         if (battleManager == null || abilityMenu == null)
         {
             Debug.LogWarning("[PartyHUD] Missing BattleManager or AbilityMenuUI reference.");
+            return;
+        }
+
+        // If we're currently casting a self/ally ability (e.g., Block), allow the click to confirm targeting.
+        if (battleManager.TryHandlePartySlotClickForPendingAbility(index))
+        {
+            RefreshAllSlots();
             return;
         }
 

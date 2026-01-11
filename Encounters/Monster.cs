@@ -1,7 +1,4 @@
 // PATH: Assets/Scripts/Encounters/Monster.cs
-// GUID: ea47960c4ce364a4980645e51f542a03
-////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Reflection;
@@ -213,12 +210,15 @@ public class Monster : MonoBehaviour
 
         return Mathf.Max(0, before - _currentHp);
     }
+
+
+    /// <summary>
+    /// Used by BattleManager Undo. Sets current HP directly and refreshes UI events.
+    /// </summary>
+    public void SetCurrentHp(int hp)
+    {
+        _currentHp = Mathf.Clamp(hp, 0, maxHp);
+        OnHpChanged?.Invoke(_currentHp, maxHp);
+    }
+
 }
-
-
-/////////////////////
-
-////////////////////////////////////////////////////////////
-
-
-////////////////////////////////////////////////////////////

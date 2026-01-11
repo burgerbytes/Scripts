@@ -96,13 +96,5 @@ public class SafeAreaController : MonoBehaviour
         _rt.anchorMax = anchorMax;
         _rt.offsetMin = Vector2.zero;
         _rt.offsetMax = Vector2.zero;
-
-        if (debugLogs)
-        {
-            Debug.Log(
-                $"[SafeAreaController] Applied safe area. Safe={safe} Res={Screen.width}x{Screen.height} " +
-                $"Anchors=({anchorMin} -> {anchorMax}) Orientation={Screen.orientation}",
-                this);
-        }
     }
 }

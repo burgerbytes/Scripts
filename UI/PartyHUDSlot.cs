@@ -1,5 +1,7 @@
 // GUID: 70f097a53128abb419f85d811ffa21eb
 ////////////////////////////////////////////////////////////
+// GUID: 70f097a53128abb419f85d811ffa21eb
+////////////////////////////////////////////////////////////
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -52,9 +54,20 @@ public class PartyHUDSlot : MonoBehaviour
     [SerializeField] private GameObject selectedHighlight;
     [SerializeField] private GameObject actionPanelRoot;
 
+    [Header("Debug")]
+    [SerializeField] private bool debugLogs = true;
+
     public int PartyIndex => partyIndex;
     public RectTransform RectTransform => (RectTransform)transform;
 
+
+    // Cache to avoid spamming SetActive/logs every RefreshAllSlots.
+    private bool _blockDesiredVisible;
+
+    // Debug/state tracking to avoid log spam.
+    private bool _lastShowActualShield = false;
+    private bool _lastShowPreviewShield = false;
+    private int _lastShieldValue = -1;
     /// <summary>
     /// Set the portrait sprite shown on this slot. Call this from PartyHUD / wherever you bind heroes to slots.
     /// </summary>
@@ -92,7 +105,7 @@ public class PartyHUDSlot : MonoBehaviour
 
         SetSelected(false);
         SetActionPanelVisible(false);
-
+        SetBlockVisualVisible(true);
         SetDamagePreviewVisible(false);
 
         // Ensure portrait starts in a reasonable state
@@ -162,13 +175,44 @@ public class PartyHUDSlot : MonoBehaviour
         }
 
         // --- Block icon ---
-        if (blockIcon != null)
-            blockIcon.SetActive(snapshot.Shield > 0);
+        // Block UI should only appear AFTER the ability has been cast (no preview while targeting).
+        bool showActualShield = snapshot.Shield > 0;
+        int shieldValueForUI = showActualShield ? snapshot.Shield : 0;
 
-        if (blockValueText != null)
-            blockValueText.text = snapshot.Shield > 0 ? snapshot.Shield.ToString() : string.Empty;
+        if (debugLogs)
+        {
+            if (showActualShield != _lastShowActualShield || shieldValueForUI != _lastShieldValue)
+            {
+                Debug.Log($"[PartyHUDSlot][BlockUI] slot={partyIndex} showActual={showActualShield} value={shieldValueForUI}", this);
+                _lastShowActualShield = showActualShield;
+                _lastShieldValue = shieldValueForUI;
+
+                // Keep these in sync to avoid confusing future logs.
+                _lastShowPreviewShield = false;
+            }
+        }
+
+        bool desiredVisible = showActualShield;
+        _blockDesiredVisible = desiredVisible;
+
+        // Only toggle actual GameObjects when the desired visibility changes (avoids log spam).
+        //SetBlockVisualVisible(desiredVisible);
+
+        if (desiredVisible)
+        {
+            blockIcon.SetActive(true);
+            if (blockValueText != null)
+                blockValueText.text = shieldValueForUI.ToString();
+        }
+        else
+        {
+            blockIcon.SetActive(false);
+            if (blockValueText != null)
+                blockValueText.text = string.Empty;
+        }
 
         SetSelected(isSelected);
+
 
         if (slotButton != null)
             slotButton.interactable = !snapshot.IsDead;
@@ -212,5 +256,14 @@ public class PartyHUDSlot : MonoBehaviour
             else if (n.Contains("end")) b.interactable = endTurnEnabled;
         }
     }
-}
 
+
+    private void SetBlockVisualVisible(bool visible)
+    {
+        if (blockIcon != null)
+            blockIcon.SetActive(visible);
+
+        if (blockValueText != null)
+            blockValueText.gameObject.SetActive(visible);
+    }
+}

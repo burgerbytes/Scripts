@@ -11,9 +11,16 @@ public class ReelSpinSystem : MonoBehaviour
     public class ReelEntry
     {
         public string reelId;
+
+        [Tooltip("Optional fallback strip if party assignment fails.")]
         public ReelStripSO strip;
+
         public ReelColumnUI ui;
         public Reel3DColumn reel3d;
+
+        [Header("UI")]
+        [Tooltip("Image on the pick-ally button that shows which hero this reel belongs to.")]
+        public Image pickAllyPortraitImage;
     }
 
     [Serializable]
@@ -51,7 +58,6 @@ public class ReelSpinSystem : MonoBehaviour
     [Tooltip("Log midrow symbols for 3D reels each time we spin.")]
     [SerializeField] private bool log3DMidRowSymbolsEachSpin = true;
 
-    // Public API expected by other scripts
     public event Action<int> OnSpinsRemainingChanged;
     public int SpinsRemaining => spinsRemaining;
 
@@ -99,6 +105,47 @@ public class ReelSpinSystem : MonoBehaviour
     {
         spinsRemaining = spinsPerTurn;
         OnSpinsRemainingChanged?.Invoke(spinsRemaining);
+    }
+
+    /// <summary>
+    /// ✅ NEW: Called by BattleManager after it instantiates the ally party.
+    /// Assigns each reel's strip + pick-ally portrait from the corresponding hero prefab instance.
+    /// Mapping is index-based: party[0] -> reels[0], party[1] -> reels[1], etc.
+    /// </summary>
+    public void ConfigureFromParty(IReadOnlyList<HeroStats> party)
+    {
+        if (party == null) return;
+        if (reels == null || reels.Count == 0) return;
+
+        int count = Mathf.Min(reels.Count, party.Count);
+
+        for (int i = 0; i < count; i++)
+        {
+            var entry = reels[i];
+            var hero = party[i];
+            if (entry == null || hero == null) continue;
+
+            // Strip from hero prefab instance
+            ReelStripSO heroStrip = hero.ReelStrip;
+            if (heroStrip != null)
+            {
+                entry.strip = heroStrip;
+
+                if (entry.ui != null)
+                    entry.ui.SetStrip(heroStrip, startIndex: 0, refreshNow: true);
+
+                if (entry.reel3d != null)
+                    entry.reel3d.SetStrip(heroStrip, rebuildNow: true);
+            }
+
+            // Portrait from hero prefab instance
+            if (entry.pickAllyPortraitImage != null)
+            {
+                entry.pickAllyPortraitImage.sprite = hero.Portrait;
+                entry.pickAllyPortraitImage.enabled = (hero.Portrait != null);
+                entry.pickAllyPortraitImage.preserveAspect = true;
+            }
+        }
     }
 
     // Compatibility
@@ -176,14 +223,12 @@ public class ReelSpinSystem : MonoBehaviour
             yield break;
         }
 
-        // Spin all reels. We do not pre-pick a landing symbol; SpinRandom() chooses random steps >= 1 full rev.
         foreach (var e in three)
             e.reel3d.SpinRandom(rng, minFullRotations3D);
 
         while (!All3DReelsFinished(three))
             yield return null;
 
-        // After stopping, determine which quad intersects MidrowPlane and read its fixed symbol
         var landed = new List<ReelSymbolSO>(3);
         var parts = new List<string>(3);
 
@@ -241,8 +286,6 @@ public class ReelSpinSystem : MonoBehaviour
 
     public void StopSpinningAndCollect()
     {
-        // Post-select mode: if a spin is in flight, let it finish for visuals.
-        // We only collect whatever pending is currently computed.
         CollectPendingPayout();
     }
 

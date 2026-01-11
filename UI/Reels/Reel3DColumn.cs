@@ -182,8 +182,8 @@ public class Reel3DColumn : MonoBehaviour
                 outward = u;
 
             Quaternion faceOut = Quaternion.LookRotation(-outward, axis);
-
             GameObject frontGO = new GameObject("Front");
+
             frontGO.transform.SetParent(holder.transform, false);
             frontGO.transform.localPosition = (center + offset) + outward * doubleSidedSeparation;
             frontGO.transform.localRotation = faceOut;
@@ -466,5 +466,29 @@ public class Reel3DColumn : MonoBehaviour
         if (m <= 0) return 0;
         int r = x % m;
         return r < 0 ? r + m : r;
+    }
+
+    public void SetStrip(ReelStripSO newStrip, bool rebuildNow = true)
+    {
+        strip = newStrip;
+
+        if (!rebuildNow)
+            return;
+
+        // Force rebuild
+        _quads.Clear();
+        _fixedSymbolOnQuad.Clear();
+
+        if (_iconsRoot != null)
+        {
+            for (int i = _iconsRoot.childCount - 1; i >= 0; i--)
+                Destroy(_iconsRoot.GetChild(i).gameObject);
+        }
+
+        EnsureBuilt();
+        SetPrimaryAxisAngle(_currentStep * StepDeg);
+
+        if (billboardToCamera)
+            FaceQuadsToCamera();
     }
 }

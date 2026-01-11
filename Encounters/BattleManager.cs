@@ -1,10 +1,14 @@
-// PATH: Assets/Scripts/Encounters/BattleManager.cs
+//PATH: Assets/Scripts/Encounters/BattleManager.cs
+// GUID: 30f201f35d336bf4d840162cd6fd1fde
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.UI;
+using TMPro;
 using System.Runtime.CompilerServices;
 
 public class BattleManager : MonoBehaviour
@@ -34,6 +38,57 @@ public class BattleManager : MonoBehaviour
         public int targetPartyIndex;
     }
 
+
+    // ================= UNDO SAVE STATES =================
+
+    [Serializable]
+    private struct ResourcePoolSnapshot
+    {
+        public long attack;
+        public long defense;
+        public long magic;
+        public long wild;
+    }
+
+    [Serializable]
+    private struct HeroRuntimeSnapshot
+    {
+        public int partyIndex;
+        public int hp;
+        public float stamina;
+        public int shield;
+        public bool hidden;
+        public bool hasActedThisRound;
+    }
+
+    [Serializable]
+    private struct MonsterRuntimeSnapshot
+    {
+        public int instanceId;
+        public bool isActive;
+        public int hp;
+        public Vector3 position;
+        public Quaternion rotation;
+    }
+
+    [Serializable]
+    private struct EnemyIntentSnapshot
+    {
+        public IntentType type;
+        public int enemyInstanceId;
+        public int targetPartyIndex;
+    }
+
+    [Serializable]
+    private sealed class BattleSaveState
+    {
+        public List<HeroRuntimeSnapshot> heroes = new List<HeroRuntimeSnapshot>(3);
+        public List<MonsterRuntimeSnapshot> monsters = new List<MonsterRuntimeSnapshot>(8);
+        public List<EnemyIntentSnapshot> intents = new List<EnemyIntentSnapshot>(8);
+        public ResourcePoolSnapshot resources;
+    }
+
+
     // REQUIRED BY PartyHUDSlot.cs
     public struct PartyMemberSnapshot
     {
@@ -47,6 +102,10 @@ public class BattleManager : MonoBehaviour
 
         public bool IsBlocking;
         public int Shield;
+
+        // UI-only: preview for pending Block cast (shield not yet applied yet)
+        public bool HasBlockPreview;
+        public int BlockPreviewAmount;
 
         public float HP01 => MaxHP <= 0 ? 0f : Mathf.Clamp01((float)HP / MaxHP);
         public float Stamina01 => MaxStamina <= 0 ? 0f : Mathf.Clamp01((float)Stamina / MaxStamina);
@@ -111,6 +170,10 @@ public class BattleManager : MonoBehaviour
     [SerializeField] private bool ignoreClicksOverUI = true;
 
 
+    [Header("Undo / Confirm UI")]
+    [SerializeField] private Button undoButton;
+    [SerializeField] private TMP_Text confirmText;
+
     [Header("Enemy Lunge (No Animation Clips)")]
     [Tooltip("How far the enemy sprite/visual lunges toward the target during an attack (world units).")]
     [SerializeField] private float enemyLungeDistance = 0.35f;
@@ -122,12 +185,14 @@ public class BattleManager : MonoBehaviour
     [SerializeField] private float enemyLungeBackSeconds = 0.12f;
 
     [Header("Debug")]
-    [SerializeField] private bool logFlow = false;
+    // Turn this OFF once Block is verified end-to-end.
+    [SerializeField] private bool logFlow = true;
 
     public event Action<BattleState> OnBattleStateChanged;
     public event Action<int> OnActivePartyMemberChanged;
     public event Action OnPartyChanged;
     public event Action<List<EnemyIntent>> OnEnemyIntentsPlanned;
+    public event Action OnPendingAbilityCleared;
 
     public BattleState CurrentState => _state;
     public bool IsPlayerPhase => _state == BattleState.PlayerPhase;
@@ -139,6 +204,15 @@ public class BattleManager : MonoBehaviour
     private BattleState _state = BattleState.Idle;
 
     private readonly List<Monster> _activeMonsters = new List<Monster>();
+
+    // All monsters spawned for the current encounter, including those "killed" (deactivated) so Undo can revive them.
+    private readonly List<Monster> _encounterMonsters = new List<Monster>(8);
+
+    // Save states (turn start + each committed ability cast)
+    private readonly List<BattleSaveState> _saveStates = new List<BattleSaveState>(16);
+
+    // Party target preview: used for Block-style "click twice to confirm"
+    private int _previewPartyTargetIndex = -1;
     private readonly List<EnemyIntent> _plannedIntents = new List<EnemyIntent>();
 
     // Enemy party selection (per encounter)
@@ -155,6 +229,7 @@ public class BattleManager : MonoBehaviour
     private int _pendingActorIndex = -1;
 
     private bool _awaitingEnemyTarget = false;
+    private bool _awaitingPartyTarget = false; // used for self/ally targeting like Block
     private Monster _selectedEnemyTarget;
 
     // Targeting preview: first click previews damage, second click confirms.
@@ -162,7 +237,6 @@ public class BattleManager : MonoBehaviour
 
     private bool _resolving;
     // Used to sync damage/removal to the exact impact frame of the caster's animation.
-    private bool _waitingForImpact;
     private bool _impactFired;
     private bool _attackFinished;
     private Camera _mainCam;
@@ -174,7 +248,7 @@ public class BattleManager : MonoBehaviour
 
     private bool _postBattleRunning;
 
-    // ✅ IMPORTANT: finds inactive objects too (e.g., UI panels disabled by default)
+    // IMPORTANT: finds inactive objects too (e.g., UI panels disabled by default)
     private static T FindInSceneIncludingInactive<T>() where T : UnityEngine.Object
     {
         var all = Resources.FindObjectsOfTypeAll<T>();
@@ -217,6 +291,49 @@ public class BattleManager : MonoBehaviour
 
 
         if (reelSpinSystem == null) reelSpinSystem = FindInSceneIncludingInactive<ReelSpinSystem>();
+
+        // Undo / Confirm UI (optional)
+        if (undoButton == null)
+        {
+            // Prefer an object named "UndoButton" (can be inactive)
+            var allButtons = Resources.FindObjectsOfTypeAll<Button>();
+            for (int i = 0; i < allButtons.Length; i++)
+            {
+                var b = allButtons[i];
+                if (b == null) continue;
+                if (b.gameObject != null && b.gameObject.scene.IsValid() && b.gameObject.name == "UndoButton")
+                {
+                    undoButton = b;
+                    break;
+                }
+            }
+        }
+
+        if (confirmText == null)
+        {
+            var allText = Resources.FindObjectsOfTypeAll<TMP_Text>();
+            for (int i = 0; i < allText.Length; i++)
+            {
+                var t = allText[i];
+                if (t == null) continue;
+                if (t.gameObject != null && t.gameObject.scene.IsValid() && t.gameObject.name == "ConfirmText")
+                {
+                    confirmText = t;
+                    break;
+                }
+            }
+        }
+
+        if (undoButton != null)
+        {
+            undoButton.onClick.RemoveListener(UndoLastSaveState);
+            undoButton.onClick.AddListener(UndoLastSaveState);
+            undoButton.gameObject.SetActive(false); // disabled by default
+        }
+
+        if (confirmText != null)
+            confirmText.gameObject.SetActive(false); // disabled by default
+
         StartNewRun();
     }
 
@@ -245,26 +362,51 @@ public class BattleManager : MonoBehaviour
 
         Monster clicked = TryGetClickedMonster();
 
-        // Clicked empty space (or something non-monster): untarget + clear preview.
+        // Clicked empty space (or something non-monster)
         if (clicked == null)
         {
-            ClearEnemyTargetPreview();
+            // If we were already previewing a target, clicking elsewhere cancels the pending cast.
+            if (_previewEnemyTarget != null)
+            {
+                if (logFlow) Debug.Log("[Battle][AbilityTarget] Clicked elsewhere -> cancel pending ability.", this);
+                ClearEnemyTargetPreview();
+                HideConfirmText();
+                CancelPendingAbility();
+            }
+            else
+            {
+                ClearEnemyTargetPreview();
+            }
             return;
         }
 
         if (clicked != null && _activeMonsters.Contains(clicked) && !clicked.IsDead)
+        {
+            // If we already selected a preview target, clicking ANY other target cancels the cast.
+            if (_previewEnemyTarget != null && clicked != _previewEnemyTarget)
+            {
+                if (logFlow) Debug.Log("[Battle][AbilityTarget] Clicked different target -> cancel pending ability.", this);
+                ClearEnemyTargetPreview();
+                HideConfirmText();
+                CancelPendingAbility();
+                return;
+            }
+
             SelectEnemyTarget(clicked);
+        }
     }
 
     // Called by AnimatorImpactEvents (Animation Events).
     public void NotifyAttackImpact()
     {
+        if (logFlow) Debug.Log("[Battle][AnimEvent] AttackImpact received.");
         _impactFired = true;
     }
 
     // Optional: call via animation event at the end of the attack animation if desired.
     public void NotifyAttackFinished()
     {
+        if (logFlow) Debug.Log("[Battle][AnimEvent] AttackFinished received.");
         _attackFinished = true;
     }
 
@@ -310,6 +452,19 @@ public class BattleManager : MonoBehaviour
 
             _party.Add(m);
         }
+        // 🔗 Wire reels to party (strip + portrait) from spawned heroes
+        if (reelSpinSystem != null)
+        {
+            var heroes = new List<HeroStats>();
+            for (int i = 0; i < _party.Count; i++)
+            {
+                if (_party[i]?.stats != null)
+                    heroes.Add(_party[i].stats);
+            }
+
+            reelSpinSystem.ConfigureFromParty(heroes);
+        }
+
 
         _activePartyIndex = GetFirstAlivePartyIndex();
         OnActivePartyMemberChanged?.Invoke(_activePartyIndex);
@@ -328,7 +483,6 @@ public class BattleManager : MonoBehaviour
 
     public PartyMemberSnapshot GetPartyMemberSnapshot(int index)
     {
-        Debug.Log($"[BattleManager] GetPartyMemberSnapshot.");
         if (!IsValidPartyIndex(index))
             return default;
 
@@ -353,7 +507,10 @@ public class BattleManager : MonoBehaviour
             IsDead = m.IsDead,
             HasActedThisRound = m.hasActedThisRound,
             Shield = shield,
-            IsBlocking = shield > 0
+            IsBlocking = shield > 0,
+
+            HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _awaitingPartyTarget && _pendingAbility != null && _pendingActorIndex == index && _pendingAbility.targetType == AbilityTargetType.Self && _pendingAbility.shieldAmount > 0,
+            BlockPreviewAmount = ((_previewPartyTargetIndex == index) && _awaitingPartyTarget && _pendingAbility != null && _pendingActorIndex == index) ? Mathf.Max(0, _pendingAbility.shieldAmount) : 0
         };
     }
 
@@ -388,9 +545,60 @@ public class BattleManager : MonoBehaviour
         NotifyPartyChanged();
     }
 
+    /// <summary>
+    /// When an ability is pending and requires a party target (e.g. Block), this handles clicks on a PartyHUD slot.
+    /// Returns true if the click was consumed by targeting logic (so PartyHUD should NOT open menus).
+    /// </summary>
+    public bool TryHandlePartySlotClickForPendingAbility(int partyIndex)
+    {
+        if (logFlow)
+            Debug.Log($"[Battle][AbilityTarget] Party slot clicked. partyIndex={partyIndex} pendingActorIndex={_pendingActorIndex} awaitingPartyTarget={_awaitingPartyTarget} pendingAbility={(_pendingAbility != null ? _pendingAbility.abilityName : "<null>")}");
+
+        if (!IsPlayerPhase) return false;
+        if (_resolving) return true; // consume to prevent UI spam while resolving
+
+        if (_pendingAbility == null) return false;
+        if (!_awaitingPartyTarget) return false;
+
+        // Block: only the caster (pending actor) can be selected.
+        if (partyIndex != _pendingActorIndex)
+        {
+            // If we've already selected a target (preview), clicking anything else cancels.
+            if (_previewPartyTargetIndex == _pendingActorIndex)
+            {
+                if (logFlow) Debug.Log("[Battle][AbilityTarget] Clicked different party slot -> cancel pending ability.", this);
+                _previewPartyTargetIndex = -1;
+                HideConfirmText();
+                CancelPendingAbility();
+                NotifyPartyChanged();
+            }
+            // Consume the click so PartyHUD doesn't open other menus while casting.
+            return true;
+        }
+
+        // Two-step confirm:
+        // 1) First click on caster -> show block preview + confirm text
+        // 2) Second click on caster -> commit ability
+        if (_previewPartyTargetIndex != partyIndex)
+        {
+            _previewPartyTargetIndex = partyIndex;
+            ShowConfirmText();
+            NotifyPartyChanged();
+            return true;
+        }
+
+        if (logFlow) Debug.Log("[Battle][AbilityTarget] Caster clicked again. Committing pending ability.", this);
+        _previewPartyTargetIndex = -1;
+        HideConfirmText();
+        StartCoroutine(ResolvePendingAbility());
+        NotifyPartyChanged();
+        return true;
+    }
+
     public void BeginAbilityUseFromMenu(HeroStats hero, AbilityDefinitionSO ability)
     {
-        Debug.Log($"[BattleManager] BeginAbilityUseFromMenu");
+        if (logFlow)
+            Debug.Log($"[Battle][Ability] BeginAbilityUseFromMenu. hero={(hero != null ? hero.name : "<null>")} ability={(ability != null ? ability.abilityName : "<null>")}");
         if (!IsPlayerPhase || _resolving) return;
         if (hero == null || ability == null) return;
 
@@ -403,29 +611,46 @@ public class BattleManager : MonoBehaviour
         if (_pendingAction != PlayerActionType.None) return;
 
         ResourceCost cost = GetEffectiveCost(actor.stats, ability);
+        if (logFlow)
+            Debug.Log($"[Battle][Ability] Pending set. actorIndex={actorIndex} ability={ability.abilityName} targetType={ability.targetType} shieldAmount={ability.shieldAmount} baseDamage={ability.baseDamage} cost={cost}");
 
         _pendingActorIndex = actorIndex;
         _pendingAbility = ability;
         _selectedEnemyTarget = null;
+        _previewPartyTargetIndex = -1;
+        HideConfirmText();
         ClearEnemyTargetPreview();
+
+        if (AbilityCastState.Instance != null)
+            AbilityCastState.Instance.BeginCast(hero, ability);
+
         // Reset animation-sync flags for this cast.
-        _waitingForImpact = false;
         _impactFired = false;
         _attackFinished = false;
 
         _pendingAction = PlayerActionType.Ability1;
-
         if (ability.targetType == AbilityTargetType.Enemy)
         {
             _awaitingEnemyTarget = true;
             ClearEnemyTargetPreview();
             _selectedEnemyTarget = null;
             _previewEnemyTarget = null;
-            if (logFlow) Debug.Log($"[Battle] Awaiting ENEMY target for {ability.abilityName}");
+            if (logFlow) Debug.Log($"[Battle][AbilityTarget] Awaiting ENEMY target for {ability.abilityName}");
+        }
+        else if (ability.targetType == AbilityTargetType.Self && ability.shieldAmount > 0)
+        {
+            // Block-style self cast: preview on the caster, then require a click on the caster to commit.
+            _awaitingEnemyTarget = false;
+            _awaitingPartyTarget = true;
+            ClearEnemyTargetPreview();
+            _selectedEnemyTarget = null;
+            _previewEnemyTarget = null;
+            if (logFlow) Debug.Log($"[Battle][AbilityTarget] Awaiting SELF confirm for {ability.abilityName} (Block preview should flash)");
         }
         else
         {
             _awaitingEnemyTarget = false;
+            if (logFlow) Debug.Log($"[Battle][Ability] No target required. Resolving immediately for {ability.abilityName}");
             StartCoroutine(ResolvePendingAbility());
         }
 
@@ -434,23 +659,43 @@ public class BattleManager : MonoBehaviour
 
     public void SelectEnemyTarget(Monster target)
     {
-        if (!IsPlayerPhase) return;
-        if (!_awaitingEnemyTarget || _pendingAbility == null) return;
-        if (target == null || target.IsDead) return;
 
-        // 1) First click OR retarget → preview only
+        if (logFlow)
+            Debug.Log($"[Battle][AbilityTarget] Enemy clicked. target={(target != null ? target.name : "<null>")} awaitingEnemyTarget={_awaitingEnemyTarget}");
+
+        if (!IsPlayerPhase || _resolving) return;
+        if (!_awaitingEnemyTarget) return;
+        if (target == null) return;
+        if (target.IsDead) return;
+
+        // Two-step targeting:
+        // 1) First click -> set PREVIEW target (shows damage preview)
+        // 2) Second click on the SAME target -> CONFIRM and resolve ability
         if (_previewEnemyTarget != target)
         {
+            _previewEnemyTarget = target;
             SetEnemyTargetPreview(target);
+            ShowConfirmText();
+
+            if (logFlow)
+                Debug.Log($"[Battle][AbilityTarget] Preview target set to {target.name}. Click again to confirm.");
             return;
         }
 
-        // 2) Second click on same target → confirm + resolve
+        // Confirm on second click
         _selectedEnemyTarget = target;
         _awaitingEnemyTarget = false;
 
-        ClearEnemyTargetPreview(); // clear ghost before real damage applies
+        // Clear any yellow damage preview segment now that the ability is being cast.
+        ClearEnemyTargetPreview();
+
+        HideConfirmText();
+
+        if (logFlow)
+            Debug.Log($"[Battle][AbilityTarget] Target confirmed: {target.name}. Resolving ability.");
+
         StartCoroutine(ResolvePendingAbility());
+
     }
 
     public void StartBattle()
@@ -487,7 +732,7 @@ public class BattleManager : MonoBehaviour
         // Clear resources at end of player turn
         if (resourcePool != null)
             resourcePool.ClearAll();
-
+        
         // If there are no enemies, nothing to do.
         if (_activeMonsters == null || _activeMonsters.Count == 0) return;
 
@@ -539,13 +784,13 @@ public class BattleManager : MonoBehaviour
             {
                 if (targetStats == null) return;
 
-                int hpBefore = targetStats.CurrentHp;
                 int raw = intent.enemy.GetDamage();
 
-                // Apply damage (HeroStats handles defense).
-                targetStats.TakeDamage(raw);
-
-                int dealt = Mathf.Max(0, hpBefore - targetStats.CurrentHp);
+                // Apply damage (HeroStats handles shield+HP).
+                if (logFlow) Debug.Log($"[Battle][EnemyAtk] Applying incoming damage. attacker={intent.enemy.name} targetIdx={targetIdx} raw={raw} targetShieldBefore={targetStats.Shield}", this);
+                int dealt = targetStats.ApplyIncomingDamage(raw);
+                if (logFlow) Debug.Log($"[Battle][EnemyAtk] Damage result. dealtToHp={dealt} targetShieldAfter={targetStats.Shield}", this);
+                if (logFlow) Debug.Log($"[Battle][EnemyAtk] Damage applied. dealtToHP={dealt} targetShieldAfter={targetStats.Shield}", this);
 
                 if (targetGO != null)
                     SpawnDamageNumber(targetGO.transform.position, dealt);
@@ -569,6 +814,7 @@ public class BattleManager : MonoBehaviour
 
         SetState(BattleState.PlayerPhase);
 
+        BeginPlayerTurnSaveState();
 
         // New player turn: reset reel spins.
         if (reelSpinSystem != null)
@@ -751,6 +997,8 @@ public class BattleManager : MonoBehaviour
 
         SetState(BattleState.PlayerPhase);
 
+        BeginPlayerTurnSaveState();
+
         // New player turn: reset reel spins.
         if (reelSpinSystem != null)
             reelSpinSystem.BeginTurn();
@@ -763,8 +1011,12 @@ public class BattleManager : MonoBehaviour
 
     private IEnumerator ResolvePendingAbility()
     {
+        if (logFlow)
+            Debug.Log($"[Battle][Resolve] ResolvePendingAbility ENTER. pendingAbility={(_pendingAbility != null ? _pendingAbility.abilityName : "<null>")} pendingActorIndex={_pendingActorIndex} selectedEnemyTarget={(_selectedEnemyTarget != null ? _selectedEnemyTarget.name : "<null>")} awaitingEnemyTarget={_awaitingEnemyTarget} awaitingPartyTarget={_awaitingPartyTarget}", this);
+
         if (_pendingAbility == null || !IsValidPartyIndex(_pendingActorIndex))
         {
+            if (logFlow) Debug.Log("[Battle][Resolve] Cancel: pending ability or actor invalid.", this);
             CancelPendingAbility();
             yield break;
         }
@@ -772,12 +1024,14 @@ public class BattleManager : MonoBehaviour
         // Capture references up-front so end-of-battle cleanup (or other flows)
         // can't null out _pendingAbility mid-coroutine.
         AbilityDefinitionSO ability = _pendingAbility;
-        Debug.Log($"[BattleManager] Confirmed/casting ability: {ability.name}", this);
+        if (logFlow)
+            Debug.Log($"[Battle][Resolve] Confirmed/casting ability: name={ability.name} abilityName={ability.abilityName} targetType={ability.targetType} shieldAmount={ability.shieldAmount} baseDamage={ability.baseDamage}", this);
 
         PartyMemberRuntime actor = _party[_pendingActorIndex];
         HeroStats actorStats = actor.stats;
         if (actorStats == null || actor.IsDead)
         {
+            if (logFlow) Debug.Log("[Battle][Resolve] Cancel: actorStats missing or actor dead.", this);
             CancelPendingAbility();
             yield break;
         }
@@ -787,19 +1041,26 @@ public class BattleManager : MonoBehaviour
         {
             if (enemyTarget == null || enemyTarget.IsDead)
             {
+                if (logFlow) Debug.Log("[Battle][Resolve] Abort: Enemy target required but not selected (or dead). Returning to awaiting target.", this);
                 _awaitingEnemyTarget = true;
                 yield break;
             }
         }
+
+        // Snapshot BEFORE we spend resources / apply effects so Undo restores the pre-cast state.
+        PushSaveStateSnapshot();
 
         ResourceCost cost = GetEffectiveCost(actorStats, ability);
         //int actorPoolId = actorStats.ResourcePool.GetInstanceID();
         int id = RuntimeHelpers.GetHashCode(resourcePool);
         if (resourcePool == null || !resourcePool.TrySpend(cost))
         {
+            if (logFlow) Debug.Log($"[Battle][Resolve] Cancel: insufficient resources or missing resourcePool. cost={cost}", this);
             CancelPendingAbility();
             yield break;
         }
+
+        if (logFlow) Debug.Log($"[Battle][Resolve] Resources spent. cost={cost}. Proceeding to apply ability effects.", this);
         // From this point, the cast is committed (resources spent). Block other actions.
         _resolving = true;
 
@@ -811,7 +1072,6 @@ public class BattleManager : MonoBehaviour
             anim = actor.avatarGO.GetComponentInChildren<Animator>(true);
 
         // Reset flags for this cast (only matters if we choose to wait for impact).
-        _waitingForImpact = false;
         _impactFired = false;
         _attackFinished = false;
         // Decide behavior by ability name
@@ -847,6 +1107,13 @@ public class BattleManager : MonoBehaviour
                         stateToPlay = "ninja_backstab"; // fallback example
                     break;
 
+                case "Block":
+                    // Block has no damage and no animation for now.
+                    useImpactSync = false;
+                    stateToPlay = null;
+                    if (logFlow) Debug.Log("[Battle][Resolve] Block: no animation and no impact sync.", this);
+                    break;
+
                 default:
                     // Default: still play *something* (or skip animation if you prefer)
                     useImpactSync = false; // default to immediate apply unless you want all abilities synced
@@ -857,10 +1124,19 @@ public class BattleManager : MonoBehaviour
                     break;
             }
 
-            if (useImpactSync)
-                _waitingForImpact = true; // your existing coroutine should wait until _impactFired (or timeout)
-
-            anim.Play(stateToPlay, 0, 0f);
+            if (!string.IsNullOrWhiteSpace(stateToPlay))
+            {
+                if (logFlow) Debug.Log($"[Battle][Resolve] Playing animation state '{stateToPlay}'. useImpactSync={useImpactSync}", this);
+                anim.Play(stateToPlay, 0, 0f);
+            }
+            else
+            {
+                if (logFlow) Debug.Log($"[Battle][Resolve] No animation played for ability '{ability.abilityName}'.", this);
+            }
+        }
+        else
+        {
+            if (logFlow) Debug.Log("[Battle][Resolve] No animator found on actor; skipping animation.", this);
         }
 
 
@@ -870,7 +1146,7 @@ public class BattleManager : MonoBehaviour
             // wait for the impact frame event before applying damage.
             if (useImpactSync && anim != null)
             {
-                _waitingForImpact = true;
+                if (logFlow) Debug.Log("[Battle][Resolve] Waiting for AttackImpact animation event...", this);
 
                 // Give the animator one frame to enter the state.
                 yield return null;
@@ -883,7 +1159,7 @@ public class BattleManager : MonoBehaviour
                     yield return null;
                 }
 
-                _waitingForImpact = false;
+                if (logFlow) Debug.Log($"[Battle][Resolve] Done waiting for impact. impactFired={_impactFired} elapsed={elapsed:0.000}s", this);
             }
 
             int dealt = enemyTarget.TakeDamageFromAbility(
@@ -906,7 +1182,9 @@ public class BattleManager : MonoBehaviour
 
         if (ability.targetType == AbilityTargetType.Self && ability.shieldAmount > 0)
         {
+            if (logFlow) Debug.Log($"[Battle][Block] Applying shield. amount={ability.shieldAmount} actor={actorStats.name} shieldBefore={actorStats.Shield}", this);
             actorStats.AddShield(ability.shieldAmount);
+            if (logFlow) Debug.Log($"[Battle][Block] Shield applied. shieldAfter={actorStats.Shield}", this);
         }
 
         actor.hasActedThisRound = true;
@@ -918,6 +1196,11 @@ public class BattleManager : MonoBehaviour
 
         CancelPendingAbility();
         NotifyPartyChanged();
+
+        // Ability successfully cast -> Undo becomes available for this turn.
+        if (_saveStates != null && _saveStates.Count > 1)
+            SetUndoButtonEnabled(true);
+
     }
 
     private ResourceCost GetEffectiveCost(HeroStats actor, AbilityDefinitionSO ability)
@@ -971,18 +1254,24 @@ public class BattleManager : MonoBehaviour
 
     private void CancelPendingAbility()
     {
+        if (logFlow)
+            Debug.Log($"[Battle][Cancel] CancelPendingAbility. pendingAbility={(_pendingAbility != null ? _pendingAbility.abilityName : "<null>")} pendingActorIndex={_pendingActorIndex} awaitingEnemyTarget={_awaitingEnemyTarget} awaitingPartyTarget={_awaitingPartyTarget}", this);
         _pendingAction = PlayerActionType.None;
         _pendingAbility = null;
         _pendingActorIndex = -1;
         _awaitingEnemyTarget = false;
+        _awaitingPartyTarget = false;
         _selectedEnemyTarget = null;
-
-        _waitingForImpact = false;
+        _previewPartyTargetIndex = -1;
+        HideConfirmText();
+        ClearEnemyTargetPreview();
         _impactFired = false;
         _attackFinished = false;
 
         if (AbilityCastState.Instance != null)
             AbilityCastState.Instance.ClearCast();
+
+        OnPendingAbilityCleared?.Invoke();
     }
 
     private void PlanEnemyIntents()
@@ -1016,6 +1305,11 @@ public class BattleManager : MonoBehaviour
 
         CancelPendingAbility();
         NotifyPartyChanged();
+
+        // Ability successfully cast -> Undo becomes available for this turn.
+        if (_saveStates != null && _saveStates.Count > 1)
+            SetUndoButtonEnabled(true);
+
     }
 
     private int GetFirstAlivePartyIndex()
@@ -1038,6 +1332,7 @@ public class BattleManager : MonoBehaviour
     private void SpawnEncounterMonsters()
     {
         _activeMonsters.Clear();
+        _encounterMonsters.Clear();
 
         int maxSlots = (monsterSpawnPoints != null && monsterSpawnPoints.Length > 0) ? monsterSpawnPoints.Length : 1;
 
@@ -1092,7 +1387,11 @@ public class BattleManager : MonoBehaviour
 
                 GameObject go = Instantiate(prefab, pos, Quaternion.identity);
                 Monster m = go.GetComponentInChildren<Monster>(true);
-                if (m != null) _activeMonsters.Add(m);
+                if (m != null)
+                {
+                    _activeMonsters.Add(m);
+                    if (!_encounterMonsters.Contains(m)) _encounterMonsters.Add(m);
+                }
             }
 
             if (_activeEnemyParty.enemies.Count > maxSlots)
@@ -1118,7 +1417,11 @@ public class BattleManager : MonoBehaviour
 
             GameObject go = Instantiate(prefab, pos, Quaternion.identity);
             Monster m = go.GetComponentInChildren<Monster>(true);
-            if (m != null) _activeMonsters.Add(m);
+            if (m != null)
+                {
+                    _activeMonsters.Add(m);
+                    if (!_encounterMonsters.Contains(m)) _encounterMonsters.Add(m);
+                }
         }
     }
 
@@ -1161,7 +1464,10 @@ public class BattleManager : MonoBehaviour
         RemoveEnemyIntentsForMonster(m);
 
         _activeMonsters.Remove(m);
-        if (m.gameObject != null) Destroy(m.gameObject);
+
+        // Do NOT destroy monsters: we keep them for Undo revives.
+        if (m.gameObject != null)
+            m.gameObject.SetActive(false);
 
         // If all enemies are dead, trigger the post-battle reward loop.
         if (_activeMonsters.Count == 0)
@@ -1249,6 +1555,7 @@ public class BattleManager : MonoBehaviour
             if (_activeMonsters[i] != null) Destroy(_activeMonsters[i].gameObject);
 
         _activeMonsters.Clear();
+        _encounterMonsters.Clear();
         _plannedIntents.Clear();
 
         _activeEnemyParty = null;
@@ -1408,4 +1715,220 @@ public class BattleManager : MonoBehaviour
         skip.icon = null;
         return skip;
     }
+
+
+    // ================= UNDO / SAVE STATE HELPERS =================
+
+    private void BeginPlayerTurnSaveState()
+    {
+        _saveStates.Clear();
+        _previewEnemyTarget = null;
+        _previewPartyTargetIndex = -1;
+        HideConfirmText();
+        SetUndoButtonEnabled(false);
+
+        PushSaveStateSnapshot(); // Turn start baseline
+    }
+
+    private void PushSaveStateSnapshot()
+    {
+        var s = new BattleSaveState();
+
+        // Heroes
+        for (int i = 0; i < PartyCount; i++)
+        {
+            var pm = _party[i];
+            var hs = pm != null ? pm.stats : null;
+            if (hs == null) continue;
+
+            s.heroes.Add(new HeroRuntimeSnapshot
+            {
+                partyIndex = i,
+                hp = hs.CurrentHp,
+                stamina = hs.CurrentStamina,
+                shield = hs.Shield,
+                hidden = hs.IsHidden,
+                hasActedThisRound = pm.hasActedThisRound
+            });
+        }
+
+        // Resources
+        if (resourcePool != null)
+        {
+            s.resources = new ResourcePoolSnapshot
+            {
+                attack = resourcePool.Attack,
+                defense = resourcePool.Defense,
+                magic = resourcePool.Magic,
+                wild = resourcePool.Wild
+            };
+        }
+
+        // Monsters (include inactive so Undo can revive)
+        for (int i = 0; i < _encounterMonsters.Count; i++)
+        {
+            var m = _encounterMonsters[i];
+            if (m == null) continue;
+
+            s.monsters.Add(new MonsterRuntimeSnapshot
+            {
+                instanceId = m.GetInstanceID(),
+                isActive = m.gameObject.activeSelf && !m.IsDead,
+                hp = m.CurrentHp,
+                position = m.transform.position,
+                rotation = m.transform.rotation
+            });
+        }
+        // Enemy intents (locked for the turn)
+        s.intents.Clear();
+        for (int i = 0; i < _plannedIntents.Count; i++)
+        {
+            var it = _plannedIntents[i];
+            if (it.enemy == null) continue;
+
+            s.intents.Add(new EnemyIntentSnapshot
+            {
+                type = it.type,
+                enemyInstanceId = it.enemy.GetInstanceID(),
+                targetPartyIndex = it.targetPartyIndex
+            });
+        }
+
+
+
+        _saveStates.Add(s);
+    }
+
+    private void ApplySaveStateSnapshot(BattleSaveState s)
+    {
+        if (s == null) return;
+
+        // Clear pending cast and previews
+        ClearEnemyTargetPreview();
+        _previewPartyTargetIndex = -1;
+        HideConfirmText();
+        CancelPendingAbility();
+
+        // Restore resources
+        if (resourcePool != null)
+            resourcePool.SetAmounts(s.resources.attack, s.resources.defense, s.resources.magic, s.resources.wild);
+
+        // Restore heroes
+        for (int i = 0; i < s.heroes.Count; i++)
+        {
+            var h = s.heroes[i];
+            if (!IsValidPartyIndex(h.partyIndex)) continue;
+
+            var pm = _party[h.partyIndex];
+            if (pm == null || pm.stats == null) continue;
+
+            pm.stats.SetRuntimeState(h.hp, h.stamina, h.shield, h.hidden);
+            pm.hasActedThisRound = h.hasActedThisRound;
+        }
+
+        // Restore monsters
+        // Build a lookup by instance id
+        var map = new Dictionary<int, Monster>(_encounterMonsters.Count);
+        for (int i = 0; i < _encounterMonsters.Count; i++)
+        {
+            var m = _encounterMonsters[i];
+            if (m == null) continue;
+            map[m.GetInstanceID()] = m;
+        }
+
+        _activeMonsters.Clear();
+        _encounterMonsters.Clear();
+
+        for (int i = 0; i < s.monsters.Count; i++)
+        {
+            var ms = s.monsters[i];
+            if (!map.TryGetValue(ms.instanceId, out var m) || m == null) continue;
+
+            // Restore transform (helps visuals feel consistent)
+            m.transform.position = ms.position;
+            m.transform.rotation = ms.rotation;
+
+            if (ms.isActive)
+            {
+                m.gameObject.SetActive(true);
+                m.SetCurrentHp(ms.hp);
+                if (!m.IsDead)
+                    _activeMonsters.Add(m);
+            }
+            else
+            {
+                // Keep dead/inactive monsters hidden
+                m.SetCurrentHp(ms.hp);
+                if (m.IsDead || !ms.isActive)
+                    m.gameObject.SetActive(false);
+            }
+        }
+
+        // Restore enemy intents as they were when this snapshot was taken.
+        _plannedIntents.Clear();
+        if (s.intents != null)
+        {
+            for (int i = 0; i < s.intents.Count; i++)
+            {
+                var it = s.intents[i];
+                if (!map.TryGetValue(it.enemyInstanceId, out var em) || em == null) continue;
+                if (!em.gameObject.activeSelf || em.IsDead) continue;
+
+                _plannedIntents.Add(new EnemyIntent
+                {
+                    type = it.type,
+                    enemy = em,
+                    targetPartyIndex = it.targetPartyIndex
+                });
+            }
+        }
+        OnEnemyIntentsPlanned?.Invoke(new List<EnemyIntent>(_plannedIntents));
+
+        NotifyPartyChanged();
+    }
+
+    private void SetUndoButtonEnabled(bool enabled)
+    {
+        if (undoButton == null) return;
+        undoButton.gameObject.SetActive(enabled);
+        undoButton.interactable = enabled;
+    }
+
+    private void HideConfirmText()
+    {
+        if (confirmText != null)
+            confirmText.gameObject.SetActive(false);
+    }
+
+    private void ShowConfirmText()
+    {
+        if (confirmText != null)
+        {
+            confirmText.text = "Click target again to confirm";
+            confirmText.gameObject.SetActive(true);
+        }
+    }
+
+    public void UndoLastSaveState()
+    {
+        if (!IsPlayerPhase || _resolving)
+            return;
+
+        if (_saveStates == null || _saveStates.Count <= 1)
+        {
+            SetUndoButtonEnabled(false);
+            return;
+        }
+
+        // Remove the most recent snapshot and restore the new last snapshot.
+        _saveStates.RemoveAt(_saveStates.Count - 1);
+
+        BattleSaveState s = _saveStates[_saveStates.Count - 1];
+        ApplySaveStateSnapshot(s);
+
+        // Disable undo if we're back to turn start baseline.
+        if (_saveStates.Count <= 1)
+            SetUndoButtonEnabled(false);
+    }
+
 }

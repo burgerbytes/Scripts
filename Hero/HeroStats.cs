@@ -1,4 +1,3 @@
-// PATH: Assets/Scripts/Hero/HeroStats.cs
 using System;
 using UnityEngine;
 
@@ -82,6 +81,17 @@ public class HeroStats : MonoBehaviour
 
     public ClassDefinitionSO BaseClassDef => baseClassDef;
     public ClassDefinitionSO AdvancedClassDef => advancedClassDef;
+
+    // ✅ NEW: Reel strip + portrait come from the hero prefab
+    [Header("Reels / UI (Prefab Data)")]
+    [Tooltip("Reel strip used for this hero's reel.")]
+    [SerializeField] private ReelStripSO reelStrip;
+
+    [Tooltip("Portrait sprite used for this hero's reel picker button / UI.")]
+    [SerializeField] private Sprite portrait;
+
+    public ReelStripSO ReelStrip => reelStrip;
+    public Sprite Portrait => portrait;
 
     // ---------------- Public Accessors ----------------
     public int Level => level;
@@ -403,10 +413,21 @@ public class HeroStats : MonoBehaviour
 
     public ClassDefinitionSO GetActiveClassDefinition()
     {
-        // Replace these with your actual internal fields/properties.
-        // The point: PartyHUD calls this ONE method and never accesses private fields directly.
-
         if (advancedClassDef != null) return advancedClassDef;
         return baseClassDef;
     }
+
+
+    /// <summary>
+    /// Used by BattleManager Undo. Restores core runtime combat state.
+    /// </summary>
+    public void SetRuntimeState(int hp, float stamina, int shield, bool hidden)
+    {
+        currentHp = Mathf.Clamp(hp, 0, maxHp);
+        currentShield = Mathf.Max(0, shield);
+        isHidden = hidden;
+    }
+
 }
+
+
