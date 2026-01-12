@@ -17,7 +17,7 @@ public class BattleManager : MonoBehaviour
 
     public enum BattleState { Idle, BattleStart, PlayerPhase, EnemyPhase, BattleEnd }
     public enum PlayerActionType { None, Ability1, Ability2 }
-    public enum IntentType { Attack, AoEAttack }
+    public enum IntentType { Attack }
 
     [Serializable]
     private class PartyMemberRuntime
@@ -175,6 +175,11 @@ public class BattleManager : MonoBehaviour
     [SerializeField] private Button undoButton;
     [SerializeField] private TMP_Text confirmText;
 
+    [Header("Monster Info UI")]
+    [Tooltip("Optional. If assigned, BattleManager will populate the Monster Info panel when clicking enemies.")]
+    [SerializeField] private MonsterInfoController monsterInfoController;
+
+
     [Header("Enemy Lunge (No Animation Clips)")]
     [Tooltip("How far the enemy sprite/visual lunges toward the target during an attack (world units).")]
     [SerializeField] private float enemyLungeDistance = 0.35f;
@@ -214,8 +219,6 @@ public class BattleManager : MonoBehaviour
 
     // Party target preview: used for Block-style "click twice to confirm"
     private int _previewPartyTargetIndex = -1;
-    // Confirmed party target for ally-targeted defensive abilities (e.g., Aegis)
-    private int _selectedPartyTargetIndex = -1;
     private readonly List<EnemyIntent> _plannedIntents = new List<EnemyIntent>();
 
     // Enemy party selection (per encounter)
@@ -347,56 +350,57 @@ public class BattleManager : MonoBehaviour
 
     private void Update()
     {
-        if (!IsPlayerPhase || !_awaitingEnemyTarget || _resolving || !allowClickToSelectMonsterTarget)
+        // Allow clicking monsters to open the MonsterInfoPanel even when no ability is pending.
+        // If an ability is awaiting an enemy target, we still run the normal two-click confirm targeting flow.
+        if (!IsPlayerPhase || _resolving || !allowClickToSelectMonsterTarget)
             return;
 
         if (!Input.GetMouseButtonDown(0))
             return;
 
-        // NOTE: When selecting an enemy target, we intentionally DO NOT block clicks just because the pointer is over UI.
-        // In many Unity UI setups, an invisible full-screen Image/Panel may still be a raycast target, causing
-        // EventSystem.current.IsPointerOverGameObject() to return true everywhere and breaking targeting.
-        // If you truly want to block clicks on specific UI, do it via a dedicated input-blocker overlay.
+        // When NOT actively targeting an enemy for an ability, respect ignoreClicksOverUI so UI clicks don't select monsters.
+        // When targeting, we intentionally ignore this because some setups have full-screen raycast UI that would block all clicks.
         if (ignoreClicksOverUI && !_awaitingEnemyTarget && EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
-        {
-            if (logFlow) Debug.Log("[Battle] Click ignored because pointer is over UI.");
             return;
-        }
 
         Monster clicked = TryGetClickedMonster();
 
-        // Clicked empty space (or something non-monster)
+        // Clicked empty space
         if (clicked == null)
         {
-            // If we were already previewing a target, clicking elsewhere cancels the pending cast.
-            if (_previewEnemyTarget != null)
+            // If we were in the middle of an enemy-target cast and already previewing, clicking elsewhere cancels.
+            if (_awaitingEnemyTarget && _previewEnemyTarget != null)
             {
                 if (logFlow) Debug.Log("[Battle][AbilityTarget] Clicked elsewhere -> cancel pending ability.", this);
                 ClearEnemyTargetPreview();
                 HideConfirmText();
                 CancelPendingAbility();
             }
-            else
-            {
-                ClearEnemyTargetPreview();
-            }
             return;
         }
 
-        if (clicked != null && _activeMonsters.Contains(clicked) && !clicked.IsDead)
-        {
-            // If we already selected a preview target, clicking ANY other target cancels the cast.
-            if (_previewEnemyTarget != null && clicked != _previewEnemyTarget)
-            {
-                if (logFlow) Debug.Log("[Battle][AbilityTarget] Clicked different target -> cancel pending ability.", this);
-                ClearEnemyTargetPreview();
-                HideConfirmText();
-                CancelPendingAbility();
-                return;
-            }
+        if (!_activeMonsters.Contains(clicked) || clicked.IsDead)
+            return;
 
-            SelectEnemyTarget(clicked);
+        // Always show/update monster info on click
+        if (monsterInfoController != null)
+            monsterInfoController.Show(clicked);
+
+        // If we're not targeting an ability, we're done.
+        if (!_awaitingEnemyTarget)
+            return;
+
+        // If we already selected a preview target, clicking ANY other target cancels the cast.
+        if (_previewEnemyTarget != null && clicked != _previewEnemyTarget)
+        {
+            if (logFlow) Debug.Log("[Battle][AbilityTarget] Clicked different target -> cancel pending ability.", this);
+            ClearEnemyTargetPreview();
+            HideConfirmText();
+            CancelPendingAbility();
+            return;
         }
+
+        SelectEnemyTarget(clicked);
     }
 
     // Called by AnimatorImpactEvents (Animation Events).
@@ -510,11 +514,11 @@ public class BattleManager : MonoBehaviour
             IsDead = m.IsDead,
             HasActedThisRound = m.hasActedThisRound,
             Shield = shield,
+            IsHidden = hs != null && hs.IsHidden,
             IsBlocking = shield > 0,
 
-            // Reuse the existing "Block preview" UI for any shield-style ability that targets Self or Ally (e.g. Aegis).
-            HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _awaitingPartyTarget && _pendingAbility != null && (_pendingAbility.targetType == AbilityTargetType.Self || _pendingAbility.targetType == AbilityTargetType.Ally) && _pendingAbility.shieldAmount > 0,
-            BlockPreviewAmount = ((_previewPartyTargetIndex == index) && _awaitingPartyTarget && _pendingAbility != null) ? Mathf.Max(0, _pendingAbility.shieldAmount) : 0
+            HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _awaitingPartyTarget && _pendingAbility != null && _pendingActorIndex == index && _pendingAbility.targetType == AbilityTargetType.Self && _pendingAbility.shieldAmount > 0,
+            BlockPreviewAmount = ((_previewPartyTargetIndex == index) && _awaitingPartyTarget && _pendingAbility != null && _pendingActorIndex == index) ? Mathf.Max(0, _pendingAbility.shieldAmount) : 0
         };
     }
 
@@ -564,17 +568,14 @@ public class BattleManager : MonoBehaviour
         if (_pendingAbility == null) return false;
         if (!_awaitingPartyTarget) return false;
 
-        bool selfOnly = _pendingAbility.targetType == AbilityTargetType.Self;
-
-        // Self-targeted shield (Block): only the caster can be selected.
-        if (selfOnly && partyIndex != _pendingActorIndex)
+        // Block: only the caster (pending actor) can be selected.
+        if (partyIndex != _pendingActorIndex)
         {
             // If we've already selected a target (preview), clicking anything else cancels.
             if (_previewPartyTargetIndex == _pendingActorIndex)
             {
                 if (logFlow) Debug.Log("[Battle][AbilityTarget] Clicked different party slot -> cancel pending ability.", this);
                 _previewPartyTargetIndex = -1;
-                _selectedPartyTargetIndex = -1;
                 HideConfirmText();
                 CancelPendingAbility();
                 NotifyPartyChanged();
@@ -584,30 +585,17 @@ public class BattleManager : MonoBehaviour
         }
 
         // Two-step confirm:
-        // 1) First click on target -> show shield preview + confirm text
-        // 2) Second click on SAME target -> commit ability
+        // 1) First click on caster -> show block preview + confirm text
+        // 2) Second click on caster -> commit ability
         if (_previewPartyTargetIndex != partyIndex)
         {
-            // If we were already previewing a different party target, clicking a different one cancels (matches enemy targeting behavior).
-            if (_previewPartyTargetIndex != -1 && _previewPartyTargetIndex != partyIndex)
-            {
-                if (logFlow) Debug.Log("[Battle][AbilityTarget] Clicked different party target -> cancel pending ability.", this);
-                _previewPartyTargetIndex = -1;
-                _selectedPartyTargetIndex = -1;
-                HideConfirmText();
-                CancelPendingAbility();
-                NotifyPartyChanged();
-                return true;
-            }
-
             _previewPartyTargetIndex = partyIndex;
             ShowConfirmText();
             NotifyPartyChanged();
             return true;
         }
 
-        if (logFlow) Debug.Log("[Battle][AbilityTarget] Party target clicked again. Committing pending ability.", this);
-        _selectedPartyTargetIndex = partyIndex;
+        if (logFlow) Debug.Log("[Battle][AbilityTarget] Caster clicked again. Committing pending ability.", this);
         _previewPartyTargetIndex = -1;
         HideConfirmText();
         StartCoroutine(ResolvePendingAbility());
@@ -638,7 +626,6 @@ public class BattleManager : MonoBehaviour
         _pendingAbility = ability;
         _selectedEnemyTarget = null;
         _previewPartyTargetIndex = -1;
-        _selectedPartyTargetIndex = -1;
         HideConfirmText();
         ClearEnemyTargetPreview();
 
@@ -658,19 +645,15 @@ public class BattleManager : MonoBehaviour
             _previewEnemyTarget = null;
             if (logFlow) Debug.Log($"[Battle][AbilityTarget] Awaiting ENEMY target for {ability.abilityName}");
         }
-        else if ((ability.targetType == AbilityTargetType.Self || ability.targetType == AbilityTargetType.Ally) && ability.shieldAmount > 0)
+        else if (ability.targetType == AbilityTargetType.Self && ability.shieldAmount > 0)
         {
-            // Shield-style cast (Block/Aegis): preview on a party member, then require a second click to commit.
+            // Block-style self cast: preview on the caster, then require a click on the caster to commit.
             _awaitingEnemyTarget = false;
             _awaitingPartyTarget = true;
             ClearEnemyTargetPreview();
             _selectedEnemyTarget = null;
             _previewEnemyTarget = null;
-            if (logFlow)
-            {
-                string mode = (ability.targetType == AbilityTargetType.Self) ? "SELF" : "ALLY";
-                Debug.Log($"[Battle][AbilityTarget] Awaiting {mode} confirm for {ability.abilityName} (shield preview should flash)");
-            }
+            if (logFlow) Debug.Log($"[Battle][AbilityTarget] Awaiting SELF confirm for {ability.abilityName} (Block preview should flash)");
         }
         else
         {
@@ -807,51 +790,21 @@ public class BattleManager : MonoBehaviour
             // Lunge/translate attack (no animation clips required). Damage is applied at the lunge peak.
             yield return EnemyLungeAttack(intent.enemy, targetTf, () =>
             {
-                int raw = intent.enemy != null ? intent.enemy.GetDamage() : 0;
-
-                // Conceal / Hidden logic:
-                // - Single-target attacks miss hidden heroes entirely.
-                // - AoE attacks hit all heroes (including hidden) and break conceal.
-                if (intent.type == IntentType.AoEAttack)
-                {
-                    for (int pi = 0; pi < PartyCount; pi++)
-                    {
-                        var pm = _party[pi];
-                        var hs = pm != null ? pm.stats : null;
-                        if (hs == null || pm.IsDead) continue;
-
-                        if (logFlow) Debug.Log($"[Battle][EnemyAtk][AoE] Applying incoming damage. attacker={(intent.enemy != null ? intent.enemy.name : "<null>")} targetIdx={pi} raw={raw} targetShieldBefore={hs.Shield}", this);
-                        int dealt = hs.ApplyIncomingDamage(raw);
-
-                        // AoE breaks Conceal/Hidden.
-                        if (hs.IsHidden) hs.SetHidden(false);
-
-                        if (pm.avatarGO != null)
-                            SpawnDamageNumber(pm.avatarGO.transform.position, dealt);
-                    }
-
-                    ApplyPartyHiddenVisuals();
-                    return;
-                }
-
-                // Single-target attack
                 if (targetStats == null) return;
 
-                if (targetStats.IsHidden)
-                {
-                    if (logFlow) Debug.Log($"[Battle][EnemyAtk] Target is hidden (Conceal). Attack misses. attacker={(intent.enemy != null ? intent.enemy.name : "<null>")} targetIdx={targetIdx}", this);
-                    return;
-                }
+                int raw = intent.enemy.GetDamage();
 
                 // Apply damage (HeroStats handles shield+HP).
-                if (logFlow) Debug.Log($"[Battle][EnemyAtk] Applying incoming damage. attacker={(intent.enemy != null ? intent.enemy.name : "<null>")} targetIdx={targetIdx} raw={raw} targetShieldBefore={targetStats.Shield}", this);
-                int dealtSingle = targetStats.ApplyIncomingDamage(raw);
-                if (logFlow) Debug.Log($"[Battle][EnemyAtk] Damage result. dealtToHp={dealtSingle} targetShieldAfter={targetStats.Shield}", this);
+                if (logFlow) Debug.Log($"[Battle][EnemyAtk] Applying incoming damage. attacker={intent.enemy.name} targetIdx={targetIdx} raw={raw} targetShieldBefore={targetStats.Shield}", this);
+                int dealt = targetStats.ApplyIncomingDamage(raw);
+                if (logFlow) Debug.Log($"[Battle][EnemyAtk] Damage result. dealtToHp={dealt} targetShieldAfter={targetStats.Shield}", this);
+                if (logFlow) Debug.Log($"[Battle][EnemyAtk] Damage applied. dealtToHP={dealt} targetShieldAfter={targetStats.Shield}", this);
 
                 if (targetGO != null)
-                    SpawnDamageNumber(targetGO.transform.position, dealtSingle);
+                    SpawnDamageNumber(targetGO.transform.position, dealt);
             });
-NotifyPartyChanged();
+
+            NotifyPartyChanged();
 
             // If all heroes are dead, end battle for now (you can wire a defeat flow later). (you can wire a defeat flow later).
             if (IsPartyDefeated())
@@ -1102,17 +1055,6 @@ NotifyPartyChanged();
             }
         }
 
-        // Ally-targeted shield abilities (e.g., Aegis) require a valid party target.
-        if (ability.targetType == AbilityTargetType.Ally && ability.shieldAmount > 0)
-        {
-            if (!IsValidPartyIndex(_selectedPartyTargetIndex) || _party[_selectedPartyTargetIndex] == null || _party[_selectedPartyTargetIndex].IsDead)
-            {
-                if (logFlow) Debug.Log("[Battle][Resolve] Abort: Ally target required but not selected (or dead). Returning to awaiting party target.", this);
-                _awaitingPartyTarget = true;
-                yield break;
-            }
-        }
-
         // Snapshot BEFORE we spend resources / apply effects so Undo restores the pre-cast state.
         PushSaveStateSnapshot();
 
@@ -1173,25 +1115,11 @@ NotifyPartyChanged();
                         stateToPlay = "ninja_backstab"; // fallback example
                     break;
 
-                case "Conceal":
-                    // Conceal has no damage and no animation for now.
-                    useImpactSync = false;
-                    stateToPlay = null;
-                    if (logFlow) Debug.Log("[Battle][Resolve] Conceal: no animation and no impact sync.", this);
-                    break;
-
                 case "Block":
                     // Block has no damage and no animation for now.
                     useImpactSync = false;
                     stateToPlay = null;
                     if (logFlow) Debug.Log("[Battle][Resolve] Block: no animation and no impact sync.", this);
-                    break;
-
-                case "Aegis":
-                    // Aegis behaves like Block: no damage and no animation for now.
-                    useImpactSync = false;
-                    stateToPlay = null;
-                    if (logFlow) Debug.Log("[Battle][Resolve] Aegis: no animation and no impact sync.", this);
                     break;
 
                 default:
@@ -1242,20 +1170,10 @@ NotifyPartyChanged();
                 if (logFlow) Debug.Log($"[Battle][Resolve] Done waiting for impact. impactFired={_impactFired} elapsed={elapsed:0.000}s", this);
             }
 
-            int beforeHp = enemyTarget.CurrentHp;
-
             int dealt = enemyTarget.TakeDamageFromAbility(
                 abilityBaseDamage: ability.baseDamage,
                 classAttackModifier: actorStats.ClassAttackModifier,
                 element: ability.element);
-
-            // Ability Tags: Assassinate
-            // If an ability with the Assassinate tag would leave the target at exactly 1 HP,
-            // execute it instead (set HP to 0).
-            if (AbilityHasTag(ability, AbilityTag.Assassinate) && beforeHp > 1 && enemyTarget.CurrentHp == 1)
-            {
-                enemyTarget.SetCurrentHp(0);
-            }
 
             SpawnDamageNumber(enemyTarget.transform.position, dealt);
             actorStats.ApplyOnHitEffectsTo(enemyTarget);
@@ -1270,55 +1188,14 @@ NotifyPartyChanged();
         }
 
 
-        if (ability.shieldAmount > 0 && (ability.targetType == AbilityTargetType.Self || ability.targetType == AbilityTargetType.Ally))
+        if (ability.targetType == AbilityTargetType.Self && ability.shieldAmount > 0)
         {
-            // Defensive shield abilities: Block (Self) and Aegis (Ally)
-            HeroStats targetStats = actorStats;
-            string targetName = actorStats.name;
-
-            if (ability.targetType == AbilityTargetType.Ally)
-            {
-                if (IsValidPartyIndex(_selectedPartyTargetIndex) && _party[_selectedPartyTargetIndex] != null)
-                {
-                    targetStats = _party[_selectedPartyTargetIndex].stats;
-                    targetName = _party[_selectedPartyTargetIndex].name;
-                }
-            }
-
-            if (targetStats != null)
-            {
-                if (logFlow) Debug.Log($"[Battle][Shield] Applying shield. amount={ability.shieldAmount} target={targetName} shieldBefore={targetStats.Shield}", this);
-                targetStats.AddShield(ability.shieldAmount);
-                if (logFlow) Debug.Log($"[Battle][Shield] Shield applied. target={targetName} shieldAfter={targetStats.Shield}", this);
-            }
+            if (logFlow) Debug.Log($"[Battle][Block] Applying shield. amount={ability.shieldAmount} actor={actorStats.name} shieldBefore={actorStats.Shield}", this);
+            actorStats.AddShield(ability.shieldAmount);
+            if (logFlow) Debug.Log($"[Battle][Block] Shield applied. shieldAfter={actorStats.Shield}", this);
         }
 
-        
-        // ===== Conceal (Ninja) =====
-        // Conceal makes the caster untargetable by single-target enemy attacks until:
-        // - they are hit by an AoE attack, OR
-        // - they use an ability (except Backstab that kills the target).
-        bool wasHiddenBeforeCast = actorStats.IsHidden;
-
-        if (ability.name == "Conceal")
-        {
-            actorStats.SetHidden(true);
-        }
-        else if (wasHiddenBeforeCast)
-        {
-            bool keepHidden = false;
-
-            // Special case: Backstab does NOT break Conceal if it kills the enemy.
-            if (ability.name == "Backstab" && ability.targetType == AbilityTargetType.Enemy && enemyTarget != null && enemyTarget.IsDead)
-                keepHidden = true;
-
-            if (!keepHidden)
-                actorStats.SetHidden(false);
-        }
-
-        ApplyPartyHiddenVisuals();
-
-actor.hasActedThisRound = true;
+        actor.hasActedThisRound = true;
 
         _resolving = false;
 
@@ -1338,19 +1215,6 @@ actor.hasActedThisRound = true;
     {
         if (ability == null) return default;
         return ability.cost;
-    }
-
-    private static bool AbilityHasTag(AbilityDefinitionSO ability, AbilityTag tag)
-    {
-        if (ability == null) return false;
-        if (ability.tags == null) return false;
-
-        for (int i = 0; i < ability.tags.Count; i++)
-        {
-            if (ability.tags[i] == tag)
-                return true;
-        }
-        return false;
     }
 
     // ================= TARGET PREVIEW =================
@@ -1378,11 +1242,6 @@ actor.hasActedThisRound = true;
             element: _pendingAbility.element);
 
         int previewHp = Mathf.Max(0, target.CurrentHp - predictedDamage);
-
-        // Ability Tags: Assassinate
-        // If we would leave the target at 1 HP, preview it as dead (0 HP).
-        if (AbilityHasTag(_pendingAbility, AbilityTag.Assassinate) && target.CurrentHp > 1 && previewHp == 1)
-            previewHp = 0;
 
         var bar = target.GetComponentInChildren<MonsterHpBar>(true);
         if (bar != null)
@@ -1412,7 +1271,6 @@ actor.hasActedThisRound = true;
         _awaitingPartyTarget = false;
         _selectedEnemyTarget = null;
         _previewPartyTargetIndex = -1;
-        _selectedPartyTargetIndex = -1;
         HideConfirmText();
         ClearEnemyTargetPreview();
         _impactFired = false;
@@ -1438,7 +1296,7 @@ actor.hasActedThisRound = true;
 
             _plannedIntents.Add(new EnemyIntent
             {
-                type = (m != null && m.IsDefaultAttackAoE) ? IntentType.AoEAttack : IntentType.Attack,
+                type = IntentType.Attack,
                 enemy = m,
                 targetPartyIndex = targetIdx
             });
@@ -1775,36 +1633,7 @@ actor.hasActedThisRound = true;
         OnBattleStateChanged?.Invoke(_state);
     }
 
-    private void NotifyPartyChanged()
-    {
-        ApplyPartyHiddenVisuals();
-        OnPartyChanged?.Invoke();
-    }
-
-    [Header("Conceal / Hidden Visuals")]
-    [SerializeField] private Color hiddenTint = new Color(0.65f, 0.65f, 0.65f, 1f);
-
-    private void ApplyPartyHiddenVisuals()
-    {
-        if (_party == null) return;
-
-        for (int i = 0; i < _party.Count; i++)
-        {
-            var pm = _party[i];
-            if (pm == null || pm.avatarGO == null) continue;
-
-            var hs = pm.stats;
-            bool hidden = hs != null && hs.IsHidden;
-
-            // Tint the in-world sprite (prefab) gray when hidden.
-            var sr = pm.avatarGO.GetComponentInChildren<SpriteRenderer>(true);
-            if (sr != null)
-            {
-                sr.color = hidden ? hiddenTint : Color.white;
-            }
-        }
-    }
-
+    private void NotifyPartyChanged() => OnPartyChanged?.Invoke();
 
     private void SpawnDamageNumber(Vector3 worldPos, int amount)
     {
