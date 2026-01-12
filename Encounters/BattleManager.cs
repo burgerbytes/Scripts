@@ -1245,7 +1245,8 @@ NotifyPartyChanged();
             int dealt = enemyTarget.TakeDamageFromAbility(
                 abilityBaseDamage: ability.baseDamage,
                 classAttackModifier: actorStats.ClassAttackModifier,
-                element: ability.element);
+                element: ability.element,
+                abilityTags: ability.tags);
 
             SpawnDamageNumber(enemyTarget.transform.position, dealt);
             actorStats.ApplyOnHitEffectsTo(enemyTarget);
@@ -1354,7 +1355,8 @@ actor.hasActedThisRound = true;
         int predictedDamage = target.CalculateDamageFromAbility(
             abilityBaseDamage: _pendingAbility.baseDamage,
             classAttackModifier: actor.stats.ClassAttackModifier,
-            element: _pendingAbility.element);
+            element: _pendingAbility.element,
+            abilityTags: _pendingAbility.tags);
 
         int previewHp = Mathf.Max(0, target.CurrentHp - predictedDamage);
 
