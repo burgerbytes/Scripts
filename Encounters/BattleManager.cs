@@ -1,6 +1,3 @@
-//PATH: Assets/Scripts/Encounters/BattleManager.cs
-// GUID: 30f201f35d336bf4d840162cd6fd1fde
-////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -175,6 +172,12 @@ public class BattleManager : MonoBehaviour
     [SerializeField] private Button undoButton;
     [SerializeField] private TMP_Text confirmText;
 
+
+    [Header("Monster Info UI")]
+    [Tooltip("Optional. If assigned, BattleManager will populate the Monster Info panel when preview-targeting enemies.")]
+    [SerializeField] private MonsterInfoController monsterInfoController;
+
+
     [Header("Enemy Lunge (No Animation Clips)")]
     [Tooltip("How far the enemy sprite/visual lunges toward the target during an attack (world units).")]
     [SerializeField] private float enemyLungeDistance = 0.35f;
@@ -235,7 +238,6 @@ public class BattleManager : MonoBehaviour
     private bool _awaitingPartyTarget = false; // used for self/ally targeting like Block
     private Monster _selectedEnemyTarget;
 
-    // Targeting preview: first click previews damage, second click confirms.
     private Monster _previewEnemyTarget = null;
 
     private bool _resolving;
@@ -347,57 +349,54 @@ public class BattleManager : MonoBehaviour
 
     private void Update()
     {
-        if (!IsPlayerPhase || !_awaitingEnemyTarget || _resolving || !allowClickToSelectMonsterTarget)
+        if (!IsPlayerPhase || _resolving)
             return;
 
         if (!Input.GetMouseButtonDown(0))
             return;
 
-        // NOTE: When selecting an enemy target, we intentionally DO NOT block clicks just because the pointer is over UI.
-        // In many Unity UI setups, an invisible full-screen Image/Panel may still be a raycast target, causing
-        // EventSystem.current.IsPointerOverGameObject() to return true everywhere and breaking targeting.
-        // If you truly want to block clicks on specific UI, do it via a dedicated input-blocker overlay.
-        if (ignoreClicksOverUI && !_awaitingEnemyTarget && EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
-        {
-            if (logFlow) Debug.Log("[Battle] Click ignored because pointer is over UI.");
+        // Block clicks through UI if requested.
+        if (ignoreClicksOverUI && EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
             return;
-        }
 
         Monster clicked = TryGetClickedMonster();
 
         // Clicked empty space (or something non-monster)
         if (clicked == null)
         {
-            // If we were already previewing a target, clicking elsewhere cancels the pending cast.
-            if (_previewEnemyTarget != null)
+            // If we were casting (enemy target), clicking elsewhere cancels the pending cast.
+            if (_awaitingEnemyTarget && _previewEnemyTarget != null)
             {
                 if (logFlow) Debug.Log("[Battle][AbilityTarget] Clicked elsewhere -> cancel pending ability.", this);
                 ClearEnemyTargetPreview();
                 HideConfirmText();
                 CancelPendingAbility();
             }
-            else
+            else if (_awaitingEnemyTarget)
             {
+                // If we were awaiting a target but had no preview yet, just clear any lingering preview.
                 ClearEnemyTargetPreview();
             }
+
+            // Do not auto-hide Monster Info on empty clicks.
             return;
         }
 
-        if (clicked != null && _activeMonsters.Contains(clicked) && !clicked.IsDead)
-        {
-            // If we already selected a preview target, clicking ANY other target cancels the cast.
-            if (_previewEnemyTarget != null && clicked != _previewEnemyTarget)
-            {
-                if (logFlow) Debug.Log("[Battle][AbilityTarget] Clicked different target -> cancel pending ability.", this);
-                ClearEnemyTargetPreview();
-                HideConfirmText();
-                CancelPendingAbility();
-                return;
-            }
+        // Only respond to active, living encounter monsters
+        if (!_activeMonsters.Contains(clicked) || clicked.IsDead)
+            return;
 
+        // Always show monster info on click, even when no ability is pending.
+        if (monsterInfoController != null)
+            monsterInfoController.Show(clicked);
+
+        // If we are currently targeting an enemy for a pending ability, route click into targeting logic.
+        if (_awaitingEnemyTarget && allowClickToSelectMonsterTarget)
+        {
             SelectEnemyTarget(clicked);
         }
     }
+
 
     // Called by AnimatorImpactEvents (Animation Events).
     public void NotifyAttackImpact()
@@ -511,10 +510,11 @@ public class BattleManager : MonoBehaviour
             HasActedThisRound = m.hasActedThisRound,
             Shield = shield,
             IsBlocking = shield > 0,
-
-            // Reuse the existing "Block preview" UI for any shield-style ability that targets Self or Ally (e.g. Aegis).
-            HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _awaitingPartyTarget && _pendingAbility != null && (_pendingAbility.targetType == AbilityTargetType.Self || _pendingAbility.targetType == AbilityTargetType.Ally) && _pendingAbility.shieldAmount > 0,
-            BlockPreviewAmount = ((_previewPartyTargetIndex == index) && _awaitingPartyTarget && _pendingAbility != null) ? Mathf.Max(0, _pendingAbility.shieldAmount) : 0
+            
+           
+            IsHidden = hs != null && hs.IsHidden,
+HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _awaitingPartyTarget && _pendingAbility != null && _pendingActorIndex == index && _pendingAbility.targetType == AbilityTargetType.Self && _pendingAbility.shieldAmount > 0,
+            BlockPreviewAmount = ((_previewPartyTargetIndex == index) && _awaitingPartyTarget && _pendingAbility != null && _pendingActorIndex == index) ? Mathf.Max(0, _pendingAbility.shieldAmount) : 0
         };
     }
 
@@ -1343,6 +1343,8 @@ actor.hasActedThisRound = true;
 
         _previewEnemyTarget = target;
 
+        if (monsterInfoController != null) monsterInfoController.Show(target);
+
         if (target == null || _pendingAbility == null) return;
         if (!IsValidPartyIndex(_pendingActorIndex)) return;
 
@@ -1580,6 +1582,11 @@ actor.hasActedThisRound = true;
     private void RemoveMonster(Monster m)
     {
         if (m == null) return;
+        
+        // If this monster is currently being inspected, hide the Monster Info panel.
+        if (monsterInfoController != null)
+            monsterInfoController.HideIfShowing(m);
+
 
         // Intents are locked for the turn. If this enemy had a planned intent, remove only its intent(s)
         // without changing the remaining enemies' intents.
@@ -2083,9 +2090,3 @@ actor.hasActedThisRound = true;
     }
 
 }
-
-
-
-
-////////////////////////////////////////////////////////////
-// 
