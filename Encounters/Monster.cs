@@ -32,6 +32,10 @@ public class Monster : MonoBehaviour
     [TextArea(2, 6)]
     [SerializeField] private string description = "";
 
+    [Tooltip("The string that will be displayed in the Monster Name field.")]
+    [TextArea(2, 6)]
+    [SerializeField] public string DisplayName = "";
+
     [Tooltip("Tags/properties shown in the Monster Info panel.")]
     [SerializeField] private System.Collections.Generic.List<MonsterTag> tags = new System.Collections.Generic.List<MonsterTag>();
 

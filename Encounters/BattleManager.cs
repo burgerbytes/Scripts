@@ -347,54 +347,49 @@ public class BattleManager : MonoBehaviour
 
     private void Update()
     {
-        if (!IsPlayerPhase || !_awaitingEnemyTarget || _resolving || !allowClickToSelectMonsterTarget)
+        if (!IsPlayerPhase || _resolving)
             return;
 
         if (!Input.GetMouseButtonDown(0))
             return;
 
-        // NOTE: When selecting an enemy target, we intentionally DO NOT block clicks just because the pointer is over UI.
-        // In many Unity UI setups, an invisible full-screen Image/Panel may still be a raycast target, causing
-        // EventSystem.current.IsPointerOverGameObject() to return true everywhere and breaking targeting.
-        // If you truly want to block clicks on specific UI, do it via a dedicated input-blocker overlay.
+        // Optional UI click blocking (see note below).
         if (ignoreClicksOverUI && !_awaitingEnemyTarget && EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
-        {
-            if (logFlow) Debug.Log("[Battle] Click ignored because pointer is over UI.");
             return;
-        }
 
         Monster clicked = TryGetClickedMonster();
 
         // Clicked empty space (or something non-monster)
         if (clicked == null)
         {
-            // If we were already previewing a target, clicking elsewhere cancels the pending cast.
-            if (_previewEnemyTarget != null)
+            // If we were casting (enemy target), clicking elsewhere cancels the pending cast.
+            if (_awaitingEnemyTarget && _previewEnemyTarget != null)
             {
                 if (logFlow) Debug.Log("[Battle][AbilityTarget] Clicked elsewhere -> cancel pending ability.", this);
                 ClearEnemyTargetPreview();
                 HideConfirmText();
                 CancelPendingAbility();
             }
-            else
+            else if (_awaitingEnemyTarget)
             {
                 ClearEnemyTargetPreview();
             }
+
+            // Note: we do NOT auto-hide the Monster Info panel on empty clicks.
             return;
         }
 
-        if (clicked != null && _activeMonsters.Contains(clicked) && !clicked.IsDead)
-        {
-            // If we already selected a preview target, clicking ANY other target cancels the cast.
-            if (_previewEnemyTarget != null && clicked != _previewEnemyTarget)
-            {
-                if (logFlow) Debug.Log("[Battle][AbilityTarget] Clicked different target -> cancel pending ability.", this);
-                ClearEnemyTargetPreview();
-                HideConfirmText();
-                CancelPendingAbility();
-                return;
-            }
+        // Only respond to active, living encounter monsters
+        if (!_activeMonsters.Contains(clicked) || clicked.IsDead)
+            return;
 
+        // Always show monster info on click, even when no ability is pending.
+        if (monsterInfoController != null)
+            monsterInfoController.Show(clicked);
+
+        // If we are currently targeting an enemy for a pending ability, route click into targeting logic.
+        if (_awaitingEnemyTarget)
+        {
             SelectEnemyTarget(clicked);
         }
     }
@@ -637,8 +632,7 @@ public class BattleManager : MonoBehaviour
             _awaitingEnemyTarget = true;
             ClearEnemyTargetPreview();
             _selectedEnemyTarget = null;
-            if (monsterInfoController != null) monsterInfoController.Hide();
-        _previewEnemyTarget = null;
+_previewEnemyTarget = null;
             if (logFlow) Debug.Log($"[Battle][AbilityTarget] Awaiting ENEMY target for {ability.abilityName}");
         }
         else if (ability.targetType == AbilityTargetType.Self && ability.shieldAmount > 0)
@@ -648,8 +642,7 @@ public class BattleManager : MonoBehaviour
             _awaitingPartyTarget = true;
             ClearEnemyTargetPreview();
             _selectedEnemyTarget = null;
-            if (monsterInfoController != null) monsterInfoController.Hide();
-        _previewEnemyTarget = null;
+_previewEnemyTarget = null;
             if (logFlow) Debug.Log($"[Battle][AbilityTarget] Awaiting SELF confirm for {ability.abilityName} (Block preview should flash)");
         }
         else
@@ -1253,8 +1246,7 @@ public class BattleManager : MonoBehaviour
         {
             var bar = _previewEnemyTarget.GetComponentInChildren<MonsterHpBar>(true);
             if (bar != null) bar.ClearPreview();
-        }
-        if (monsterInfoController != null) monsterInfoController.Hide();
+                }
         _previewEnemyTarget = null;
     }
 
@@ -1466,6 +1458,11 @@ public class BattleManager : MonoBehaviour
     private void RemoveMonster(Monster m)
     {
         if (m == null) return;
+
+        // If this monster is currently being inspected, hide the Monster Info panel.
+        if (monsterInfoController != null)
+            monsterInfoController.HideIfShowing(m);
+
 
         // Intents are locked for the turn. If this enemy had a planned intent, remove only its intent(s)
         // without changing the remaining enemies' intents.
@@ -1730,8 +1727,7 @@ public class BattleManager : MonoBehaviour
     private void BeginPlayerTurnSaveState()
     {
         _saveStates.Clear();
-        if (monsterInfoController != null) monsterInfoController.Hide();
-        _previewEnemyTarget = null;
+_previewEnemyTarget = null;
         _previewPartyTargetIndex = -1;
         HideConfirmText();
         SetUndoButtonEnabled(false);
