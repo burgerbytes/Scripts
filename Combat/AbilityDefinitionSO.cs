@@ -1,4 +1,4 @@
-// PATH: Assets/Scripts/Combat/AbilityDefinitionSO.cs
+using System.Collections.Generic;
 using UnityEngine;
 
 public enum AbilityTargetType
@@ -6,6 +6,13 @@ public enum AbilityTargetType
     Enemy,
     Self,
     Ally
+}
+
+public enum AbilityTag
+{
+    Assassinate,
+    Piercing,
+    FireElemental
 }
 
 [CreateAssetMenu(menuName = "Combat/Ability Definition")]
@@ -26,6 +33,10 @@ public class AbilityDefinitionSO : ScriptableObject
     public int baseDamage = 0;
     public int shieldAmount = 0;
     public ElementType element = ElementType.Physical;
+
+    [Header("Tags")]
+    [Tooltip("Optional tags that can add special rules and synergies.")]
+    public List<AbilityTag> tags = new List<AbilityTag>();
 
     [Header("Special Rules")]
     [Tooltip("If true, this ability costs 0 Attack while the user is Hidden.")]

@@ -1242,10 +1242,20 @@ NotifyPartyChanged();
                 if (logFlow) Debug.Log($"[Battle][Resolve] Done waiting for impact. impactFired={_impactFired} elapsed={elapsed:0.000}s", this);
             }
 
+            int beforeHp = enemyTarget.CurrentHp;
+
             int dealt = enemyTarget.TakeDamageFromAbility(
                 abilityBaseDamage: ability.baseDamage,
                 classAttackModifier: actorStats.ClassAttackModifier,
                 element: ability.element);
+
+            // Ability Tags: Assassinate
+            // If an ability with the Assassinate tag would leave the target at exactly 1 HP,
+            // execute it instead (set HP to 0).
+            if (AbilityHasTag(ability, AbilityTag.Assassinate) && beforeHp > 1 && enemyTarget.CurrentHp == 1)
+            {
+                enemyTarget.SetCurrentHp(0);
+            }
 
             SpawnDamageNumber(enemyTarget.transform.position, dealt);
             actorStats.ApplyOnHitEffectsTo(enemyTarget);
@@ -1330,6 +1340,19 @@ actor.hasActedThisRound = true;
         return ability.cost;
     }
 
+    private static bool AbilityHasTag(AbilityDefinitionSO ability, AbilityTag tag)
+    {
+        if (ability == null) return false;
+        if (ability.tags == null) return false;
+
+        for (int i = 0; i < ability.tags.Count; i++)
+        {
+            if (ability.tags[i] == tag)
+                return true;
+        }
+        return false;
+    }
+
     // ================= TARGET PREVIEW =================
 
     private void SetEnemyTargetPreview(Monster target)
@@ -1355,6 +1378,11 @@ actor.hasActedThisRound = true;
             element: _pendingAbility.element);
 
         int previewHp = Mathf.Max(0, target.CurrentHp - predictedDamage);
+
+        // Ability Tags: Assassinate
+        // If we would leave the target at 1 HP, preview it as dead (0 HP).
+        if (AbilityHasTag(_pendingAbility, AbilityTag.Assassinate) && target.CurrentHp > 1 && previewHp == 1)
+            previewHp = 0;
 
         var bar = target.GetComponentInChildren<MonsterHpBar>(true);
         if (bar != null)
