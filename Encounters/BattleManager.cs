@@ -1,6 +1,3 @@
-//PATH: Assets/Scripts/Encounters/BattleManager.cs
-// GUID: 30f201f35d336bf4d840162cd6fd1fde
-////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -159,6 +156,13 @@ public class BattleManager : MonoBehaviour
     [Tooltip("Optional override. If null, BattleManager will reuse Start Reward Panel.")]
     [SerializeField] private PostBattleRewardPanel postBattleRewardPanel;
 
+    [Header("Post-Battle Chest / Reward Reels")]
+    [Tooltip("Panel that shows Small/Large chests and a Skip option.")] 
+    [SerializeField] private PostBattleChestPanel postBattleChestPanel;
+
+    [Tooltip("Optional: shown after post-battle rewards so the player can reorganize before the next fight.")] 
+    [SerializeField] private PostBattlePrepPanel postBattlePrepPanel;
+
     [Header("External Systems")]
     [SerializeField] private StretchController stretchController;
     [SerializeField] private ScrollingBackground scrollingBackground;
@@ -238,7 +242,6 @@ public class BattleManager : MonoBehaviour
     private bool _awaitingPartyTarget = false; // used for self/ally targeting like Block
     private Monster _selectedEnemyTarget;
 
-    // Targeting preview: first click previews damage, second click confirms.
     private Monster _previewEnemyTarget = null;
 
     private bool _resolving;
@@ -350,17 +353,14 @@ public class BattleManager : MonoBehaviour
 
     private void Update()
     {
-        // Allow clicking monsters to open the MonsterInfoPanel even when no ability is pending.
-        // If an ability is awaiting an enemy target, we still run the normal two-click confirm targeting flow.
-        if (!IsPlayerPhase || _resolving || !allowClickToSelectMonsterTarget)
+        if (!IsPlayerPhase || _resolving)
             return;
 
         if (!Input.GetMouseButtonDown(0))
             return;
 
-        // When NOT actively targeting an enemy for an ability, respect ignoreClicksOverUI so UI clicks don't select monsters.
-        // When targeting, we intentionally ignore this because some setups have full-screen raycast UI that would block all clicks.
-        if (ignoreClicksOverUI && !_awaitingEnemyTarget && EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
+        // Block clicks through UI if requested.
+        if (ignoreClicksOverUI && EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
             return;
 
         Monster clicked = TryGetClickedMonster();
@@ -368,7 +368,7 @@ public class BattleManager : MonoBehaviour
         // Clicked empty space
         if (clicked == null)
         {
-            // If we were in the middle of an enemy-target cast and already previewing, clicking elsewhere cancels.
+            // If we were casting (enemy target), clicking elsewhere cancels the pending cast.
             if (_awaitingEnemyTarget && _previewEnemyTarget != null)
             {
                 if (logFlow) Debug.Log("[Battle][AbilityTarget] Clicked elsewhere -> cancel pending ability.", this);
@@ -376,32 +376,33 @@ public class BattleManager : MonoBehaviour
                 HideConfirmText();
                 CancelPendingAbility();
             }
+            else if (_awaitingEnemyTarget)
+            {
+                // If we were awaiting a target but had no preview yet, just clear any lingering preview.
+                ClearEnemyTargetPreview();
+            }
+
+            // Do not auto-hide Monster Info on empty clicks.
             return;
         }
 
+        // Only respond to active, living encounter monsters
         if (!_activeMonsters.Contains(clicked) || clicked.IsDead)
             return;
 
-        // Always show/update monster info on click
+        // Always show monster info on click, even when no ability is pending.
         if (monsterInfoController != null)
             monsterInfoController.Show(clicked);
 
-        // If we're not targeting an ability, we're done.
-        if (!_awaitingEnemyTarget)
-            return;
-
-        // If we already selected a preview target, clicking ANY other target cancels the cast.
-        if (_previewEnemyTarget != null && clicked != _previewEnemyTarget)
+        // If we are currently targeting an enemy for a pending ability, route click into targeting logic.
+        if (_awaitingEnemyTarget && allowClickToSelectMonsterTarget)
         {
-            if (logFlow) Debug.Log("[Battle][AbilityTarget] Clicked different target -> cancel pending ability.", this);
-            ClearEnemyTargetPreview();
-            HideConfirmText();
-            CancelPendingAbility();
-            return;
+            SelectEnemyTarget(clicked);
         }
 
         SelectEnemyTarget(clicked);
     }
+
 
     // Called by AnimatorImpactEvents (Animation Events).
     public void NotifyAttackImpact()
@@ -516,8 +517,10 @@ public class BattleManager : MonoBehaviour
             Shield = shield,
             IsHidden = hs != null && hs.IsHidden,
             IsBlocking = shield > 0,
-
-            HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _awaitingPartyTarget && _pendingAbility != null && _pendingActorIndex == index && _pendingAbility.targetType == AbilityTargetType.Self && _pendingAbility.shieldAmount > 0,
+            
+           
+            IsHidden = hs != null && hs.IsHidden,
+HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _awaitingPartyTarget && _pendingAbility != null && _pendingActorIndex == index && _pendingAbility.targetType == AbilityTargetType.Self && _pendingAbility.shieldAmount > 0,
             BlockPreviewAmount = ((_previewPartyTargetIndex == index) && _awaitingPartyTarget && _pendingAbility != null && _pendingActorIndex == index) ? Mathf.Max(0, _pendingAbility.shieldAmount) : 0
         };
     }
@@ -1173,7 +1176,8 @@ public class BattleManager : MonoBehaviour
             int dealt = enemyTarget.TakeDamageFromAbility(
                 abilityBaseDamage: ability.baseDamage,
                 classAttackModifier: actorStats.ClassAttackModifier,
-                element: ability.element);
+                element: ability.element,
+                abilityTags: ability.tags);
 
             SpawnDamageNumber(enemyTarget.transform.position, dealt);
             actorStats.ApplyOnHitEffectsTo(enemyTarget);
@@ -1230,6 +1234,8 @@ public class BattleManager : MonoBehaviour
 
         _previewEnemyTarget = target;
 
+        if (monsterInfoController != null) monsterInfoController.Show(target);
+
         if (target == null || _pendingAbility == null) return;
         if (!IsValidPartyIndex(_pendingActorIndex)) return;
 
@@ -1239,7 +1245,8 @@ public class BattleManager : MonoBehaviour
         int predictedDamage = target.CalculateDamageFromAbility(
             abilityBaseDamage: _pendingAbility.baseDamage,
             classAttackModifier: actor.stats.ClassAttackModifier,
-            element: _pendingAbility.element);
+            element: _pendingAbility.element,
+            abilityTags: _pendingAbility.tags);
 
         int previewHp = Mathf.Max(0, target.CurrentHp - predictedDamage);
 
@@ -1466,6 +1473,11 @@ public class BattleManager : MonoBehaviour
     private void RemoveMonster(Monster m)
     {
         if (m == null) return;
+        
+        // If this monster is currently being inspected, hide the Monster Info panel.
+        if (monsterInfoController != null)
+            monsterInfoController.HideIfShowing(m);
+
 
         // Intents are locked for the turn. If this enemy had a planned intent, remove only its intent(s)
         // without changing the remaining enemies' intents.
@@ -1490,6 +1502,8 @@ public class BattleManager : MonoBehaviour
 
     private IEnumerator HandleEncounterVictoryRoutine()
     {
+        Debug.Log($"[Battle] Victory detected. Starting post-battle flow. time={Time.time:0.00}", this);
+
         if (_postBattleRunning)
             yield break;
 
@@ -1510,46 +1524,123 @@ public class BattleManager : MonoBehaviour
         if (scrollingBackground != null)
             scrollingBackground.SetPaused(false);
 
-        // Roll and present post-battle rewards.
-        if (enablePostBattleRewards)
+        // Award victory gold (from the active enemy party composition, if any).
+        HeroStats goldOwner = null;
+        if (_party != null && _party.Count > 0)
+            goldOwner = _party[0]?.stats;
+
+        if (goldOwner != null && _activeEnemyParty != null && _activeEnemyParty.goldReward > 0)
+            goldOwner.AddGold(_activeEnemyParty.goldReward);
+
+        // Use encounter-specific loot if present; else fall back to global pool.
+        List<ItemOptionSO> pool =
+            (_activeLootOverride != null && _activeLootOverride.Count > 0)
+                ? _activeLootOverride
+                : (postBattleFlow != null ? postBattleFlow.GetItemOptionPool() : null);
+
+        // ✅ NEW POST-BATTLE FLOW:
+        // - Swap reels into Reward Mode (pay gold to spin; 3-in-a-row key payouts)
+        // - Offer Small/Large chests (spend keys to open)
+        // - Then show the Prep panel (Inventory / Continue)
+        if (enablePostBattleRewards && postBattleChestPanel != null && pool != null && pool.Count > 0)
         {
-            // Use encounter-specific loot if present; else fall back to global pool.
-            List<ItemOptionSO> pool =
-                (_activeLootOverride != null && _activeLootOverride.Count > 0)
-                    ? _activeLootOverride
-                    : (postBattleFlow != null ? postBattleFlow.GetItemOptionPool() : null);
+            // 1) Reward reels (optional per enemy party)
+            if (reelSpinSystem != null && _activeEnemyParty != null && _activeEnemyParty.rewardReelConfig != null)
+                reelSpinSystem.EnterRewardMode(_activeEnemyParty.rewardReelConfig, goldOwner);
 
-            PostBattleRewardPanel panel = postBattleRewardPanel != null ? postBattleRewardPanel : startRewardPanel;
+            bool done = false;
 
-            if (pool != null && pool.Count > 0 && panel != null)
+            int smallCount = _activeEnemyParty != null ? Mathf.Max(0, _activeEnemyParty.smallChestCount) : 0;
+            int largeCount = _activeEnemyParty != null ? Mathf.Max(0, _activeEnemyParty.largeChestCount) : 0;
+
+            postBattleChestPanel.Show(
+                goldOwner,
+                smallCount,
+                largeCount,
+                pool,
+                inventory,
+                // Reuse the existing item reward panel for the "choose item" step
+                (postBattleRewardPanel != null ? postBattleRewardPanel : startRewardPanel),
+                () => done = true
+            );
+
+            yield return new WaitUntil(() => done);
+
+            postBattleChestPanel.Hide();
+
+            // Restore combat reels
+            if (reelSpinSystem != null)
             {
-                int min = Mathf.Clamp(postBattleRewardChoicesRange.x, 1, pool.Count);
-                int max = Mathf.Clamp(postBattleRewardChoicesRange.y, min, pool.Count);
-                int desired = UnityEngine.Random.Range(min, max + 1);
+                // Rebuild from current party so portraits/strips return
+                var partyStats = new List<HeroStats>(_party != null ? _party.Count : 0);
+                if (_party != null)
+                    for (int i = 0; i < _party.Count; i++)
+                        if (_party[i]?.stats != null) partyStats.Add(_party[i].stats);
 
-                List<ItemOptionSO> rolled = RollUnique(pool, desired);
-                if (includeSkipOptionPostBattle)
-                    rolled.Add(BuildRuntimeSkipOption());
+                reelSpinSystem.ExitRewardMode(partyStats);
+            }
+        }
+        else
+        {
+            // Fallback: original single "choose one" reward behavior
+            if (enablePostBattleRewards)
+            {
+                PostBattleRewardPanel panel = postBattleRewardPanel != null ? postBattleRewardPanel : startRewardPanel;
 
-                ItemOptionSO chosen = null;
-                bool picked = false;
-
-                panel.Show(rolled, opt =>
+                if (pool != null && pool.Count > 0 && panel != null)
                 {
-                    chosen = opt;
-                    picked = true;
-                });
+                    int min = Mathf.Clamp(postBattleRewardChoicesRange.x, 1, pool.Count);
+                    int max = Mathf.Clamp(postBattleRewardChoicesRange.y, min, pool.Count);
+                    int desired = UnityEngine.Random.Range(min, max + 1);
 
-                yield return new WaitUntil(() => picked);
+                    List<ItemOptionSO> rolled = RollUnique(pool, desired);
+                    if (includeSkipOptionPostBattle)
+                        rolled.Add(BuildRuntimeSkipOption());
 
-                panel.Hide();
+                    ItemOptionSO chosen = null;
+                    bool picked = false;
 
-                if (chosen != null && chosen.item != null && inventory != null)
-                    inventory.Add(chosen.item, chosen.quantity);
+                    panel.Show(rolled, opt =>
+                    {
+                        chosen = opt;
+                        picked = true;
+                    });
+
+                    yield return new WaitUntil(() => picked);
+
+                    panel.Hide();
+
+                    if (chosen != null && chosen.item != null && inventory != null)
+                        inventory.Add(chosen.item, chosen.quantity);
+                }
             }
         }
 
-        // Start the next encounter.
+        // Prep / inventory reorg panel (optional)
+        if (postBattlePrepPanel != null)
+        {
+            bool cont = false;
+
+            // Ensure the panel object itself is active (Show() only toggles its internal root).
+            if (!postBattlePrepPanel.gameObject.activeSelf)
+                postBattlePrepPanel.gameObject.SetActive(true);
+
+            int battlesCompleted = stretchController != null ? stretchController.BattlesCompleted : 0;
+            int battlesPerStretch = stretchController != null ? stretchController.BattlesPerStretch : 1;
+
+            Debug.Log($"[Battle] Showing PostBattlePrepPanel. battlesCompleted={battlesCompleted} battlesPerStretch={battlesPerStretch} time={Time.time:0.00}", this);
+
+            postBattlePrepPanel.Show(battlesCompleted, battlesPerStretch, () =>
+            {
+                cont = true;
+            });
+
+            yield return new WaitUntil(() => cont);
+
+            // Hide it once continue is pressed so it won't overlap the next encounter UI.
+            postBattlePrepPanel.Hide();
+        }
+// Start the next encounter.
         yield return null;
 
         _postBattleRunning = false;
@@ -1630,6 +1721,10 @@ public class BattleManager : MonoBehaviour
     {
         if (_state == s) return;
         _state = s;
+
+        if (s == BattleState.BattleEnd)
+            Debug.Log($"[Battle] Battle ended. state={s} time={Time.time:0.00}", this);
+
         OnBattleStateChanged?.Invoke(_state);
     }
 
@@ -1941,8 +2036,3 @@ public class BattleManager : MonoBehaviour
 
 }
 
-
-
-
-////////////////////////////////////////////////////////////
-// 

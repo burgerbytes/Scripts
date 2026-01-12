@@ -1,5 +1,7 @@
 // GUID: ea47960c4ce364a4980645e51f542a03
 ////////////////////////////////////////////////////////////
+// GUID: ea47960c4ce364a4980645e51f542a03
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Reflection;
@@ -29,8 +31,8 @@ public class Monster : MonoBehaviour
     {
         Beast,
         Inorganic,
-        Ice_Elemental,
-        Fire_Elemental 
+        Fire_Elemental,
+        Ice_Elemental
     }
 
     [Header("Info")]
@@ -48,7 +50,56 @@ public class Monster : MonoBehaviour
     public string Description => description;
     public System.Collections.Generic.IReadOnlyList<MonsterTag> Tags => tags;
 
-[Header("Core Stats")]
+    private bool HasTag(MonsterTag tag)
+    {
+        return tags != null && tags.Contains(tag);
+    }
+
+    private static bool HasAbilityTag(System.Collections.Generic.IReadOnlyList<AbilityTag> abilityTags, AbilityTag tag)
+    {
+        if (abilityTags == null) return false;
+        for (int i = 0; i < abilityTags.Count; i++)
+        {
+            if (abilityTags[i] == tag)
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Applies special rules based on ability tags vs monster tags.
+    /// Currently:
+    /// - FireElemental abilities deal double damage to Ice_Elemental monsters.
+    /// - FireElemental abilities deal zero damage to Fire_Elemental monsters.
+    /// </summary>
+    private float GetDamageMultiplierForAbilityTags(System.Collections.Generic.IReadOnlyList<AbilityTag> abilityTags)
+    {
+        if (abilityTags == null || abilityTags.Count == 0)
+            return 1f;
+
+        bool isFireElementalAbility = false;
+        for (int i = 0; i < abilityTags.Count; i++)
+        {
+            if (abilityTags[i] == AbilityTag.FireElemental)
+            {
+                isFireElementalAbility = true;
+                break;
+            }
+        }
+
+        if (!isFireElementalAbility)
+            return 1f;
+
+        if (HasTag(MonsterTag.Fire_Elemental))
+            return 0f;
+
+        if (HasTag(MonsterTag.Ice_Elemental))
+            return 2f;
+
+        return 1f;
+    }
+
+    [Header("Core Stats")]
     [SerializeField] private int maxHp = 10;
 
     [Tooltip("Reduces incoming hero damage. Used in legacy TakeDamage() and in ability formula.")]
@@ -199,7 +250,7 @@ public class Monster : MonoBehaviour
     /// Useful for preview/ghost HP targeting UX.
     /// TotalDamage = ((abilityDamage * classAttackModifier) - enemyDefense) * elementalResistance
     /// </summary>
-    public int CalculateDamageFromAbility(int abilityBaseDamage, float classAttackModifier, ElementType element)
+    public int CalculateDamageFromAbility(int abilityBaseDamage, float classAttackModifier, ElementType element, System.Collections.Generic.IReadOnlyList<AbilityTag> abilityTags = null)
     {
         if (_currentHp <= 0)
             return 0;
@@ -208,12 +259,25 @@ public class Monster : MonoBehaviour
         float afterDef = scaled - Mathf.Max(0, defense);
         float resisted = afterDef * GetResistance(element);
 
-        int final = Mathf.RoundToInt(resisted);
+        float specialMult = GetDamageMultiplierForAbilityTags(abilityTags);
+        float modified = resisted * specialMult;
+
+        int final = Mathf.RoundToInt(modified);
         if (final < 0) final = 0;
+
+        // Assassinate: if this hit would leave the target at 1 HP (or less), execute.
+        // This matches the Ninja Backstab behavior ("kills when they'd have 1 HP after the hit").
+        if (final > 0 && HasAbilityTag(abilityTags, AbilityTag.Assassinate))
+        {
+            int hpAfter = _currentHp - final;
+            if (hpAfter <= 1)
+                final = _currentHp; // preview lethal
+        }
+
         return final;
     }
 
-    public int TakeDamageFromAbility(int abilityBaseDamage, float classAttackModifier, ElementType element)
+    public int TakeDamageFromAbility(int abilityBaseDamage, float classAttackModifier, ElementType element, System.Collections.Generic.IReadOnlyList<AbilityTag> abilityTags = null)
     {
         if (_currentHp <= 0)
             return 0;
@@ -222,8 +286,19 @@ public class Monster : MonoBehaviour
         float afterDef = scaled - Mathf.Max(0, defense);
         float resisted = afterDef * GetResistance(element);
 
-        int final = Mathf.RoundToInt(resisted);
+        float specialMult = GetDamageMultiplierForAbilityTags(abilityTags);
+        float modified = resisted * specialMult;
+
+        int final = Mathf.RoundToInt(modified);
         if (final < 0) final = 0;
+
+        // Assassinate: if this hit would leave the target at 1 HP (or less), execute.
+        if (final > 0 && HasAbilityTag(abilityTags, AbilityTag.Assassinate))
+        {
+            int hpAfter = _currentHp - final;
+            if (hpAfter <= 1)
+                final = _currentHp; // make the hit lethal
+        }
 
         if (final == 0)
         {
@@ -260,3 +335,4 @@ public class Monster : MonoBehaviour
     }
 
 }
+

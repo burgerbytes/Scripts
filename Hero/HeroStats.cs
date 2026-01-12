@@ -37,6 +37,9 @@ public class HeroStats : MonoBehaviour
     [Header("Resources")]
     [SerializeField] private long gold = 0;
 
+    [Tooltip("Persistent keys used for opening post-battle chests.")]
+    [SerializeField] private int smallKeys = 0;
+    [SerializeField] private int largeKeys = 0;
     [Header("Runtime")]
     [SerializeField] private int currentHp = 100;
     [SerializeField] private float currentStamina = 100f;
@@ -115,7 +118,11 @@ public class HeroStats : MonoBehaviour
     public float StaminaCostPerAttack => Mathf.Max(0f, staminaCostPerAttack);
     public long Gold => gold;
 
-    public bool CanBlock => canBlock;
+    
+
+    public int SmallKeys => smallKeys;
+    public int LargeKeys => largeKeys;
+public bool CanBlock => canBlock;
 
     // Combat state
     public int Shield => currentShield;
@@ -397,7 +404,48 @@ public class HeroStats : MonoBehaviour
         NotifyChanged();
     }
 
-    // ---------------- On-hit effects ----------------
+    
+    public bool TrySpendGold(long amount)
+    {
+        if (amount <= 0) return true;
+        if (gold < amount) return false;
+        gold -= amount;
+        NotifyChanged();
+        return true;
+    }
+
+    public void AddSmallKeys(int amount)
+    {
+        if (amount <= 0) return;
+        smallKeys += amount;
+        NotifyChanged();
+    }
+
+    public void AddLargeKeys(int amount)
+    {
+        if (amount <= 0) return;
+        largeKeys += amount;
+        NotifyChanged();
+    }
+
+    public bool TrySpendSmallKey(int amount = 1)
+    {
+        amount = Mathf.Max(1, amount);
+        if (smallKeys < amount) return false;
+        smallKeys -= amount;
+        NotifyChanged();
+        return true;
+    }
+
+    public bool TrySpendLargeKey(int amount = 1)
+    {
+        amount = Mathf.Max(1, amount);
+        if (largeKeys < amount) return false;
+        largeKeys -= amount;
+        NotifyChanged();
+        return true;
+    }
+// ---------------- On-hit effects ----------------
 
     public void ApplyOnHitEffectsTo(Monster target)
     {
@@ -429,5 +477,3 @@ public class HeroStats : MonoBehaviour
     }
 
 }
-
-
