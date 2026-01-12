@@ -1,4 +1,3 @@
-// PATH: Assets/Scripts/Encounters/Monster.cs
 using System;
 using System.Collections;
 using System.Reflection;
@@ -20,7 +19,26 @@ public class Monster : MonoBehaviour
 
     public event Action<int, int> OnHpChanged;
 
-    [Header("Core Stats")]
+    
+    public enum MonsterTag
+    {
+        Beast,
+        Inorganic,
+        Elemental
+    }
+
+    [Header("Info")]
+    [Tooltip("Short description shown in the Monster Info panel.")]
+    [TextArea(2, 6)]
+    [SerializeField] private string description = "";
+
+    [Tooltip("Tags/properties shown in the Monster Info panel.")]
+    [SerializeField] private System.Collections.Generic.List<MonsterTag> tags = new System.Collections.Generic.List<MonsterTag>();
+
+    public string Description => description;
+    public System.Collections.Generic.IReadOnlyList<MonsterTag> Tags => tags;
+
+[Header("Core Stats")]
     [SerializeField] private int maxHp = 10;
 
     [Tooltip("Reduces incoming hero damage. Used in legacy TakeDamage() and in ability formula.")]

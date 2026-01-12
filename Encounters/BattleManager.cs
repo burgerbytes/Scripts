@@ -1,6 +1,4 @@
-//PATH: Assets/Scripts/Encounters/BattleManager.cs
-// GUID: 30f201f35d336bf4d840162cd6fd1fde
-////////////////////////////////////////////////////////////
+
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -174,6 +172,12 @@ public class BattleManager : MonoBehaviour
     [SerializeField] private Button undoButton;
     [SerializeField] private TMP_Text confirmText;
 
+
+    [Header("Monster Info UI")]
+    [Tooltip("Optional. If assigned, BattleManager will populate the Monster Info panel when preview-targeting enemies.")]
+    [SerializeField] private MonsterInfoController monsterInfoController;
+
+
     [Header("Enemy Lunge (No Animation Clips)")]
     [Tooltip("How far the enemy sprite/visual lunges toward the target during an attack (world units).")]
     [SerializeField] private float enemyLungeDistance = 0.35f;
@@ -231,8 +235,7 @@ public class BattleManager : MonoBehaviour
     private bool _awaitingEnemyTarget = false;
     private bool _awaitingPartyTarget = false; // used for self/ally targeting like Block
     private Monster _selectedEnemyTarget;
-
-    // Targeting preview: first click previews damage, second click confirms.
+            
     private Monster _previewEnemyTarget = null;
 
     private bool _resolving;
@@ -634,7 +637,8 @@ public class BattleManager : MonoBehaviour
             _awaitingEnemyTarget = true;
             ClearEnemyTargetPreview();
             _selectedEnemyTarget = null;
-            _previewEnemyTarget = null;
+            if (monsterInfoController != null) monsterInfoController.Hide();
+        _previewEnemyTarget = null;
             if (logFlow) Debug.Log($"[Battle][AbilityTarget] Awaiting ENEMY target for {ability.abilityName}");
         }
         else if (ability.targetType == AbilityTargetType.Self && ability.shieldAmount > 0)
@@ -644,7 +648,8 @@ public class BattleManager : MonoBehaviour
             _awaitingPartyTarget = true;
             ClearEnemyTargetPreview();
             _selectedEnemyTarget = null;
-            _previewEnemyTarget = null;
+            if (monsterInfoController != null) monsterInfoController.Hide();
+        _previewEnemyTarget = null;
             if (logFlow) Debug.Log($"[Battle][AbilityTarget] Awaiting SELF confirm for {ability.abilityName} (Block preview should flash)");
         }
         else
@@ -1222,6 +1227,8 @@ public class BattleManager : MonoBehaviour
 
         _previewEnemyTarget = target;
 
+        if (monsterInfoController != null) monsterInfoController.Show(target);
+
         if (target == null || _pendingAbility == null) return;
         if (!IsValidPartyIndex(_pendingActorIndex)) return;
 
@@ -1247,6 +1254,7 @@ public class BattleManager : MonoBehaviour
             var bar = _previewEnemyTarget.GetComponentInChildren<MonsterHpBar>(true);
             if (bar != null) bar.ClearPreview();
         }
+        if (monsterInfoController != null) monsterInfoController.Hide();
         _previewEnemyTarget = null;
     }
 
@@ -1722,6 +1730,7 @@ public class BattleManager : MonoBehaviour
     private void BeginPlayerTurnSaveState()
     {
         _saveStates.Clear();
+        if (monsterInfoController != null) monsterInfoController.Hide();
         _previewEnemyTarget = null;
         _previewPartyTargetIndex = -1;
         HideConfirmText();
