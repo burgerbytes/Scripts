@@ -1,4 +1,3 @@
-// PATH: Assets/Scripts/UI/PostBattle/PostBattlePrepPanel.cs
 using System;
 using TMPro;
 using UnityEngine;
@@ -14,44 +13,60 @@ public class PostBattlePrepPanel : MonoBehaviour
     [SerializeField] private Button deckButton;
     [SerializeField] private Button continueButton;
 
-    [Header("Optional Sub-Panels")]
+    [Header("Optional Panels")]
     [SerializeField] private GameObject inventoryPanel;
     [SerializeField] private GameObject deckPanel;
 
     private Action _onContinue;
 
-    public bool IsOpen => root != null && root.activeSelf;
-
     private void Awake()
     {
-        if (root != null)
-            root.SetActive(false);
+        // If root isn't wired, default to this object so we can still show/hide reliably.
+        if (root == null) root = gameObject;
 
         WireButtons();
+
+        // Start hidden (but don't disable the GameObject itself — BattleManager may need to activate it).
+        if (root != null) root.SetActive(false);
+        if (inventoryPanel != null) inventoryPanel.SetActive(false);
+        if (deckPanel != null) deckPanel.SetActive(false);
+    }
+
+    private void OnEnable()
+    {
+        Debug.Log($"[PostBattlePrepPanel] Enabled. activeInHierarchy={gameObject.activeInHierarchy} time={Time.time:0.00}", this);
+    }
+
+    private void OnDisable()
+    {
+        Debug.Log($"[PostBattlePrepPanel] Disabled. time={Time.time:0.00}", this);
     }
 
     public void Show(int battlesCompleted, int battlesPerStretch, Action onContinue)
     {
         _onContinue = onContinue;
 
-        if (root != null)
-            root.SetActive(true);
+        // Ensure object & root are active.
+        if (!gameObject.activeSelf) gameObject.SetActive(true);
+        if (root != null && !root.activeSelf) root.SetActive(true);
 
         UpdateHeader(battlesCompleted, battlesPerStretch);
 
+        // Close subpanels by default
         if (inventoryPanel != null) inventoryPanel.SetActive(false);
         if (deckPanel != null) deckPanel.SetActive(false);
+
+        Debug.Log($"[PostBattlePrepPanel] Show() called. battlesCompleted={battlesCompleted} battlesPerStretch={battlesPerStretch} time={Time.time:0.00}", this);
     }
 
     public void Hide()
     {
-        _onContinue = null;
-
-        if (root != null)
-            root.SetActive(false);
+        Debug.Log($"[PostBattlePrepPanel] Hide() called. time={Time.time:0.00}", this);
 
         if (inventoryPanel != null) inventoryPanel.SetActive(false);
         if (deckPanel != null) deckPanel.SetActive(false);
+
+        if (root != null) root.SetActive(false);
     }
 
     private void UpdateHeader(int battlesCompleted, int battlesPerStretch)
@@ -103,6 +118,8 @@ public class PostBattlePrepPanel : MonoBehaviour
             continueButton.onClick.RemoveAllListeners();
             continueButton.onClick.AddListener(() =>
             {
+                // Hide immediately so it feels responsive
+                Hide();
                 _onContinue?.Invoke();
             });
         }

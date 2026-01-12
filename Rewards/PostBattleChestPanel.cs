@@ -5,10 +5,8 @@ using UnityEngine;
 using UnityEngine.UI;
 
 /// <summary>
-/// Post-battle chest selection UI.
-/// - Shows X Small chests and Y Large chests, plus a Skip button.
-/// - Chests are "covered" (unknown contents) until opened.
-/// - Opening a chest spends the corresponding key and then grants a random item from the provided pool.
+/// Post-battle chest selection panel.
+/// Spawns Small/Large chest buttons. Opening a chest spends a matching key and grants a random item.
 /// </summary>
 public class PostBattleChestPanel : MonoBehaviour
 {
@@ -29,6 +27,10 @@ public class PostBattleChestPanel : MonoBehaviour
     [SerializeField] private Button skipButton;
     [SerializeField] private TMP_Text infoText;
 
+    [Header("Behavior")]
+    [Tooltip("If true, the chest phase will end immediately after the player successfully opens any chest (showing the Inventory/Continue panel next).")]
+    [SerializeField] private bool finishAfterAnyChestOpened = true;
+
     private readonly List<Button> _spawned = new List<Button>();
     private Action _onDone;
 
@@ -41,9 +43,26 @@ public class PostBattleChestPanel : MonoBehaviour
 
     public bool IsOpen => root != null && root.activeSelf;
 
+    private void OnEnable()
+    {
+        Debug.Log($"[PostBattleChestPanel] Enabled. activeInHierarchy={gameObject.activeInHierarchy} time={Time.time:0.00}", this);
+    }
+
+    private void OnDisable()
+    {
+        Debug.Log($"[PostBattleChestPanel] Disabled. time={Time.time:0.00}", this);
+    }
+
     private void Awake()
     {
-        if (root != null) root.SetActive(false);
+        // Be resilient to missing inspector wiring.
+        if (root == null)
+            root = gameObject;
+
+        if (smallChestContainer == null)
+            smallChestContainer = transform;
+        if (largeChestContainer == null)
+            largeChestContainer = transform;
 
         if (skipButton != null)
         {
@@ -61,6 +80,11 @@ public class PostBattleChestPanel : MonoBehaviour
         PostBattleRewardPanel unusedChoicePanel,
         Action onDone)
     {
+        Debug.Log($"[PostBattleChestPanel] Show() called. small={smallChestCount} large={largeChestCount} time={Time.time:0.00}", this);
+
+        if (root == null)
+            root = gameObject;
+
         _hero = hero;
         _inventory = inventory;
         _pool = rewardPool;
@@ -71,7 +95,12 @@ public class PostBattleChestPanel : MonoBehaviour
 
         ClearSpawned();
 
+        // Force visible
+        gameObject.SetActive(true);
         if (root != null) root.SetActive(true);
+        enabled = true;
+
+        transform.SetAsLastSibling();
 
         SpawnChests();
         RefreshInfo();
@@ -86,10 +115,18 @@ public class PostBattleChestPanel : MonoBehaviour
         _pool = null;
 
         if (root != null) root.SetActive(false);
+        gameObject.SetActive(false);
     }
 
     private void SpawnChests()
     {
+        if (smallChestButtonPrefab == null || largeChestButtonPrefab == null)
+        {
+            Debug.LogWarning("[PostBattleChestPanel] Missing chest button prefab reference(s). Auto-finishing.", this);
+            Finish();
+            return;
+        }
+
         // Small
         for (int i = 0; i < _smallRemaining; i++)
         {
@@ -101,7 +138,8 @@ public class PostBattleChestPanel : MonoBehaviour
                 img.sprite = smallChestIcon;
 
             btn.onClick.RemoveAllListeners();
-            btn.onClick.AddListener(() => TryOpenSmall(btn));
+            Button captured = btn;
+            btn.onClick.AddListener(() => TryOpenSmall(captured));
         }
 
         // Large
@@ -115,12 +153,15 @@ public class PostBattleChestPanel : MonoBehaviour
                 img.sprite = largeChestIcon;
 
             btn.onClick.RemoveAllListeners();
-            btn.onClick.AddListener(() => TryOpenLarge(btn));
+            Button captured = btn;
+            btn.onClick.AddListener(() => TryOpenLarge(captured));
         }
     }
 
     private void TryOpenSmall(Button btn)
     {
+        Debug.Log($"[PostBattleChestPanel] TryOpenSmall() clicked. time={Time.time:0.00}", this);
+
         if (_hero == null) return;
 
         if (!_hero.TrySpendSmallKey(1))
@@ -134,11 +175,21 @@ public class PostBattleChestPanel : MonoBehaviour
 
         GrantRandomItemReward();
         RefreshInfo();
+
+        if (finishAfterAnyChestOpened)
+        {
+            Debug.Log($"[PostBattleChestPanel] finishAfterAnyChestOpened=true -> finishing after Small chest. time={Time.time:0.00}", this);
+            Finish();
+            return;
+        }
+
         CheckAutoFinish();
     }
 
     private void TryOpenLarge(Button btn)
     {
+        Debug.Log($"[PostBattleChestPanel] TryOpenLarge() clicked. time={Time.time:0.00}", this);
+
         if (_hero == null) return;
 
         if (!_hero.TrySpendLargeKey(1))
@@ -152,6 +203,14 @@ public class PostBattleChestPanel : MonoBehaviour
 
         GrantRandomItemReward();
         RefreshInfo();
+
+        if (finishAfterAnyChestOpened)
+        {
+            Debug.Log($"[PostBattleChestPanel] finishAfterAnyChestOpened=true -> finishing after Large chest. time={Time.time:0.00}", this);
+            Finish();
+            return;
+        }
+
         CheckAutoFinish();
     }
 
@@ -162,7 +221,10 @@ public class PostBattleChestPanel : MonoBehaviour
 
         ItemOptionSO chosen = _pool[UnityEngine.Random.Range(0, _pool.Count)];
         if (chosen != null && chosen.item != null)
+        {
             _inventory.Add(chosen.item, chosen.quantity);
+            Debug.Log($"[PostBattleChestPanel] Granted item '{chosen.item.name}' x{chosen.quantity}. time={Time.time:0.00}", this);
+        }
     }
 
     private void CheckAutoFinish()
@@ -188,6 +250,7 @@ public class PostBattleChestPanel : MonoBehaviour
 
     private void Finish()
     {
+        Debug.Log($"[PostBattleChestPanel] Finish() -> invoking onDone. time={Time.time:0.00}", this);
         _onDone?.Invoke();
     }
 

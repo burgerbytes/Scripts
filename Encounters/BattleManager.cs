@@ -1620,6 +1620,8 @@ actor.hasActedThisRound = true;
 
     private IEnumerator HandleEncounterVictoryRoutine()
     {
+        Debug.Log($"[Battle] Victory detected. Starting post-battle flow. time={Time.time:0.00}", this);
+
         if (_postBattleRunning)
             yield break;
 
@@ -1737,11 +1739,23 @@ actor.hasActedThisRound = true;
         {
             bool cont = false;
 
+            // Ensure the panel object itself is active (Show() only toggles its internal root).
+            if (!postBattlePrepPanel.gameObject.activeSelf)
+                postBattlePrepPanel.gameObject.SetActive(true);
+
             int battlesCompleted = stretchController != null ? stretchController.BattlesCompleted : 0;
             int battlesPerStretch = stretchController != null ? stretchController.BattlesPerStretch : 1;
 
-            postBattlePrepPanel.Show(battlesCompleted, battlesPerStretch, () => cont = true);
+            Debug.Log($"[Battle] Showing PostBattlePrepPanel. battlesCompleted={battlesCompleted} battlesPerStretch={battlesPerStretch} time={Time.time:0.00}", this);
+
+            postBattlePrepPanel.Show(battlesCompleted, battlesPerStretch, () =>
+            {
+                cont = true;
+            });
+
             yield return new WaitUntil(() => cont);
+
+            // Hide it once continue is pressed so it won't overlap the next encounter UI.
             postBattlePrepPanel.Hide();
         }
 // Start the next encounter.
@@ -1825,6 +1839,10 @@ actor.hasActedThisRound = true;
     {
         if (_state == s) return;
         _state = s;
+
+        if (s == BattleState.BattleEnd)
+            Debug.Log($"[Battle] Battle ended. state={s} time={Time.time:0.00}", this);
+
         OnBattleStateChanged?.Invoke(_state);
     }
 
@@ -2164,3 +2182,4 @@ actor.hasActedThisRound = true;
     }
 
 }
+
