@@ -17,7 +17,20 @@ public class EnemyPartyCompositionSO : ScriptableObject
     [Tooltip("Enemy prefabs to spawn (in order). Duplicates are allowed.")]
     public List<GameObject> enemies = new List<GameObject>();
 
-    [Header("Loot (Optional Override)")]
+    [Header("Battle Rewards")]
+    [Tooltip("Gold awarded immediately on victory. Added to the party's shared gold (HeroStats).")]
+    public long goldReward = 0;
+
+    [Tooltip("How many Small Chests are offered after this battle.")]
+    public int smallChestCount = 2;
+
+    [Tooltip("How many Large Chests are offered after this battle.")]
+    public int largeChestCount = 1;
+
+    [Tooltip("Reward reel configuration used after this battle (keys / special symbols). If null, the normal combat reels remain.")]
+    public RewardReelConfigSO rewardReelConfig;
+
+[Header("Loot (Optional Override)")]
     [Tooltip("If set, post-battle rewards will be rolled ONLY from this list for this encounter.\nIf null/empty, BattleManager uses the global reward pool (existing behavior).")]
     public List<ItemOptionSO> lootTable;
 }

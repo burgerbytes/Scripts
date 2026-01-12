@@ -1,5 +1,7 @@
 // GUID: ea47960c4ce364a4980645e51f542a03
 ////////////////////////////////////////////////////////////
+// GUID: ea47960c4ce364a4980645e51f542a03
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Reflection;
@@ -51,6 +53,17 @@ public class Monster : MonoBehaviour
     private bool HasTag(MonsterTag tag)
     {
         return tags != null && tags.Contains(tag);
+    }
+
+    private static bool HasAbilityTag(System.Collections.Generic.IReadOnlyList<AbilityTag> abilityTags, AbilityTag tag)
+    {
+        if (abilityTags == null) return false;
+        for (int i = 0; i < abilityTags.Count; i++)
+        {
+            if (abilityTags[i] == tag)
+                return true;
+        }
+        return false;
     }
 
     /// <summary>
@@ -251,6 +264,16 @@ public class Monster : MonoBehaviour
 
         int final = Mathf.RoundToInt(modified);
         if (final < 0) final = 0;
+
+        // Assassinate: if this hit would leave the target at 1 HP (or less), execute.
+        // This matches the Ninja Backstab behavior ("kills when they'd have 1 HP after the hit").
+        if (final > 0 && HasAbilityTag(abilityTags, AbilityTag.Assassinate))
+        {
+            int hpAfter = _currentHp - final;
+            if (hpAfter <= 1)
+                final = _currentHp; // preview lethal
+        }
+
         return final;
     }
 
@@ -268,6 +291,14 @@ public class Monster : MonoBehaviour
 
         int final = Mathf.RoundToInt(modified);
         if (final < 0) final = 0;
+
+        // Assassinate: if this hit would leave the target at 1 HP (or less), execute.
+        if (final > 0 && HasAbilityTag(abilityTags, AbilityTag.Assassinate))
+        {
+            int hpAfter = _currentHp - final;
+            if (hpAfter <= 1)
+                final = _currentHp; // make the hit lethal
+        }
 
         if (final == 0)
         {

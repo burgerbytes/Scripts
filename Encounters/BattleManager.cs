@@ -156,6 +156,13 @@ public class BattleManager : MonoBehaviour
     [Tooltip("Optional override. If null, BattleManager will reuse Start Reward Panel.")]
     [SerializeField] private PostBattleRewardPanel postBattleRewardPanel;
 
+    [Header("Post-Battle Chest / Reward Reels")]
+    [Tooltip("Panel that shows Small/Large chests and a Skip option.")] 
+    [SerializeField] private PostBattleChestPanel postBattleChestPanel;
+
+    [Tooltip("Optional: shown after post-battle rewards so the player can reorganize before the next fight.")] 
+    [SerializeField] private PostBattlePrepPanel postBattlePrepPanel;
+
     [Header("External Systems")]
     [SerializeField] private StretchController stretchController;
     [SerializeField] private ScrollingBackground scrollingBackground;
@@ -1633,46 +1640,111 @@ actor.hasActedThisRound = true;
         if (scrollingBackground != null)
             scrollingBackground.SetPaused(false);
 
-        // Roll and present post-battle rewards.
-        if (enablePostBattleRewards)
+        // Award victory gold (from the active enemy party composition, if any).
+        HeroStats goldOwner = null;
+        if (_party != null && _party.Count > 0)
+            goldOwner = _party[0]?.stats;
+
+        if (goldOwner != null && _activeEnemyParty != null && _activeEnemyParty.goldReward > 0)
+            goldOwner.AddGold(_activeEnemyParty.goldReward);
+
+        // Use encounter-specific loot if present; else fall back to global pool.
+        List<ItemOptionSO> pool =
+            (_activeLootOverride != null && _activeLootOverride.Count > 0)
+                ? _activeLootOverride
+                : (postBattleFlow != null ? postBattleFlow.GetItemOptionPool() : null);
+
+        // ✅ NEW POST-BATTLE FLOW:
+        // - Swap reels into Reward Mode (pay gold to spin; 3-in-a-row key payouts)
+        // - Offer Small/Large chests (spend keys to open)
+        // - Then show the Prep panel (Inventory / Continue)
+        if (enablePostBattleRewards && postBattleChestPanel != null && pool != null && pool.Count > 0)
         {
-            // Use encounter-specific loot if present; else fall back to global pool.
-            List<ItemOptionSO> pool =
-                (_activeLootOverride != null && _activeLootOverride.Count > 0)
-                    ? _activeLootOverride
-                    : (postBattleFlow != null ? postBattleFlow.GetItemOptionPool() : null);
+            // 1) Reward reels (optional per enemy party)
+            if (reelSpinSystem != null && _activeEnemyParty != null && _activeEnemyParty.rewardReelConfig != null)
+                reelSpinSystem.EnterRewardMode(_activeEnemyParty.rewardReelConfig, goldOwner);
 
-            PostBattleRewardPanel panel = postBattleRewardPanel != null ? postBattleRewardPanel : startRewardPanel;
+            bool done = false;
 
-            if (pool != null && pool.Count > 0 && panel != null)
+            int smallCount = _activeEnemyParty != null ? Mathf.Max(0, _activeEnemyParty.smallChestCount) : 0;
+            int largeCount = _activeEnemyParty != null ? Mathf.Max(0, _activeEnemyParty.largeChestCount) : 0;
+
+            postBattleChestPanel.Show(
+                goldOwner,
+                smallCount,
+                largeCount,
+                pool,
+                inventory,
+                // Reuse the existing item reward panel for the "choose item" step
+                (postBattleRewardPanel != null ? postBattleRewardPanel : startRewardPanel),
+                () => done = true
+            );
+
+            yield return new WaitUntil(() => done);
+
+            postBattleChestPanel.Hide();
+
+            // Restore combat reels
+            if (reelSpinSystem != null)
             {
-                int min = Mathf.Clamp(postBattleRewardChoicesRange.x, 1, pool.Count);
-                int max = Mathf.Clamp(postBattleRewardChoicesRange.y, min, pool.Count);
-                int desired = UnityEngine.Random.Range(min, max + 1);
+                // Rebuild from current party so portraits/strips return
+                var partyStats = new List<HeroStats>(_party != null ? _party.Count : 0);
+                if (_party != null)
+                    for (int i = 0; i < _party.Count; i++)
+                        if (_party[i]?.stats != null) partyStats.Add(_party[i].stats);
 
-                List<ItemOptionSO> rolled = RollUnique(pool, desired);
-                if (includeSkipOptionPostBattle)
-                    rolled.Add(BuildRuntimeSkipOption());
+                reelSpinSystem.ExitRewardMode(partyStats);
+            }
+        }
+        else
+        {
+            // Fallback: original single "choose one" reward behavior
+            if (enablePostBattleRewards)
+            {
+                PostBattleRewardPanel panel = postBattleRewardPanel != null ? postBattleRewardPanel : startRewardPanel;
 
-                ItemOptionSO chosen = null;
-                bool picked = false;
-
-                panel.Show(rolled, opt =>
+                if (pool != null && pool.Count > 0 && panel != null)
                 {
-                    chosen = opt;
-                    picked = true;
-                });
+                    int min = Mathf.Clamp(postBattleRewardChoicesRange.x, 1, pool.Count);
+                    int max = Mathf.Clamp(postBattleRewardChoicesRange.y, min, pool.Count);
+                    int desired = UnityEngine.Random.Range(min, max + 1);
 
-                yield return new WaitUntil(() => picked);
+                    List<ItemOptionSO> rolled = RollUnique(pool, desired);
+                    if (includeSkipOptionPostBattle)
+                        rolled.Add(BuildRuntimeSkipOption());
 
-                panel.Hide();
+                    ItemOptionSO chosen = null;
+                    bool picked = false;
 
-                if (chosen != null && chosen.item != null && inventory != null)
-                    inventory.Add(chosen.item, chosen.quantity);
+                    panel.Show(rolled, opt =>
+                    {
+                        chosen = opt;
+                        picked = true;
+                    });
+
+                    yield return new WaitUntil(() => picked);
+
+                    panel.Hide();
+
+                    if (chosen != null && chosen.item != null && inventory != null)
+                        inventory.Add(chosen.item, chosen.quantity);
+                }
             }
         }
 
-        // Start the next encounter.
+        // Prep / inventory reorg panel (optional)
+        if (postBattlePrepPanel != null)
+        {
+            bool cont = false;
+
+            int battlesCompleted = stretchController != null ? stretchController.BattlesCompleted : 0;
+            int battlesPerStretch = stretchController != null ? stretchController.BattlesPerStretch : 1;
+
+            postBattlePrepPanel.Show(battlesCompleted, battlesPerStretch, () => cont = true);
+            yield return new WaitUntil(() => cont);
+            postBattlePrepPanel.Hide();
+        }
+// Start the next encounter.
         yield return null;
 
         _postBattleRunning = false;
