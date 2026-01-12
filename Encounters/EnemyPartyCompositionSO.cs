@@ -1,5 +1,4 @@
 // PATH: Assets/Scripts/Encounters/EnemyPartyCompositionSO.cs
-// (New)
 using System.Collections.Generic;
 using UnityEngine;
 
