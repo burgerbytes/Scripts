@@ -29,7 +29,8 @@ public class Monster : MonoBehaviour
     {
         Beast,
         Inorganic,
-        Elemental
+        Ice_Elemental,
+        Fire_Elemental 
     }
 
     [Header("Info")]
