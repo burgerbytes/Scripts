@@ -39,6 +39,10 @@ public class ReelSpinSystem : MonoBehaviour
     [SerializeField] private int spinsPerTurn = 3;
     [SerializeField] private Button stopSpinningButton;
 
+    [Header("Reward Reel Mode (Post-Battle)")]
+    [Tooltip("Optional default reward config. BattleManager can override by calling EnterRewardMode(...)")]
+    [SerializeField] private RewardReelConfigSO defaultRewardConfig;
+
     [Header("Symbol -> Resource Mapping")]
     [SerializeField] private List<SymbolResourceMapEntry> symbolToResourceMap = new List<SymbolResourceMapEntry>();
 
@@ -81,6 +85,14 @@ public class ReelSpinSystem : MonoBehaviour
 
     public bool IsIdle => !spinning;
 
+    // Reward mode state
+    private bool _rewardModeActive;
+    private RewardReelConfigSO _rewardConfig;
+    private HeroStats _rewardHero;
+    private readonly List<ReelStripSO> _savedStrips = new List<ReelStripSO>();
+
+    public bool IsRewardMode => _rewardModeActive;
+
     private void Awake()
     {
         spinsRemaining = spinsPerTurn;
@@ -108,7 +120,7 @@ public class ReelSpinSystem : MonoBehaviour
     }
 
     /// <summary>
-    /// ✅ NEW: Called by BattleManager after it instantiates the ally party.
+    /// Called by BattleManager after it instantiates the ally party.
     /// Assigns each reel's strip + pick-ally portrait from the corresponding hero prefab instance.
     /// Mapping is index-based: party[0] -> reels[0], party[1] -> reels[1], etc.
     /// </summary>
@@ -146,6 +158,86 @@ public class ReelSpinSystem : MonoBehaviour
                 entry.pickAllyPortraitImage.preserveAspect = true;
             }
         }
+    }
+
+    // ---------------- Reward Reel Mode ----------------
+
+    /// <summary>
+    /// Temporarily swaps the reels to a reward-strip and changes payout logic:
+    /// - Each spin costs gold (config.goldCostPerSpin) from the provided hero.
+    /// - Only pays out when all 3 midrow symbols match AND map to a reward payout.
+    /// </summary>
+    public void EnterRewardMode(RewardReelConfigSO config, HeroStats goldSource)
+    {
+        if (config == null) config = defaultRewardConfig;
+        if (config == null)
+        {
+            Debug.LogWarning("[ReelSpinSystem] EnterRewardMode called but no RewardReelConfigSO provided.", this);
+            return;
+        }
+
+        _rewardModeActive = true;
+        _rewardConfig = config;
+        _rewardHero = goldSource;
+
+        // Save current strips so we can restore later.
+        _savedStrips.Clear();
+        for (int i = 0; i < reels.Count; i++)
+            _savedStrips.Add(reels[i] != null ? reels[i].strip : null);
+
+        // Apply reward strip to all reels that exist.
+        for (int i = 0; i < reels.Count; i++)
+        {
+            var entry = reels[i];
+            if (entry == null) continue;
+
+            entry.strip = config.rewardStrip;
+
+            if (entry.ui != null && config.rewardStrip != null)
+                entry.ui.SetStrip(config.rewardStrip, startIndex: 0, refreshNow: true);
+
+            if (entry.reel3d != null && config.rewardStrip != null)
+                entry.reel3d.SetStrip(config.rewardStrip, rebuildNow: true);
+        }
+
+        // In reward mode, spins are limited by gold, not turn count.
+        spinsRemaining = int.MaxValue;
+        OnSpinsRemainingChanged?.Invoke(spinsRemaining);
+    }
+
+    /// <summary>
+    /// Restores the previous reel strips (or re-configures from party if provided).
+    /// </summary>
+    public void ExitRewardMode(IReadOnlyList<HeroStats> partyToRestore = null)
+    {
+        _rewardModeActive = false;
+        _rewardConfig = null;
+        _rewardHero = null;
+
+        // Restore from party if provided (preferred; also restores portraits)
+        if (partyToRestore != null)
+        {
+            ConfigureFromParty(partyToRestore);
+        }
+        else
+        {
+            // Restore saved strips
+            for (int i = 0; i < reels.Count && i < _savedStrips.Count; i++)
+            {
+                var entry = reels[i];
+                if (entry == null) continue;
+
+                entry.strip = _savedStrips[i];
+
+                if (entry.ui != null && entry.strip != null)
+                    entry.ui.SetStrip(entry.strip, startIndex: 0, refreshNow: true);
+
+                if (entry.reel3d != null && entry.strip != null)
+                    entry.reel3d.SetStrip(entry.strip, rebuildNow: true);
+            }
+        }
+
+        _savedStrips.Clear();
     }
 
     // Compatibility
@@ -213,6 +305,42 @@ public class ReelSpinSystem : MonoBehaviour
         }
     }
 
+    private void EvaluateRewardPayout(List<ReelSymbolSO> landed)
+    {
+        if (_rewardConfig == null) _rewardConfig = defaultRewardConfig;
+        if (_rewardConfig == null) return;
+        if (_rewardHero == null) return;
+        if (landed == null || landed.Count < 3) return;
+
+        ReelSymbolSO a = landed[0];
+        ReelSymbolSO b = landed[1];
+        ReelSymbolSO c = landed[2];
+
+        // Must be 3-of-a-kind and not the configured null symbol.
+        if (a == null || b == null || c == null) return;
+        if (a != b || a != c) return;
+
+        if (_rewardConfig.nullSymbol != null && a == _rewardConfig.nullSymbol) return;
+
+        if (!_rewardConfig.TryGetPayout(a, out var payoutType, out var amount))
+            return;
+
+        amount = Mathf.Max(0, amount);
+        if (amount <= 0) return;
+
+        switch (payoutType)
+        {
+            case RewardReelConfigSO.PayoutType.SmallKey:
+                _rewardHero.AddSmallKeys(amount);
+                break;
+            case RewardReelConfigSO.PayoutType.LargeKey:
+                _rewardHero.AddLargeKeys(amount);
+                break;
+        }
+
+        Debug.Log($"[ReelSpinSystem] Reward payout: {payoutType} x{amount} (symbol={a.name})");
+    }
+
     private IEnumerator Spin3DPostSelectRoutine(System.Random rng)
     {
         var three = GetFirstThree3DReels();
@@ -247,23 +375,54 @@ public class ReelSpinSystem : MonoBehaviour
         if (log3DMidRowSymbolsEachSpin)
             Debug.Log($"[ReelSpinSystem] 3D MidRow (post-select): {string.Join(" | ", parts)}");
 
-        SetPendingFromSymbols(landed);
+        if (_rewardModeActive)
+        {
+            EvaluateRewardPayout(landed);
+        }
+        else
+        {
+            SetPendingFromSymbols(landed);
 
-        spinsRemaining = Mathf.Max(0, spinsRemaining - 1);
-        OnSpinsRemainingChanged?.Invoke(spinsRemaining);
+            spinsRemaining = Mathf.Max(0, spinsRemaining - 1);
+            OnSpinsRemainingChanged?.Invoke(spinsRemaining);
+
+            if (spinsRemaining <= 0)
+                CollectPendingPayout();
+        }
 
         spinning = false;
-
-        if (spinsRemaining <= 0)
-            CollectPendingPayout();
-
         _threeDSpinRoutine = null;
     }
 
+    /// <summary>
+    /// Main entry point used by existing code (TurnSimulator, UI buttons, BattleManager).
+    /// In reward-mode, each spin costs gold. In combat-mode, spins are limited per turn.
+    /// </summary>
     public void TrySpin()
     {
         if (spinning) return;
-        if (spinsRemaining <= 0) return;
+
+        if (_rewardModeActive)
+        {
+            if (_rewardConfig == null) _rewardConfig = defaultRewardConfig;
+            if (_rewardConfig == null) return;
+            if (_rewardHero == null) return;
+
+            int cost = Mathf.Max(0, _rewardConfig.goldCostPerSpin);
+            if (cost > 0)
+            {
+                // Requires HeroStats.TrySpendGold(int)
+                if (!_rewardHero.TrySpendGold(cost))
+                {
+                    Debug.Log("[ReelSpinSystem] Not enough gold to spin reward reels.");
+                    return;
+                }
+            }
+        }
+        else
+        {
+            if (spinsRemaining <= 0) return;
+        }
 
         spinning = true;
 
@@ -281,15 +440,19 @@ public class ReelSpinSystem : MonoBehaviour
             return;
         }
 
+        // If you ever disable 3D mode, you'd implement 2D spin here.
         spinning = false;
     }
 
     public void StopSpinningAndCollect()
     {
+        // In reward mode, payouts happen immediately on stop; nothing to collect.
+        if (_rewardModeActive) return;
+
         CollectPendingPayout();
     }
 
-    void CollectPendingPayout()
+    private void CollectPendingPayout()
     {
         Debug.Log($"[ReelSpinSystem] CollectPendingPayout CALLED. pendingA={pendingA}, pendingD={pendingD}, pendingM={pendingM}, pendingW={pendingW}, spinsRemaining={spinsRemaining}");
         if (pendingA == 0 && pendingD == 0 && pendingM == 0 && pendingW == 0)
