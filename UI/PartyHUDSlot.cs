@@ -1,6 +1,3 @@
-// GUID: 70f097a53128abb419f85d811ffa21eb
-////////////////////////////////////////////////////////////
-// GUID: 70f097a53128abb419f85d811ffa21eb
 ////////////////////////////////////////////////////////////
 using TMPro;
 using UnityEngine;
@@ -23,6 +20,9 @@ public class PartyHUDSlot : MonoBehaviour
 
     [Tooltip("If true, portraitImage will be disabled when no portrait is available.")]
     [SerializeField] private bool hidePortraitWhenNull = true;
+
+    [Header("Conceal / Hidden")]
+    [SerializeField] private Color hiddenPortraitTint = new Color(0.65f, 0.65f, 0.65f, 1f);
 
     [Header("Texts")]
     [SerializeField] private TMP_Text nameText;
@@ -118,6 +118,10 @@ public class PartyHUDSlot : MonoBehaviour
         int incomingDamagePreview)
     {
         if (nameText != null) nameText.text = snapshot.Name ?? $"Ally {partyIndex + 1}";
+
+        // Hidden (Conceal) visual: tint portrait gray.
+        if (portraitImage != null)
+            portraitImage.color = snapshot.IsHidden ? hiddenPortraitTint : Color.white;
         if (hpText != null) hpText.text = $"{snapshot.HP}/{snapshot.MaxHP}";
 
         // --- HP prediction & damage segment ---
@@ -170,6 +174,7 @@ public class PartyHUDSlot : MonoBehaviour
         if (statusText != null)
         {
             if (snapshot.IsDead) statusText.text = "Status: DEAD";
+            else if (snapshot.IsHidden) statusText.text = "Status: HIDDEN";
             else if (snapshot.IsBlocking) statusText.text = "Status: BLOCKING";
             else statusText.text = "Status: READY";
         }
@@ -267,3 +272,4 @@ public class PartyHUDSlot : MonoBehaviour
             blockValueText.gameObject.SetActive(visible);
     }
 }
+

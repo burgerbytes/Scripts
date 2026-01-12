@@ -1,3 +1,5 @@
+// GUID: ea47960c4ce364a4980645e51f542a03
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Reflection;
@@ -15,6 +17,9 @@ public class Monster : MonoBehaviour
 
         [Tooltip("Controls how fast the attack telegraph/animation plays. Higher = faster.")]
         public int speed = 10;
+
+        [Tooltip("AoE abilities hit all allies.")]
+        public bool isAoe = false;
     }
 
     public event Action<int, int> OnHpChanged;
@@ -69,6 +74,16 @@ public class Monster : MonoBehaviour
     public int Defense => defense;
 
     public bool IsDead => _currentHp <= 0;
+
+    // True when the monster's default attack is configured as AoE.
+    public bool IsDefaultAttackAoE
+    {
+        get
+        {
+            var atk = GetDefaultAttack();
+            return atk != null && atk.isAoe;
+        }
+    }
 
     private BattleManager _battleManager;
 

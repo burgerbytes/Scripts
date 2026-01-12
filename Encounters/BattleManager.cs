@@ -17,7 +17,7 @@ public class BattleManager : MonoBehaviour
 
     public enum BattleState { Idle, BattleStart, PlayerPhase, EnemyPhase, BattleEnd }
     public enum PlayerActionType { None, Ability1, Ability2 }
-    public enum IntentType { Attack }
+    public enum IntentType { Attack, AoEAttack }
 
     [Serializable]
     private class PartyMemberRuntime
@@ -102,6 +102,7 @@ public class BattleManager : MonoBehaviour
 
         public bool IsBlocking;
         public int Shield;
+        public bool IsHidden;
 
         // UI-only: preview for pending Block cast (shield not yet applied yet)
         public bool HasBlockPreview;
@@ -806,21 +807,51 @@ public class BattleManager : MonoBehaviour
             // Lunge/translate attack (no animation clips required). Damage is applied at the lunge peak.
             yield return EnemyLungeAttack(intent.enemy, targetTf, () =>
             {
+                int raw = intent.enemy != null ? intent.enemy.GetDamage() : 0;
+
+                // Conceal / Hidden logic:
+                // - Single-target attacks miss hidden heroes entirely.
+                // - AoE attacks hit all heroes (including hidden) and break conceal.
+                if (intent.type == IntentType.AoEAttack)
+                {
+                    for (int pi = 0; pi < PartyCount; pi++)
+                    {
+                        var pm = _party[pi];
+                        var hs = pm != null ? pm.stats : null;
+                        if (hs == null || pm.IsDead) continue;
+
+                        if (logFlow) Debug.Log($"[Battle][EnemyAtk][AoE] Applying incoming damage. attacker={(intent.enemy != null ? intent.enemy.name : "<null>")} targetIdx={pi} raw={raw} targetShieldBefore={hs.Shield}", this);
+                        int dealt = hs.ApplyIncomingDamage(raw);
+
+                        // AoE breaks Conceal/Hidden.
+                        if (hs.IsHidden) hs.SetHidden(false);
+
+                        if (pm.avatarGO != null)
+                            SpawnDamageNumber(pm.avatarGO.transform.position, dealt);
+                    }
+
+                    ApplyPartyHiddenVisuals();
+                    return;
+                }
+
+                // Single-target attack
                 if (targetStats == null) return;
 
-                int raw = intent.enemy.GetDamage();
+                if (targetStats.IsHidden)
+                {
+                    if (logFlow) Debug.Log($"[Battle][EnemyAtk] Target is hidden (Conceal). Attack misses. attacker={(intent.enemy != null ? intent.enemy.name : "<null>")} targetIdx={targetIdx}", this);
+                    return;
+                }
 
                 // Apply damage (HeroStats handles shield+HP).
-                if (logFlow) Debug.Log($"[Battle][EnemyAtk] Applying incoming damage. attacker={intent.enemy.name} targetIdx={targetIdx} raw={raw} targetShieldBefore={targetStats.Shield}", this);
-                int dealt = targetStats.ApplyIncomingDamage(raw);
-                if (logFlow) Debug.Log($"[Battle][EnemyAtk] Damage result. dealtToHp={dealt} targetShieldAfter={targetStats.Shield}", this);
-                if (logFlow) Debug.Log($"[Battle][EnemyAtk] Damage applied. dealtToHP={dealt} targetShieldAfter={targetStats.Shield}", this);
+                if (logFlow) Debug.Log($"[Battle][EnemyAtk] Applying incoming damage. attacker={(intent.enemy != null ? intent.enemy.name : "<null>")} targetIdx={targetIdx} raw={raw} targetShieldBefore={targetStats.Shield}", this);
+                int dealtSingle = targetStats.ApplyIncomingDamage(raw);
+                if (logFlow) Debug.Log($"[Battle][EnemyAtk] Damage result. dealtToHp={dealtSingle} targetShieldAfter={targetStats.Shield}", this);
 
                 if (targetGO != null)
-                    SpawnDamageNumber(targetGO.transform.position, dealt);
+                    SpawnDamageNumber(targetGO.transform.position, dealtSingle);
             });
-
-            NotifyPartyChanged();
+NotifyPartyChanged();
 
             // If all heroes are dead, end battle for now (you can wire a defeat flow later). (you can wire a defeat flow later).
             if (IsPartyDefeated())
@@ -1142,6 +1173,13 @@ public class BattleManager : MonoBehaviour
                         stateToPlay = "ninja_backstab"; // fallback example
                     break;
 
+                case "Conceal":
+                    // Conceal has no damage and no animation for now.
+                    useImpactSync = false;
+                    stateToPlay = null;
+                    if (logFlow) Debug.Log("[Battle][Resolve] Conceal: no animation and no impact sync.", this);
+                    break;
+
                 case "Block":
                     // Block has no damage and no animation for now.
                     useImpactSync = false;
@@ -1245,7 +1283,32 @@ public class BattleManager : MonoBehaviour
             }
         }
 
-        actor.hasActedThisRound = true;
+        
+        // ===== Conceal (Ninja) =====
+        // Conceal makes the caster untargetable by single-target enemy attacks until:
+        // - they are hit by an AoE attack, OR
+        // - they use an ability (except Backstab that kills the target).
+        bool wasHiddenBeforeCast = actorStats.IsHidden;
+
+        if (ability.name == "Conceal")
+        {
+            actorStats.SetHidden(true);
+        }
+        else if (wasHiddenBeforeCast)
+        {
+            bool keepHidden = false;
+
+            // Special case: Backstab does NOT break Conceal if it kills the enemy.
+            if (ability.name == "Backstab" && ability.targetType == AbilityTargetType.Enemy && enemyTarget != null && enemyTarget.IsDead)
+                keepHidden = true;
+
+            if (!keepHidden)
+                actorStats.SetHidden(false);
+        }
+
+        ApplyPartyHiddenVisuals();
+
+actor.hasActedThisRound = true;
 
         _resolving = false;
 
@@ -1347,7 +1410,7 @@ public class BattleManager : MonoBehaviour
 
             _plannedIntents.Add(new EnemyIntent
             {
-                type = IntentType.Attack,
+                type = (m != null && m.IsDefaultAttackAoE) ? IntentType.AoEAttack : IntentType.Attack,
                 enemy = m,
                 targetPartyIndex = targetIdx
             });
@@ -1684,7 +1747,36 @@ public class BattleManager : MonoBehaviour
         OnBattleStateChanged?.Invoke(_state);
     }
 
-    private void NotifyPartyChanged() => OnPartyChanged?.Invoke();
+    private void NotifyPartyChanged()
+    {
+        ApplyPartyHiddenVisuals();
+        OnPartyChanged?.Invoke();
+    }
+
+    [Header("Conceal / Hidden Visuals")]
+    [SerializeField] private Color hiddenTint = new Color(0.65f, 0.65f, 0.65f, 1f);
+
+    private void ApplyPartyHiddenVisuals()
+    {
+        if (_party == null) return;
+
+        for (int i = 0; i < _party.Count; i++)
+        {
+            var pm = _party[i];
+            if (pm == null || pm.avatarGO == null) continue;
+
+            var hs = pm.stats;
+            bool hidden = hs != null && hs.IsHidden;
+
+            // Tint the in-world sprite (prefab) gray when hidden.
+            var sr = pm.avatarGO.GetComponentInChildren<SpriteRenderer>(true);
+            if (sr != null)
+            {
+                sr.color = hidden ? hiddenTint : Color.white;
+            }
+        }
+    }
+
 
     private void SpawnDamageNumber(Vector3 worldPos, int amount)
     {
