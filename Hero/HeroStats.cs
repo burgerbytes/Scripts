@@ -96,6 +96,13 @@ public class HeroStats : MonoBehaviour
     public ReelStripSO ReelStrip => reelStrip;
     public Sprite Portrait => portrait;
 
+    // ---------------- Equipment (NEW) ----------------
+    [Header("Equipment (UI only, no effects yet)")]
+    [Tooltip("Equipment slots for this hero. Your current UI shows 3 slots per hero.")]
+    [SerializeField] private ItemSO[] equipmentSlots = new ItemSO[3];
+
+    public int EquipmentSlotCount => equipmentSlots != null ? equipmentSlots.Length : 0;
+
     // ---------------- Public Accessors ----------------
     public int Level => level;
     public int XP => xp;
@@ -141,10 +148,53 @@ public bool CanBlock => canBlock;
         currentHp = Mathf.Clamp(currentHp, 0, maxHp);
         currentStamina = Mathf.Clamp(currentStamina, 0f, maxStamina);
         currentShield = Mathf.Max(0, currentShield);
+
+        EnsureEquipmentArray();
         NotifyChanged();
     }
 
+    private void OnValidate()
+    {
+        EnsureEquipmentArray();
+    }
+
+    private void EnsureEquipmentArray()
+    {
+        if (equipmentSlots == null || equipmentSlots.Length != 3)
+            equipmentSlots = new ItemSO[3];
+    }
+
     private void NotifyChanged() => OnChanged?.Invoke();
+
+    // ---------------- Equipment API ----------------
+
+    public ItemSO GetEquipment(int slotIndex)
+    {
+        EnsureEquipmentArray();
+        if (slotIndex < 0 || slotIndex >= equipmentSlots.Length) return null;
+        return equipmentSlots[slotIndex];
+    }
+
+    public void SetEquipment(int slotIndex, ItemSO item, bool notify = true)
+    {
+        EnsureEquipmentArray();
+        if (slotIndex < 0 || slotIndex >= equipmentSlots.Length) return;
+
+        equipmentSlots[slotIndex] = item;
+        if (notify) NotifyChanged();
+    }
+
+    public bool HasEquipped(ItemSO item)
+    {
+        if (item == null) return false;
+        EnsureEquipmentArray();
+
+        for (int i = 0; i < equipmentSlots.Length; i++)
+        {
+            if (equipmentSlots[i] == item) return true;
+        }
+        return false;
+    }
 
     // ---------------- Run Lifecycle ----------------
 

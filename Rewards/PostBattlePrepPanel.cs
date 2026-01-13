@@ -61,8 +61,6 @@ public class PostBattlePrepPanel : MonoBehaviour
 
     public void Hide()
     {
-        Debug.Log($"[PostBattlePrepPanel] Hide() called. time={Time.time:0.00}", this);
-
         if (inventoryPanel != null) inventoryPanel.SetActive(false);
         if (deckPanel != null) deckPanel.SetActive(false);
 
