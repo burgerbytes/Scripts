@@ -1,3 +1,5 @@
+// GUID: 30f201f35d336bf4d840162cd6fd1fde
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -641,6 +643,14 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
         if (_pendingAction != PlayerActionType.None) return;
 
         ResourceCost cost = GetEffectiveCost(actor.stats, ability);
+
+        // Per-turn attack limit gate (e.g., Triple Blade / All-In effects)
+        if (ability != null && ability.baseDamage > 0 && actor.stats != null && !actor.stats.CanCommitDamageAttackThisTurn())
+        {
+            if (logFlow) Debug.Log($"[Battle][Ability] Blocked: {actor.name} has reached their attack limit for this turn.", this);
+            return;
+        }
+
         if (logFlow)
             Debug.Log($"[Battle][Ability] Pending set. actorIndex={actorIndex} ability={ability.abilityName} targetType={ability.targetType} shieldAmount={ability.shieldAmount} baseDamage={ability.baseDamage} cost={cost}");
 
@@ -1260,6 +1270,11 @@ NotifyPartyChanged();
 
             SpawnDamageNumber(enemyTarget.transform.position, dealt);
             actorStats.ApplyOnHitEffectsTo(enemyTarget);
+
+
+            // Mark that this hero has committed a damaging attack this turn (for per-turn limits).
+            if (ability.baseDamage > 0)
+                actorStats.RegisterDamageAttackCommitted();
 
             if (enemyTarget.IsDead)
             {
@@ -2190,3 +2205,6 @@ actor.hasActedThisRound = true;
         return partyMemberInstances[index];
     }
 }
+
+
+////////////////////////////////////////////////////////////

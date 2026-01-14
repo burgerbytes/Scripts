@@ -1,3 +1,5 @@
+// GUID: 1b9947b6d65d049459a446a098bd7cb3
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -63,6 +65,26 @@ public class ReelSpinSystem : MonoBehaviour
     [SerializeField] private bool log3DMidRowSymbolsEachSpin = true;
 
     public event Action<int> OnSpinsRemainingChanged;
+
+    /// <summary>
+    /// Fired when a non-reward-mode spin lands. Provides the landed symbols and a computed summary.
+    /// </summary>
+    public event Action<SpinLandedInfo> OnSpinLanded;
+
+    [Serializable]
+    public struct SpinLandedInfo
+    {
+        public List<ReelSymbolSO> symbols;
+        public int attackCount;
+        public int defendCount;
+        public int magicCount;
+        public int wildCount;
+
+        /// <summary>True when all landed symbols map to Attack (e.g., 3 reels -> 3 Attacks).</summary>
+        public bool IsTripleAttack => symbols != null && symbols.Count > 0 && attackCount == symbols.Count;
+    }
+
+    
     public int SpinsRemaining => spinsRemaining;
 
     // State
@@ -285,6 +307,41 @@ public class ReelSpinSystem : MonoBehaviour
         return true;
     }
 
+
+    private SpinLandedInfo BuildSpinLandedInfo(List<ReelSymbolSO> landed)
+    {
+        SpinLandedInfo info = new SpinLandedInfo
+        {
+            symbols = landed != null ? new List<ReelSymbolSO>(landed) : new List<ReelSymbolSO>(),
+            attackCount = 0,
+            defendCount = 0,
+            magicCount = 0,
+            wildCount = 0
+        };
+
+        if (landed == null)
+            return info;
+
+        foreach (var sym in landed)
+        {
+            if (sym == null)
+                continue;
+
+            if (TryMapSymbol(sym, out ResourceType rt))
+            {
+                switch (rt)
+                {
+                    case ResourceType.Attack: info.attackCount++; break;
+                    case ResourceType.Defend: info.defendCount++; break;
+                    case ResourceType.Magic: info.magicCount++; break;
+                    case ResourceType.Wild: info.wildCount++; break;
+                }
+            }
+        }
+
+        return info;
+    }
+
     private void SetPendingFromSymbols(List<ReelSymbolSO> syms)
     {
         pendingA = pendingD = pendingM = pendingW = 0;
@@ -381,6 +438,10 @@ public class ReelSpinSystem : MonoBehaviour
         }
         else
         {
+            // Build landed info and notify listeners (item synergies, UI, etc.)
+            SpinLandedInfo info = BuildSpinLandedInfo(landed);
+            OnSpinLanded?.Invoke(info);
+
             SetPendingFromSymbols(landed);
 
             spinsRemaining = Mathf.Max(0, spinsRemaining - 1);
@@ -464,3 +525,6 @@ public class ReelSpinSystem : MonoBehaviour
         pendingA = pendingD = pendingM = pendingW = 0;
     }
 }
+
+
+////////////////////////////////////////////////////////////

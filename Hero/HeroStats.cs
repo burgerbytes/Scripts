@@ -1,3 +1,5 @@
+// GUID: a3e2dd32a76bf594ba876a56162b79f2
+////////////////////////////////////////////////////////////
 using System;
 using UnityEngine;
 
@@ -40,6 +42,7 @@ public class HeroStats : MonoBehaviour
     [Tooltip("Persistent keys used for opening post-battle chests.")]
     [SerializeField] private int smallKeys = 0;
     [SerializeField] private int largeKeys = 0;
+
     [Header("Runtime")]
     [SerializeField] private int currentHp = 100;
     [SerializeField] private float currentStamina = 100f;
@@ -64,6 +67,17 @@ public class HeroStats : MonoBehaviour
 
     [Tooltip("Multiplier applied to Attack after flat bonus. Also used as ClassAttackModifier for ability damage.")]
     [SerializeField] private float attackMultiplier = 1.0f;
+
+    // ---------------- Per-Turn Combat Limits ----------------
+    [Header("Per-Turn Combat Limits (Runtime)")]
+    [Tooltip("Multiplier applied only for the current turn (e.g., temporary reel/item buffs). Resets at the start of each player turn.")]
+    [SerializeField] private float turnAttackMultiplier = 1.0f;
+
+    [Tooltip("Maximum number of damaging attacks this hero can commit this turn. Resets at the start of each player turn.")]
+    [SerializeField] private int maxDamageAttacksThisTurn = int.MaxValue;
+
+    [Tooltip("How many damaging attacks have been committed this turn (runtime).")]
+    [SerializeField] private int damageAttacksUsedThisTurn = 0;
 
     [Tooltip("Self damage taken whenever the hero commits an attack (e.g., Barbed Blade).")]
     [SerializeField] private int selfDamagePerAttack = 0;
@@ -103,14 +117,13 @@ public class HeroStats : MonoBehaviour
 
     public int EquipmentSlotCount => equipmentSlots != null ? equipmentSlots.Length : 0;
 
+    // ---------------- Equipment Change Events (NEW) ----------------
+    [Header("Equipment Debug Events")]
+    [Tooltip("If true, logs whenever an item is placed into an equipment slot under this hero's EquipGrid.")]
+    [SerializeField] private bool logOnEquipItemPlaced = true;
 
-// ---------------- Equipment Change Events (NEW) ----------------
-[Header("Equipment Debug Events")]
-[Tooltip("If true, logs whenever an item is placed into an equipment slot under this hero's EquipGrid.")]
-[SerializeField] private bool logOnEquipItemPlaced = true;
-
-// Cache of last known InventoryItem per equipment slot so we can detect changes.
-private InventoryItem[] _lastEquipmentItems;
+    // Cache of last known InventoryItem per equipment slot so we can detect changes.
+    private InventoryItem[] _lastEquipmentItems;
 
     // ---------------- Public Accessors ----------------
     public int Level => level;
@@ -124,7 +137,7 @@ private InventoryItem[] _lastEquipmentItems;
     public int CurrentHp => currentHp;
 
     // Effective attack with perks/modifiers
-    public int Attack => Mathf.Max(0, Mathf.RoundToInt((attack + attackFlatBonus) * Mathf.Max(0f, attackMultiplier)));
+    public int Attack => Mathf.Max(0, Mathf.RoundToInt((attack + attackFlatBonus) * Mathf.Max(0f, attackMultiplier) * Mathf.Max(0f, turnAttackMultiplier)));
     public int Defense => defense;
     public int Speed => speed;
 
@@ -136,12 +149,13 @@ private InventoryItem[] _lastEquipmentItems;
 
     public int SmallKeys => smallKeys;
     public int LargeKeys => largeKeys;
+
     public bool CanBlock => canBlock;
 
     public int Shield => currentShield;
     public bool IsHidden => isHidden;
 
-    public float ClassAttackModifier => Mathf.Max(0f, attackMultiplier);
+    public float ClassAttackModifier => Mathf.Max(0f, attackMultiplier) * Mathf.Max(0f, turnAttackMultiplier);
 
     public event Action OnChanged;
 
@@ -151,15 +165,14 @@ private InventoryItem[] _lastEquipmentItems;
         currentStamina = Mathf.Clamp(currentStamina, 0f, maxStamina);
         currentShield = Mathf.Max(0, currentShield);
 
-
-        InitEquipmentWatcher();
+        InitEquipmentWatcher();      // legacy array watcher (safe to keep)
+        RefreshEquipSlotsFromGrid(); // runtime EquipGrid watcher
         NotifyChanged();
     }
 
     private void NotifyChanged() => OnChanged?.Invoke();
 
-
-    // ---------------- Equipment Change Detection ----------------
+    // ---------------- Equipment Change Detection (Legacy InventorySlot[]) ----------------
     private void InitEquipmentWatcher()
     {
         if (equipmentSlots == null)
@@ -180,7 +193,6 @@ private InventoryItem[] _lastEquipmentItems;
     }
 
     // ---------------- Run Lifecycle ----------------
-
     public void ResetForNewRun()
     {
         level = 1;
@@ -208,7 +220,6 @@ private InventoryItem[] _lastEquipmentItems;
     }
 
     // ---------------- Class Eligibility Helpers ----------------
-
     public bool CanChooseBaseClass()
     {
         return baseClassDef == null;
@@ -227,6 +238,7 @@ private InventoryItem[] _lastEquipmentItems;
         // If no requirement specified, allow (you can tighten later).
         return true;
     }
+
     public void ApplyClassDefinition(ClassDefinitionSO def)
     {
         if (def == null) return;
@@ -256,7 +268,6 @@ private InventoryItem[] _lastEquipmentItems;
     }
 
     // ---------------- Combat State Helpers ----------------
-
     public void AddShield(int amount)
     {
         if (amount <= 0) return;
@@ -299,7 +310,6 @@ private InventoryItem[] _lastEquipmentItems;
     }
 
     // ---------------- XP / Leveling (GATED) ----------------
-
     public void GainXP(int amount)
     {
         if (amount <= 0) return;
@@ -350,7 +360,6 @@ private InventoryItem[] _lastEquipmentItems;
     }
 
     // ---------------- Damage / Resources ----------------
-
     public void TakeDamage(int amount)
     {
         if (amount <= 0) return;
@@ -374,7 +383,6 @@ private InventoryItem[] _lastEquipmentItems;
         NotifyChanged();
     }
 
-    
     public bool TrySpendGold(long amount)
     {
         if (amount <= 0) return true;
@@ -415,8 +423,8 @@ private InventoryItem[] _lastEquipmentItems;
         NotifyChanged();
         return true;
     }
-// ---------------- On-hit effects ----------------
 
+    // ---------------- On-hit effects ----------------
     public void ApplyOnHitEffectsTo(Monster target)
     {
         if (target == null) return;
@@ -435,7 +443,6 @@ private InventoryItem[] _lastEquipmentItems;
         return baseClassDef;
     }
 
-
     /// <summary>
     /// Used by BattleManager Undo. Restores core runtime combat state.
     /// </summary>
@@ -448,15 +455,19 @@ private InventoryItem[] _lastEquipmentItems;
 
     public void GetEquippedItems()
     {
-        for (int i = 0; i< equipmentSlots.Length; i++)
+        if (equipmentSlots == null) return;
+
+        for (int i = 0; i < equipmentSlots.Length; i++)
         {
             InventorySlot slot = equipmentSlots[i];
+            if (slot == null) continue;
+
             InventoryItem itemInSlot = slot.GetComponentInChildren<InventoryItem>();
-            if (itemInSlot != null)
+            if (itemInSlot != null && itemInSlot.item != null)
             {
                 Debug.Log($"{itemInSlot.item.itemName}");
-            }        
-        }      
+            }
+        }
     }
 
     [SerializeField] private Transform equipGridRoot; // assign EquipGrid1
@@ -498,19 +509,146 @@ private InventoryItem[] _lastEquipmentItems;
             if (slot == null) continue;
 
             var currentItem = slot.GetComponentInChildren<InventoryItem>();
-            if (currentItem == _lastEquipItems[i]) continue;
+            if (i < _lastEquipItems.Length && currentItem == _lastEquipItems[i]) continue;
 
-            _lastEquipItems[i] = currentItem;
+            if (i < _lastEquipItems.Length)
+                _lastEquipItems[i] = currentItem;
 
             if (currentItem != null && currentItem.item != null)
             {
-                Debug.Log($"[EquipGrid] {name} equipped: {currentItem.item.itemName} (slot {i})");
+                if (logOnEquipItemPlaced)
+                    Debug.Log($"[HeroStats] {name} equipped: {currentItem.item.itemName} (slot {i})");
             }
         }
     }
-    
+
     public void SetEquipGridRoot(Transform root)
     {
         equipGridRoot = root;
+        RefreshEquipSlotsFromGrid();
+    }
+
+    // ---------------- Per-Turn Combat API ----------------
+    public void ResetTurnCombatState()
+    {
+        turnAttackMultiplier = 1.0f;
+        maxDamageAttacksThisTurn = int.MaxValue;
+        damageAttacksUsedThisTurn = 0;
+    }
+
+    /// <summary>
+    /// Applies a turn-only attack multiplier. Multipliers stack multiplicatively if called multiple times.
+    /// </summary>
+    public void MultiplyTurnAttack(float multiplier)
+    {
+        multiplier = Mathf.Max(0f, multiplier);
+        turnAttackMultiplier *= multiplier;
+    }
+
+    /// <summary>
+    /// Constrains how many damaging attacks the hero can commit this turn.
+    /// Example: if called with 1, the hero can only commit one damaging attack.
+    /// If called multiple times, the tightest constraint wins (min).
+    /// </summary>
+    public void ConstrainDamageAttacksThisTurn(int maxAttacks)
+    {
+        maxAttacks = Mathf.Max(0, maxAttacks);
+        maxDamageAttacksThisTurn = Mathf.Min(maxDamageAttacksThisTurn, maxAttacks);
+    }
+
+    /// <summary>
+    /// Returns true if this hero is allowed to commit a damaging attack right now (per-turn constraint).
+    /// </summary>
+    public bool CanCommitDamageAttackThisTurn()
+    {
+        return damageAttacksUsedThisTurn < maxDamageAttacksThisTurn;
+    }
+
+    /// <summary>
+    /// Call this when a damaging attack is actually committed/executed (not when previewing).
+    /// </summary>
+    public void RegisterDamageAttackCommitted()
+    {
+        damageAttacksUsedThisTurn++;
+    }
+
+    public int DamageAttacksUsedThisTurn => damageAttacksUsedThisTurn;
+    public int MaxDamageAttacksThisTurn => maxDamageAttacksThisTurn;
+    public float TurnAttackMultiplier => turnAttackMultiplier;
+
+    // Preferred equipment source-of-truth:
+    // Your current equip system parents InventoryItem GameObjects under EquipGridRoot -> InventorySlot.
+    // So we detect equipment by scanning InventoryItem children, not by relying on inspector-wired arrays.
+    private InventoryItem[] GetEquippedInventoryItems()
+    {
+        if (equipGridRoot == null) return Array.Empty<InventoryItem>();
+        return equipGridRoot.GetComponentsInChildren<InventoryItem>(includeInactive: true);
+    }
+
+    // ---------------- Equipment Queries ----------------
+    public bool HasEquippedEffect(ItemEffect effect)
+    {
+        // Preferred: scan actual equipped InventoryItem children under equipGridRoot
+        var equipped = GetEquippedInventoryItems();
+        for (int i = 0; i < equipped.Length; i++)
+        {
+            var ii = equipped[i];
+            if (ii == null || ii.item == null) continue;
+
+            if (ii.item.effects != null && ii.item.effects.Contains(effect))
+                return true;
+        }
+
+        // Fallback: legacy inspector-wired equipmentSlots array
+        if (equipmentSlots == null) return false;
+
+        for (int i = 0; i < equipmentSlots.Length; i++)
+        {
+            InventorySlot slot = equipmentSlots[i];
+            if (slot == null) continue;
+
+            InventoryItem invItem = slot.GetComponentInChildren<InventoryItem>();
+            if (invItem == null || invItem.item == null) continue;
+
+            if (invItem.item.effects != null && invItem.item.effects.Contains(effect))
+                return true;
+        }
+
+        return false;
+    }
+
+    public bool HasEquippedItemName(string itemName)
+    {
+        if (string.IsNullOrWhiteSpace(itemName)) return false;
+
+        // Preferred: scan actual equipped InventoryItem children under equipGridRoot
+        var equipped = GetEquippedInventoryItems();
+        for (int i = 0; i < equipped.Length; i++)
+        {
+            var ii = equipped[i];
+            if (ii == null || ii.item == null) continue;
+
+            if (string.Equals(ii.item.itemName, itemName, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        // Fallback: legacy inspector-wired equipmentSlots array
+        if (equipmentSlots == null) return false;
+
+        for (int i = 0; i < equipmentSlots.Length; i++)
+        {
+            InventorySlot slot = equipmentSlots[i];
+            if (slot == null) continue;
+
+            InventoryItem invItem = slot.GetComponentInChildren<InventoryItem>();
+            if (invItem == null || invItem.item == null) continue;
+
+            if (string.Equals(invItem.item.itemName, itemName, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 }
+
+////////////////////////////////////////////////////////////
