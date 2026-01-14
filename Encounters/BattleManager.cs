@@ -10,6 +10,7 @@ using System.Runtime.CompilerServices;
 
 public class BattleManager : MonoBehaviour
 {
+    public static event Action PartyReady;
     public static BattleManager Instance { get; private set; }
 
     public enum BattleState { Idle, BattleStart, PlayerPhase, EnemyPhase, BattleEnd }
@@ -115,6 +116,7 @@ public class BattleManager : MonoBehaviour
     [Header("Party (Run Instance)")]
     [SerializeField] private Transform[] partySpawnPoints;
     [SerializeField] private GameObject[] partyMemberPrefabs = new GameObject[3];
+    private GameObject[] partyMemberInstances;
     [SerializeField] private Transform partyRoot;
     [SerializeField] private int partySize = 3;
 
@@ -478,6 +480,7 @@ public class BattleManager : MonoBehaviour
         _activePartyIndex = GetFirstAlivePartyIndex();
         OnActivePartyMemberChanged?.Invoke(_activePartyIndex);
         NotifyPartyChanged();
+        PartyReady?.Invoke();
     }
 
     private void DestroyPartyAvatars()
@@ -2180,5 +2183,10 @@ actor.hasActedThisRound = true;
         if (_saveStates.Count <= 1)
             SetUndoButtonEnabled(false);
     }
-
+    public GameObject GetPartyMemberInstance(int index)
+    {
+        if (partyMemberInstances == null) return null;
+        if (index < 0 || index >= partyMemberInstances.Length) return null;
+        return partyMemberInstances[index];
+    }
 }

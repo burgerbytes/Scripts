@@ -7,6 +7,14 @@ using UnityEngine.UI;
 
 public class PostBattleRewardPanel : MonoBehaviour
 {
+    public PlayerInventory playerInventory;
+    public ItemSO[] itemsToPickup;
+
+    public void PickupItem(int id)
+    {
+        playerInventory.Add(itemsToPickup[id]);
+    }
+
     [Header("UI")]
     [SerializeField] private GameObject root; // panel root
     [SerializeField] private Transform optionsContainer;

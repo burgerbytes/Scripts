@@ -133,9 +133,6 @@ public class MonsterEncounterManager : MonoBehaviour
         UpdateBlockHeld();
         DrainStaminaForBlocking(Time.deltaTime);
 
-        if (heroStats != null)
-            heroStats.Tick(ComputeIdleForRegen(), Time.deltaTime);
-
         MaintainIdleBlockState();
 
         if (_activeMonsters.Count > 0 && !_resolvingAttack && !_blockImpactPlaying)
@@ -146,7 +143,7 @@ public class MonsterEncounterManager : MonoBehaviour
                 Monster clicked = TryGetClickedMonster();
                 if (clicked != null && _activeMonsters.Contains(clicked) && !clicked.IsDead)
                 {
-                    if (heroStats == null || heroStats.HasStamina(heroStats.StaminaCostPerAttack))
+                    if (heroStats == null)
                         OnMonsterClicked(clicked);
                 }
             }
@@ -181,9 +178,6 @@ public class MonsterEncounterManager : MonoBehaviour
     {
         if (!_blockHeld || heroStats == null || _activeMonsters.Count == 0)
             return;
-
-        if (!heroStats.TryDrainStaminaWhileBlocking(dt))
-            _blockHeld = false;
     }
 
     // ---------------- ATTACK RESOLVE ----------------
@@ -191,9 +185,6 @@ public class MonsterEncounterManager : MonoBehaviour
     public void OnMonsterClicked(Monster monster)
     {
         if (monster == null || _resolvingAttack || _blockImpactPlaying)
-            return;
-
-        if (!heroStats.TryConsumeAttackStamina())
             return;
 
         _currentTarget = monster;

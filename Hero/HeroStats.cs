@@ -96,6 +96,22 @@ public class HeroStats : MonoBehaviour
     public ReelStripSO ReelStrip => reelStrip;
     public Sprite Portrait => portrait;
 
+    // ---------------- Equipment (NEW) ----------------
+    [Header("Equipment (UI only, no effects yet)")]
+    public int equipmentSlotSize = 1;
+    [SerializeField] public InventorySlot[] equipmentSlots = new InventorySlot[1];
+
+    public int EquipmentSlotCount => equipmentSlots != null ? equipmentSlots.Length : 0;
+
+
+// ---------------- Equipment Change Events (NEW) ----------------
+[Header("Equipment Debug Events")]
+[Tooltip("If true, logs whenever an item is placed into an equipment slot under this hero's EquipGrid.")]
+[SerializeField] private bool logOnEquipItemPlaced = true;
+
+// Cache of last known InventoryItem per equipment slot so we can detect changes.
+private InventoryItem[] _lastEquipmentItems;
+
     // ---------------- Public Accessors ----------------
     public int Level => level;
     public int XP => xp;
@@ -118,20 +134,13 @@ public class HeroStats : MonoBehaviour
     public float StaminaCostPerAttack => Mathf.Max(0f, staminaCostPerAttack);
     public long Gold => gold;
 
-    
-
     public int SmallKeys => smallKeys;
     public int LargeKeys => largeKeys;
-public bool CanBlock => canBlock;
+    public bool CanBlock => canBlock;
 
-    // Combat state
     public int Shield => currentShield;
     public bool IsHidden => isHidden;
 
-    /// <summary>
-    /// Used by your damage formula:
-    /// TotalDamage = ((abilityDamage * ClassAttackModifier) - enemyDefense) * elementalResistance
-    /// </summary>
     public float ClassAttackModifier => Mathf.Max(0f, attackMultiplier);
 
     public event Action OnChanged;
@@ -141,10 +150,34 @@ public bool CanBlock => canBlock;
         currentHp = Mathf.Clamp(currentHp, 0, maxHp);
         currentStamina = Mathf.Clamp(currentStamina, 0f, maxStamina);
         currentShield = Mathf.Max(0, currentShield);
+
+
+        InitEquipmentWatcher();
         NotifyChanged();
     }
 
     private void NotifyChanged() => OnChanged?.Invoke();
+
+
+    // ---------------- Equipment Change Detection ----------------
+    private void InitEquipmentWatcher()
+    {
+        if (equipmentSlots == null)
+        {
+            _lastEquipmentItems = null;
+            return;
+        }
+
+        _lastEquipmentItems = new InventoryItem[equipmentSlots.Length];
+
+        // Prime the cache so we only log when something changes after startup.
+        for (int i = 0; i < equipmentSlots.Length; i++)
+        {
+            InventorySlot slot = equipmentSlots[i];
+            if (slot == null) continue;
+            _lastEquipmentItems[i] = slot.GetComponentInChildren<InventoryItem>();
+        }
+    }
 
     // ---------------- Run Lifecycle ----------------
 
@@ -194,11 +227,6 @@ public bool CanBlock => canBlock;
         // If no requirement specified, allow (you can tighten later).
         return true;
     }
-
-    /// <summary>
-    /// Applies a class definition. Base goes into baseClassDef, advanced goes into advancedClassDef.
-    /// Also applies stat/cost modifiers included on the definition.
-    /// </summary>
     public void ApplyClassDefinition(ClassDefinitionSO def)
     {
         if (def == null) return;
@@ -225,64 +253,6 @@ public bool CanBlock => canBlock;
         blockImpactCostMultiplier *= Mathf.Max(0f, def.blockImpactCostMultiplier);
 
         NotifyChanged();
-    }
-
-    // ---------------- Regen / Stamina APIs (kept for compatibility) ----------------
-
-    /// <summary>Regen happens ONLY while isIdle == true.</summary>
-    public void Tick(bool isIdle, float deltaTime)
-    {
-        if (!isIdle) return;
-        if (deltaTime <= 0f) return;
-
-        float before = currentStamina;
-        currentStamina = Mathf.Min(maxStamina, currentStamina + staminaRegenPerSecond * deltaTime);
-
-        if (!Mathf.Approximately(before, currentStamina))
-            NotifyChanged();
-    }
-
-    public bool HasStamina(float cost) => currentStamina >= Mathf.Max(0f, cost);
-
-    public bool TryConsumeStamina(float cost)
-    {
-        cost = Mathf.Max(0f, cost);
-        if (currentStamina < cost) return false;
-
-        currentStamina -= cost;
-        NotifyChanged();
-        return true;
-    }
-
-    public bool TryConsumeAttackStamina()
-    {
-        float cost = Mathf.Max(0f, staminaCostPerAttack);
-        if (!TryConsumeStamina(cost)) return false;
-
-        if (selfDamagePerAttack > 0)
-            TakeDamage(selfDamagePerAttack);
-
-        return true;
-    }
-
-    public bool TryDrainStaminaWhileBlocking(float deltaTime)
-    {
-        if (deltaTime <= 0f) return true;
-        if (!canBlock) return false;
-
-        float drainPerSecond = Mathf.Max(0f, staminaDrainPerSecondBlocking) * Mathf.Max(0f, blockHoldDrainMultiplier);
-        float drain = drainPerSecond * deltaTime;
-
-        if (drain <= 0f) return true;
-        return TryConsumeStamina(drain);
-    }
-
-    public bool TryConsumeBlockImpactStamina()
-    {
-        if (!canBlock) return false;
-
-        float cost = Mathf.Max(0f, staminaCostOnBlockImpact) * Mathf.Max(0f, blockImpactCostMultiplier);
-        return TryConsumeStamina(cost);
     }
 
     // ---------------- Combat State Helpers ----------------
@@ -476,4 +446,71 @@ public bool CanBlock => canBlock;
         isHidden = hidden;
     }
 
+    public void GetEquippedItems()
+    {
+        for (int i = 0; i< equipmentSlots.Length; i++)
+        {
+            InventorySlot slot = equipmentSlots[i];
+            InventoryItem itemInSlot = slot.GetComponentInChildren<InventoryItem>();
+            if (itemInSlot != null)
+            {
+                Debug.Log($"{itemInSlot.item.itemName}");
+            }        
+        }      
+    }
+
+    [SerializeField] private Transform equipGridRoot; // assign EquipGrid1
+    private InventorySlot[] _equipSlotsRuntime = new InventorySlot[0];
+    private InventoryItem[] _lastEquipItems = new InventoryItem[0];
+    private int _lastEquipGridChildCount = -1;
+
+    public void RefreshEquipSlotsFromGrid()
+    {
+        if (equipGridRoot == null)
+        {
+            Debug.LogWarning($"[EquipGrid] {name}: equipGridRoot not set.");
+            _equipSlotsRuntime = new InventorySlot[0];
+            _lastEquipItems = new InventoryItem[0];
+            _lastEquipGridChildCount = -1;
+            return;
+        }
+
+        _equipSlotsRuntime = equipGridRoot.GetComponentsInChildren<InventorySlot>(includeInactive: true);
+        _lastEquipItems = new InventoryItem[_equipSlotsRuntime.Length];
+
+        for (int i = 0; i < _equipSlotsRuntime.Length; i++)
+            _lastEquipItems[i] = _equipSlotsRuntime[i].GetComponentInChildren<InventoryItem>();
+
+        _lastEquipGridChildCount = equipGridRoot.childCount;
+    }
+
+    private void LateUpdate()
+    {
+        if (equipGridRoot == null) return;
+
+        // Auto-refresh if slots are added/removed under EquipGrid1
+        if (_equipSlotsRuntime == null || _equipSlotsRuntime.Length == 0 || equipGridRoot.childCount != _lastEquipGridChildCount)
+            RefreshEquipSlotsFromGrid();
+
+        for (int i = 0; i < _equipSlotsRuntime.Length; i++)
+        {
+            var slot = _equipSlotsRuntime[i];
+            if (slot == null) continue;
+
+            var currentItem = slot.GetComponentInChildren<InventoryItem>();
+            if (currentItem == _lastEquipItems[i]) continue;
+
+            _lastEquipItems[i] = currentItem;
+
+            if (currentItem != null && currentItem.item != null)
+            {
+                Debug.Log($"[EquipGrid] {name} equipped: {currentItem.item.itemName} (slot {i})");
+            }
+        }
+    }
+    
+    public void SetEquipGridRoot(Transform root)
+    {
+        equipGridRoot = root;
+    }
 }
