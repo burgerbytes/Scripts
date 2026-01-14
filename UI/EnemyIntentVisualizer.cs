@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
 using UnityEngine.UI;
+using TMPro;
 
 public class EnemyIntentVisualizer : MonoBehaviour
 {
@@ -41,6 +42,10 @@ public class EnemyIntentVisualizer : MonoBehaviour
     [SerializeField] private Sprite targetDotSprite;
     [SerializeField] private float targetDotSize = 10f;
     [SerializeField] private float targetDotYOffset = -28f;
+
+    [Header("Intent Damage Number")]
+    [SerializeField] private Vector2 intentDamageTextOffset = new Vector2(34f, 6f);
+    [SerializeField] private float intentDamageFontSize = 22f;
 
     [Header("Target Color Coding (by Base Class)")]
     [SerializeField] private Color fighterColor = Color.red;
@@ -181,6 +186,7 @@ public class EnemyIntentVisualizer : MonoBehaviour
 
         Image iconImg = null;
         Image dotImg = null;
+        TextMeshProUGUI dmgTmp = null;
 
         if (uiRoot != null && showIntentIcons)
         {
@@ -195,6 +201,7 @@ public class EnemyIntentVisualizer : MonoBehaviour
             RectTransform rt = iconImg.rectTransform;
             rt.sizeDelta = intentIconSize;
             rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
+            rt.pivot = new Vector2(0.5f, 0.5f);
 
             GameObject dotGo = new GameObject("TargetDot");
             dotGo.transform.SetParent(iconGo.transform, false);
@@ -202,19 +209,39 @@ public class EnemyIntentVisualizer : MonoBehaviour
             dotImg = dotGo.AddComponent<Image>();
             dotImg.sprite = targetDotSprite;
             dotImg.preserveAspect = true;
+            dotImg.raycastTarget = false;
 
             RectTransform drt = dotImg.rectTransform;
             drt.sizeDelta = Vector2.one * targetDotSize;
+            drt.anchorMin = drt.anchorMax = new Vector2(0.5f, 0.5f);
+            drt.pivot = new Vector2(0.5f, 0.5f);
             drt.anchoredPosition = new Vector2(0f, targetDotYOffset);
+
+            GameObject dmgGo = new GameObject("IntentDamage");
+            dmgGo.transform.SetParent(iconGo.transform, false);
+
+            dmgTmp = dmgGo.AddComponent<TextMeshProUGUI>();
+            dmgTmp.raycastTarget = false;
+            dmgTmp.enableWordWrapping = false;
+            dmgTmp.alignment = TextAlignmentOptions.Left;
+            dmgTmp.fontSize = intentDamageFontSize;
+            dmgTmp.text = "";
+
+            RectTransform dmgRt = dmgTmp.rectTransform;
+            dmgRt.anchorMin = dmgRt.anchorMax = new Vector2(0.5f, 0.5f);
+            dmgRt.pivot = new Vector2(0f, 0.5f);
+            dmgRt.anchoredPosition = intentDamageTextOffset;
         }
 
         _visuals.Add(new IntentVisual(
+            intent.enemy,
             intent.enemy.transform,
             intent.targetPartyIndex,
             intent.type,
             lr,
             iconImg,
             dotImg,
+            dmgTmp,
             root,
             fighterColor,
             mageColor,
@@ -242,9 +269,7 @@ public class EnemyIntentVisualizer : MonoBehaviour
     private Camera GetUICamera()
     {
         if (uiCanvas == null) return null;
-        return uiCanvas.renderMode == RenderMode.ScreenSpaceOverlay
-            ? null
-            : uiCanvas.worldCamera;
+        return uiCanvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : uiCanvas.worldCamera;
     }
 
     private Canvas FindCanvasByName(string canvasName)
@@ -256,9 +281,7 @@ public class EnemyIntentVisualizer : MonoBehaviour
 
     private Sprite GetIconForIntent(BattleManager.IntentType type)
     {
-        return type == BattleManager.IntentType.AoEAttack
-            ? aoeAttackIcon
-            : attackIcon;
+        return type == BattleManager.IntentType.AoEAttack ? aoeAttackIcon : attackIcon;
     }
 
     private void TryForcePlanIntentsIfNone()
@@ -266,21 +289,21 @@ public class EnemyIntentVisualizer : MonoBehaviour
         if (battleManager == null || _visuals.Count > 0 || _framesSinceEnable < 1)
             return;
 
-        FieldInfo f = battleManager.GetType()
-            .GetField("_plannedIntents", BindingFlags.Instance | BindingFlags.NonPublic);
-
+        FieldInfo f = battleManager.GetType().GetField("_plannedIntents", BindingFlags.Instance | BindingFlags.NonPublic);
         if (f?.GetValue(battleManager) is List<BattleManager.EnemyIntent> cached && cached.Count > 0)
             Build(cached);
     }
 
     private class IntentVisual
     {
-        private readonly Transform enemy;
+        private readonly Monster enemyRef;
+        private readonly Transform enemyTf;
         private readonly int targetIndex;
         private readonly BattleManager.IntentType type;
         private readonly LineRenderer lr;
         private readonly Image icon;
         private readonly Image dot;
+        private readonly TextMeshProUGUI dmg;
         private readonly GameObject root;
 
         private readonly Color fighterColor;
@@ -289,24 +312,28 @@ public class EnemyIntentVisualizer : MonoBehaviour
         private readonly Color fallbackColor;
 
         public IntentVisual(
-            Transform enemy,
+            Monster enemyRef,
+            Transform enemyTf,
             int targetIndex,
             BattleManager.IntentType type,
             LineRenderer lr,
             Image icon,
             Image dot,
+            TextMeshProUGUI dmg,
             GameObject root,
             Color fighterColor,
             Color mageColor,
             Color ninjaColor,
             Color fallbackColor)
         {
-            this.enemy = enemy;
+            this.enemyRef = enemyRef;
+            this.enemyTf = enemyTf;
             this.targetIndex = targetIndex;
             this.type = type;
             this.lr = lr;
             this.icon = icon;
             this.dot = dot;
+            this.dmg = dmg;
             this.root = root;
 
             this.fighterColor = fighterColor;
@@ -324,6 +351,7 @@ public class EnemyIntentVisualizer : MonoBehaviour
         {
             if (icon != null) icon.enabled = v;
             if (dot != null) dot.enabled = v;
+            if (dmg != null) dmg.enabled = v;
         }
 
         public void Update(
@@ -339,14 +367,14 @@ public class EnemyIntentVisualizer : MonoBehaviour
             float worldZ,
             Vector2 iconOffset)
         {
-            if (enemy == null) return;
+            if (enemyTf == null) return;
 
             if (showLine && lr != null)
             {
                 RectTransform slot = hud?.GetSlotRectTransform(targetIndex);
                 if (slot != null && worldCam != null)
                 {
-                    Vector3 startWorld = enemy.position;
+                    Vector3 startWorld = enemyTf.position;
                     startWorld.z = worldZ;
 
                     Vector3 slotWorld = slot.TransformPoint(slot.rect.center);
@@ -379,26 +407,36 @@ public class EnemyIntentVisualizer : MonoBehaviour
 
             if (showIcon && icon != null && worldCam != null)
             {
-                Vector3 screen = worldCam.WorldToScreenPoint(enemy.position);
+                Vector3 screen = worldCam.WorldToScreenPoint(enemyTf.position);
                 screen += new Vector3(iconOffset.x, iconOffset.y, 0f);
 
                 if (uiRoot != null)
                 {
-                    RectTransformUtility.ScreenPointToLocalPointInRectangle(
-                        uiRoot, screen, uiCam, out Vector2 local);
+                    RectTransformUtility.ScreenPointToLocalPointInRectangle(uiRoot, screen, uiCam, out Vector2 local);
                     icon.rectTransform.anchoredPosition = local;
                 }
 
+                Color targetColor = GetTargetColor(bm, targetIndex, fighterColor, mageColor, ninjaColor, fallbackColor);
+
                 if (dot != null)
-                    dot.color = GetTargetColor(bm, targetIndex, fighterColor, mageColor, ninjaColor, fallbackColor);
+                    dot.color = targetColor;
+
+                if (dmg != null)
+                {
+                    int raw = (enemyRef != null) ? enemyRef.GetDamage() : 0;
+                    dmg.text = raw.ToString();
+                    dmg.color = Color.white;
+                }
 
                 icon.enabled = true;
                 if (dot != null) dot.enabled = true;
+                if (dmg != null) dmg.enabled = true;
             }
             else
             {
                 if (icon != null) icon.enabled = false;
                 if (dot != null) dot.enabled = false;
+                if (dmg != null) dmg.enabled = false;
             }
         }
 
