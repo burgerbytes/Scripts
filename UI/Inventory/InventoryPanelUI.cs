@@ -132,42 +132,6 @@ public class InventoryPanelUI : MonoBehaviour
 
     // ---------------- Drag API called by InventorySlotUI ----------------
 
-    public ItemSO GetItemForSlot(InventorySlotUI slot)
-    {
-        if (slot == null) return null;
-        if (inventory == null) return null;
-
-        if (slot.slotKind == InventorySlotUI.SlotKind.Pool)
-            return inventory.GetPoolItem(slot.poolIndex);
-
-        ResolvePartyHeroesIfNeeded();
-        if (slot.heroIndex < 0 || slot.heroIndex >= partyHeroes.Count) return null;
-
-        var hero = partyHeroes[slot.heroIndex];
-        if (hero == null) return null;
-
-        return hero.GetEquipment(slot.equipmentIndex);
-    }
-
-    private void SetItemForSlot(InventorySlotUI slot, ItemSO item)
-    {
-        if (slot == null) return;
-
-        if (slot.slotKind == InventorySlotUI.SlotKind.Pool)
-        {
-            inventory.SetPoolItem(slot.poolIndex, item, notify: true);
-            return;
-        }
-
-        ResolvePartyHeroesIfNeeded();
-        if (slot.heroIndex < 0 || slot.heroIndex >= partyHeroes.Count) return;
-
-        var hero = partyHeroes[slot.heroIndex];
-        if (hero == null) return;
-
-        hero.SetEquipment(slot.equipmentIndex, item, notify: true);
-    }
-
     public void BeginDrag(InventorySlotUI sourceSlot, ItemSO item)
     {
         if (sourceSlot == null || item == null) return;
@@ -224,16 +188,6 @@ public class InventoryPanelUI : MonoBehaviour
             EndDrag();
             return;
         }
-
-        ItemSO a = GetItemForSlot(_dragSourceSlot);
-        ItemSO b = GetItemForSlot(targetSlot);
-
-        if (debugLogs)
-            Debug.Log($"[InventoryPanelUI] DropOn target={targetSlot.name} from={_dragSourceSlot.name} a={(a ? a.itemName : "NULL")} b={(b ? b.itemName : "NULL")}", this);
-
-        // Swap
-        SetItemForSlot(_dragSourceSlot, b);
-        SetItemForSlot(targetSlot, a);
 
         RefreshAll();
         EndDrag();

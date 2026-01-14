@@ -101,20 +101,12 @@ public class InventorySlotUI : MonoBehaviour,
     {
         if (_panel == null) _panel = GetComponentInParent<InventoryPanelUI>();
         if (_panel == null) return;
-
-        ItemSO item = _panel.GetItemForSlot(this);
-        SetItem(item);
     }
 
     public void OnBeginDrag(PointerEventData eventData)
     {
         if (_panel == null) _panel = GetComponentInParent<InventoryPanelUI>();
         if (_panel == null) return;
-
-        ItemSO item = _panel.GetItemForSlot(this);
-        if (item == null) return;
-
-        _panel.BeginDrag(this, item);
     }
 
     public void OnDrag(PointerEventData eventData)
