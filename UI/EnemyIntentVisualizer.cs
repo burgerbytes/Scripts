@@ -1,6 +1,8 @@
+using System;
 using System.Collections.Generic;
-using TMPro;
+using System.Reflection;
 using UnityEngine;
+using UnityEngine.UI;
 
 public class EnemyIntentVisualizer : MonoBehaviour
 {
@@ -9,31 +11,46 @@ public class EnemyIntentVisualizer : MonoBehaviour
     [SerializeField] private PartyHUD partyHUD;
     [SerializeField] private Camera worldCamera;
 
-    [Header("UI (order numbers)")]
+    [Header("Canvas Selection")]
+    [SerializeField] private bool preferCanvasByName = true;
+    [SerializeField] private string preferredCanvasName = "Main Canvas";
+
+    [Header("UI")]
     [SerializeField] private Canvas uiCanvas;
     [SerializeField] private RectTransform uiRoot;
 
-    [Header("Line Sorting")]
-    [SerializeField] private string lineSortingLayerName = "UI";
-    [SerializeField] private int lineSortingOrder = 500;
+    [Header("Toggles")]
+    [SerializeField] private bool showIntentLines = true;
+    [SerializeField] private bool showIntentIcons = true;
+    [SerializeField] private bool enableHotkeyToggle = true;
+    [SerializeField] private KeyCode toggleLinesKey = KeyCode.F3;
 
-    [Header("Line Look")]
+    [Header("Intent Lines")]
     [SerializeField] private Material lineMaterial;
     [SerializeField] private float lineWidth = 0.05f;
-
-    [Header("World Depth")]
-    [SerializeField] private float worldZ = 0f;
-
-    [Header("Offsets")]
-    [SerializeField] private Vector3 monsterLineAnchorOffset = new Vector3(0f, 1.0f, 0f);
-    [SerializeField] private Vector3 orderNumberWorldOffset = new Vector3(0f, 1.35f, 0f);
+    [SerializeField] private string lineSortingLayerName = "Default";
+    [SerializeField] private int lineSortingOrder = 5000;
+    [SerializeField] private float lineWorldZ = 0f;
     [SerializeField] private Vector2 slotScreenOffset = Vector2.zero;
 
-    [Header("Order Text")]
-    [SerializeField] private TMP_FontAsset orderFont;
-    [SerializeField] private int orderFontSize = 40;
+    [Header("Intent Icons")]
+    [SerializeField] private Sprite attackIcon;
+    [SerializeField] private Sprite aoeAttackIcon;
+    [SerializeField] private Vector2 intentIconSize = new Vector2(56f, 56f);
+    [SerializeField] private Vector2 intentIconScreenOffset = new Vector2(0f, 90f);
+    [SerializeField] private Sprite targetDotSprite;
+    [SerializeField] private float targetDotSize = 10f;
+    [SerializeField] private float targetDotYOffset = -28f;
+
+    [Header("Target Color Coding (by Base Class)")]
+    [SerializeField] private Color fighterColor = Color.red;
+    [SerializeField] private Color mageColor = Color.blue;
+    [SerializeField] private Color ninjaColor = Color.green;
+    [SerializeField] private Color fallbackColor = Color.magenta;
 
     private readonly List<IntentVisual> _visuals = new();
+    private bool _refreshQueued;
+    private int _framesSinceEnable;
 
     private void Awake()
     {
@@ -41,78 +58,115 @@ public class EnemyIntentVisualizer : MonoBehaviour
         if (partyHUD == null) partyHUD = FindFirstObjectByType<PartyHUD>();
         if (worldCamera == null) worldCamera = Camera.main;
 
-        if (uiCanvas == null) uiCanvas = FindFirstObjectByType<Canvas>();
-        if (uiRoot == null && uiCanvas != null) uiRoot = uiCanvas.transform as RectTransform;
+        if (uiCanvas == null)
+        {
+            if (preferCanvasByName && !string.IsNullOrWhiteSpace(preferredCanvasName))
+                uiCanvas = FindCanvasByName(preferredCanvasName);
+
+            if (uiCanvas == null)
+                uiCanvas = FindFirstObjectByType<Canvas>();
+        }
+
+        if (uiRoot == null && uiCanvas != null)
+            uiRoot = uiCanvas.transform as RectTransform;
     }
 
     private void OnEnable()
     {
         if (battleManager != null)
-        {
             battleManager.OnEnemyIntentsPlanned += HandleIntentsPlanned;
-            battleManager.OnBattleStateChanged += HandleBattleStateChanged;
-        }
+
+        QueueRefresh();
     }
 
     private void OnDisable()
     {
         if (battleManager != null)
-        {
             battleManager.OnEnemyIntentsPlanned -= HandleIntentsPlanned;
-            battleManager.OnBattleStateChanged -= HandleBattleStateChanged;
-        }
+
+        ClearAll();
+    }
+
+    private void Update()
+    {
+        if (enableHotkeyToggle && Input.GetKeyDown(toggleLinesKey))
+            SetShowIntentLines(!showIntentLines);
     }
 
     private void LateUpdate()
     {
-        // Update and prune if monster got destroyed
-        for (int i = _visuals.Count - 1; i >= 0; i--)
-        {
-            if (_visuals[i] == null || !_visuals[i].IsValid)
-            {
-                _visuals[i]?.Destroy();
-                _visuals.RemoveAt(i);
-                continue;
-            }
+        _framesSinceEnable++;
 
+        if (_refreshQueued)
+        {
+            _refreshQueued = false;
+            TryForcePlanIntentsIfNone();
+        }
+
+        if (_visuals.Count == 0)
+            return;
+
+        Camera uiCam = GetUICamera();
+
+        for (int i = 0; i < _visuals.Count; i++)
+        {
             _visuals[i].Update(
                 worldCamera,
-                partyHUD,
                 uiCanvas,
                 uiRoot,
-                worldZ,
-                monsterLineAnchorOffset,
-                orderNumberWorldOffset,
-                slotScreenOffset
+                uiCam,
+                partyHUD,
+                battleManager,
+                showIntentLines,
+                showIntentIcons,
+                slotScreenOffset,
+                lineWorldZ,
+                intentIconScreenOffset
             );
         }
     }
 
-    private void HandleBattleStateChanged(BattleManager.BattleState state)
+    public void SetShowIntentLines(bool value)
     {
-        if (state != BattleManager.BattleState.PlayerPhase)
-            ClearAll();
+        showIntentLines = value;
+        foreach (var v in _visuals)
+            v.SetLineEnabled(value);
+    }
+
+    public void SetShowIntentIcons(bool value)
+    {
+        showIntentIcons = value;
+        foreach (var v in _visuals)
+            v.SetIconEnabled(value);
+    }
+
+    private void QueueRefresh()
+    {
+        _refreshQueued = true;
+        _framesSinceEnable = 0;
     }
 
     private void HandleIntentsPlanned(List<BattleManager.EnemyIntent> intents)
     {
+        Build(intents);
+    }
+
+    private void Build(List<BattleManager.EnemyIntent> intents)
+    {
         ClearAll();
+        if (intents == null || intents.Count == 0) return;
+        EnsureUIRefs();
 
-        if (intents == null || intents.Count == 0)
-            return;
-
-        for (int i = 0; i < intents.Count; i++)
+        foreach (var intent in intents)
         {
-            var intent = intents[i];
             if (intent.enemy == null) continue;
-
-            CreateVisual(intent.enemy.transform, intent.targetPartyIndex, i + 1);
+            CreateVisual(intent);
         }
     }
 
-    private void CreateVisual(Transform monsterTransform, int targetPartyIndex, int order)
+    private void CreateVisual(BattleManager.EnemyIntent intent)
     {
-        GameObject root = new GameObject($"IntentVisual_{order}");
+        GameObject root = new GameObject($"IntentVisual_{intent.enemy.name}");
         root.transform.SetParent(transform, false);
 
         LineRenderer lr = root.AddComponent<LineRenderer>();
@@ -123,118 +177,260 @@ public class EnemyIntentVisualizer : MonoBehaviour
         lr.sortingLayerName = lineSortingLayerName;
         lr.sortingOrder = lineSortingOrder;
         if (lineMaterial != null) lr.material = lineMaterial;
+        lr.enabled = showIntentLines;
 
-        TextMeshProUGUI tmpUI = null;
+        Image iconImg = null;
+        Image dotImg = null;
 
-        if (uiRoot != null)
+        if (uiRoot != null && showIntentIcons)
         {
-            GameObject txtGo = new GameObject($"OrderUI_{order}");
-            txtGo.transform.SetParent(uiRoot, false);
+            GameObject iconGo = new GameObject($"IntentIcon_{intent.enemy.name}");
+            iconGo.transform.SetParent(uiRoot, false);
 
-            tmpUI = txtGo.AddComponent<TextMeshProUGUI>();
-            tmpUI.text = order.ToString();
-            tmpUI.fontSize = orderFontSize;
-            tmpUI.alignment = TextAlignmentOptions.Center;
-            tmpUI.raycastTarget = false;
-            if (orderFont != null) tmpUI.font = orderFont;
+            iconImg = iconGo.AddComponent<Image>();
+            iconImg.sprite = GetIconForIntent(intent.type);
+            iconImg.preserveAspect = true;
+            iconImg.raycastTarget = false;
 
-            RectTransform rt = tmpUI.rectTransform;
-            rt.sizeDelta = new Vector2(80, 80);
+            RectTransform rt = iconImg.rectTransform;
+            rt.sizeDelta = intentIconSize;
             rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
-            rt.pivot = new Vector2(0.5f, 0.5f);
+
+            GameObject dotGo = new GameObject("TargetDot");
+            dotGo.transform.SetParent(iconGo.transform, false);
+
+            dotImg = dotGo.AddComponent<Image>();
+            dotImg.sprite = targetDotSprite;
+            dotImg.preserveAspect = true;
+
+            RectTransform drt = dotImg.rectTransform;
+            drt.sizeDelta = Vector2.one * targetDotSize;
+            drt.anchoredPosition = new Vector2(0f, targetDotYOffset);
         }
 
-        _visuals.Add(new IntentVisual(monsterTransform, targetPartyIndex, lr, tmpUI, root));
+        _visuals.Add(new IntentVisual(
+            intent.enemy.transform,
+            intent.targetPartyIndex,
+            intent.type,
+            lr,
+            iconImg,
+            dotImg,
+            root,
+            fighterColor,
+            mageColor,
+            ninjaColor,
+            fallbackColor
+        ));
     }
 
     private void ClearAll()
     {
-        for (int i = 0; i < _visuals.Count; i++)
-            _visuals[i]?.Destroy();
-
+        foreach (var v in _visuals)
+            v.Destroy();
         _visuals.Clear();
+    }
+
+    private void EnsureUIRefs()
+    {
+        if (uiCanvas == null)
+            uiCanvas = FindCanvasByName(preferredCanvasName);
+
+        if (uiRoot == null && uiCanvas != null)
+            uiRoot = uiCanvas.transform as RectTransform;
+    }
+
+    private Camera GetUICamera()
+    {
+        if (uiCanvas == null) return null;
+        return uiCanvas.renderMode == RenderMode.ScreenSpaceOverlay
+            ? null
+            : uiCanvas.worldCamera;
+    }
+
+    private Canvas FindCanvasByName(string canvasName)
+    {
+        foreach (var c in Resources.FindObjectsOfTypeAll<Canvas>())
+            if (c.name == canvasName) return c;
+        return null;
+    }
+
+    private Sprite GetIconForIntent(BattleManager.IntentType type)
+    {
+        return type == BattleManager.IntentType.AoEAttack
+            ? aoeAttackIcon
+            : attackIcon;
+    }
+
+    private void TryForcePlanIntentsIfNone()
+    {
+        if (battleManager == null || _visuals.Count > 0 || _framesSinceEnable < 1)
+            return;
+
+        FieldInfo f = battleManager.GetType()
+            .GetField("_plannedIntents", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        if (f?.GetValue(battleManager) is List<BattleManager.EnemyIntent> cached && cached.Count > 0)
+            Build(cached);
     }
 
     private class IntentVisual
     {
-        private readonly Transform _monster;
-        private readonly int _targetPartyIndex;
-        private readonly LineRenderer _lr;
-        private readonly TextMeshProUGUI _tmpUI;
-        private readonly GameObject _root;
+        private readonly Transform enemy;
+        private readonly int targetIndex;
+        private readonly BattleManager.IntentType type;
+        private readonly LineRenderer lr;
+        private readonly Image icon;
+        private readonly Image dot;
+        private readonly GameObject root;
 
-        public bool IsValid => _monster != null && _lr != null && _root != null;
+        private readonly Color fighterColor;
+        private readonly Color mageColor;
+        private readonly Color ninjaColor;
+        private readonly Color fallbackColor;
 
-        public IntentVisual(Transform monster, int targetPartyIndex, LineRenderer lr, TextMeshProUGUI tmpUI, GameObject root)
+        public IntentVisual(
+            Transform enemy,
+            int targetIndex,
+            BattleManager.IntentType type,
+            LineRenderer lr,
+            Image icon,
+            Image dot,
+            GameObject root,
+            Color fighterColor,
+            Color mageColor,
+            Color ninjaColor,
+            Color fallbackColor)
         {
-            _monster = monster;
-            _targetPartyIndex = targetPartyIndex;
-            _lr = lr;
-            _tmpUI = tmpUI;
-            _root = root;
+            this.enemy = enemy;
+            this.targetIndex = targetIndex;
+            this.type = type;
+            this.lr = lr;
+            this.icon = icon;
+            this.dot = dot;
+            this.root = root;
+
+            this.fighterColor = fighterColor;
+            this.mageColor = mageColor;
+            this.ninjaColor = ninjaColor;
+            this.fallbackColor = fallbackColor;
+        }
+
+        public void SetLineEnabled(bool v)
+        {
+            if (lr != null) lr.enabled = v;
+        }
+
+        public void SetIconEnabled(bool v)
+        {
+            if (icon != null) icon.enabled = v;
+            if (dot != null) dot.enabled = v;
         }
 
         public void Update(
-            Camera cam,
-            PartyHUD hud,
+            Camera worldCam,
             Canvas canvas,
             RectTransform uiRoot,
+            Camera uiCam,
+            PartyHUD hud,
+            BattleManager bm,
+            bool showLine,
+            bool showIcon,
+            Vector2 slotOffset,
             float worldZ,
-            Vector3 monsterLineOffset,
-            Vector3 monsterNumberOffset,
-            Vector2 slotScreenOffset)
+            Vector2 iconOffset)
         {
-            if (_monster == null || cam == null || hud == null)
-                return;
+            if (enemy == null) return;
 
-            RectTransform targetSlot = hud.GetSlotRectTransform(_targetPartyIndex);
-            if (targetSlot == null)
-                return;
-
-            // Monster start (world)
-            Vector3 startWorld = _monster.position + monsterLineOffset;
-            startWorld.z = worldZ;
-
-            // Slot right-edge (screen -> world)
-            Vector2 slotLocalEdge = new Vector2(targetSlot.rect.xMax, targetSlot.rect.center.y);
-            Vector3 slotWorld = targetSlot.TransformPoint(slotLocalEdge);
-            Vector3 slotScreen = RectTransformUtility.WorldToScreenPoint(null, slotWorld);
-            slotScreen += new Vector3(slotScreenOffset.x, slotScreenOffset.y, 0f);
-
-            float zDist = Mathf.Abs(cam.transform.position.z - worldZ);
-            Vector3 endWorld = cam.ScreenToWorldPoint(new Vector3(slotScreen.x, slotScreen.y, zDist));
-            endWorld.z = worldZ;
-
-            _lr.SetPosition(0, startWorld);
-            _lr.SetPosition(1, endWorld);
-
-            // Number directly above monster (UI)
-            if (_tmpUI != null && canvas != null)
+            if (showLine && lr != null)
             {
-                Vector3 numWorld = _monster.position + monsterNumberOffset;
-                Vector3 numScreen = cam.WorldToScreenPoint(numWorld);
-
-                RectTransform canvasRect = canvas.transform as RectTransform;
-                if (canvasRect != null)
+                RectTransform slot = hud?.GetSlotRectTransform(targetIndex);
+                if (slot != null && worldCam != null)
                 {
-                    RectTransformUtility.ScreenPointToLocalPointInRectangle(
-                        canvasRect,
-                        numScreen,
-                        canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : cam,
-                        out Vector2 local);
+                    Vector3 startWorld = enemy.position;
+                    startWorld.z = worldZ;
 
-                    _tmpUI.rectTransform.anchoredPosition = local;
+                    Vector3 slotWorld = slot.TransformPoint(slot.rect.center);
+
+                    Vector3 slotScreen = RectTransformUtility.WorldToScreenPoint(uiCam, slotWorld);
+                    slotScreen += new Vector3(slotOffset.x, slotOffset.y, 0f);
+
+                    float startScreenZ = worldCam.WorldToScreenPoint(startWorld).z;
+
+                    Vector3 endWorld = worldCam.ScreenToWorldPoint(new Vector3(slotScreen.x, slotScreen.y, startScreenZ));
+                    endWorld.z = worldZ;
+
+                    lr.SetPosition(0, startWorld);
+                    lr.SetPosition(1, endWorld);
+                    lr.enabled = true;
+
+                    Color targetColor = GetTargetColor(bm, targetIndex, fighterColor, mageColor, ninjaColor, fallbackColor);
+                    lr.startColor = targetColor;
+                    lr.endColor = targetColor;
+                }
+                else
+                {
+                    lr.enabled = false;
                 }
             }
+            else
+            {
+                if (lr != null) lr.enabled = false;
+            }
+
+            if (showIcon && icon != null && worldCam != null)
+            {
+                Vector3 screen = worldCam.WorldToScreenPoint(enemy.position);
+                screen += new Vector3(iconOffset.x, iconOffset.y, 0f);
+
+                if (uiRoot != null)
+                {
+                    RectTransformUtility.ScreenPointToLocalPointInRectangle(
+                        uiRoot, screen, uiCam, out Vector2 local);
+                    icon.rectTransform.anchoredPosition = local;
+                }
+
+                if (dot != null)
+                    dot.color = GetTargetColor(bm, targetIndex, fighterColor, mageColor, ninjaColor, fallbackColor);
+
+                icon.enabled = true;
+                if (dot != null) dot.enabled = true;
+            }
+            else
+            {
+                if (icon != null) icon.enabled = false;
+                if (dot != null) dot.enabled = false;
+            }
+        }
+
+        private static Color GetTargetColor(
+            BattleManager bm,
+            int targetIndex,
+            Color fighterColor,
+            Color mageColor,
+            Color ninjaColor,
+            Color fallbackColor)
+        {
+            if (bm == null) return fallbackColor;
+
+            HeroStats hero = bm.GetHeroAtPartyIndex(targetIndex);
+            string cn = hero?.BaseClassDef?.className;
+
+            if (string.IsNullOrWhiteSpace(cn))
+                return fallbackColor;
+
+            cn = cn.ToLowerInvariant();
+
+            if (cn.Contains("fighter")) return fighterColor;
+            if (cn.Contains("mage")) return mageColor;
+            if (cn.Contains("ninja")) return ninjaColor;
+
+            return fallbackColor;
         }
 
         public void Destroy()
         {
-            if (_tmpUI != null)
-                Object.Destroy(_tmpUI.gameObject);
-
-            if (_root != null)
-                Object.Destroy(_root);
+            if (icon != null) UnityEngine.Object.Destroy(icon.gameObject);
+            if (root != null) UnityEngine.Object.Destroy(root);
         }
     }
 }
