@@ -1,3 +1,5 @@
+// GUID: 70f097a53128abb419f85d811ffa21eb
+////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////
 using TMPro;
 using UnityEngine;
@@ -234,7 +236,9 @@ public class PartyHUDSlot : MonoBehaviour
 
 
         if (slotButton != null)
-            slotButton.interactable = !snapshot.IsDead && !snapshot.HasActedThisRound && !snapshot.IsStunned;
+            // Heroes can cast multiple abilities per turn (resource-limited).
+            // Only disable interaction for dead or stunned heroes.
+            slotButton.interactable = !snapshot.IsDead && !snapshot.IsStunned;
     }
 
     private void SetDamagePreviewVisible(bool visible)
@@ -287,3 +291,6 @@ public class PartyHUDSlot : MonoBehaviour
     }
 }
 
+
+
+////////////////////////////////////////////////////////////

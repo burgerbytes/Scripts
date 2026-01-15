@@ -1347,7 +1347,9 @@ NotifyPartyChanged();
 
         ApplyPartyHiddenVisuals();
 
-        actor.hasActedThisRound = true;
+        // NOTE: Do NOT mark hasActedThisRound here.
+        // Heroes can cast multiple abilities per turn as long as resources allow.
+        // Action-locking is handled via HeroStats.IsStunned (e.g., Stun / Triple Blade).
 
         _resolving = false;
 
@@ -1470,8 +1472,11 @@ NotifyPartyChanged();
             if (hs != null)
                 hs.StartPlayerPhaseStatuses();
 
-            // If stunned at the start of player phase, treat as already acted so the UI/input blocks actions.
-            _party[i].hasActedThisRound = (hs != null && hs.IsStunned);
+            // Reset per-round "acted" flag.
+            // NOTE: We intentionally do NOT use hasActedThisRound to gate player actions anymore
+            // (heroes may cast multiple abilities per turn).
+            // UI/input should gate on HeroStats.IsStunned instead.
+            _party[i].hasActedThisRound = false;
         }
 
         CancelPendingAbility();
@@ -2284,6 +2289,9 @@ NotifyPartyChanged();
         return partyMemberInstances[index];
     }
 }
+
+
+////////////////////////////////////////////////////////////
 
 
 ////////////////////////////////////////////////////////////
