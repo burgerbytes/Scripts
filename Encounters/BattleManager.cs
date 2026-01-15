@@ -104,6 +104,9 @@ public class BattleManager : MonoBehaviour
         public int Shield;
         public bool IsHidden;
 
+        public bool IsStunned;
+        public bool IsTripleBladeEmpowered;
+
         // UI-only: preview for pending Block cast (shield not yet applied yet)
         public bool HasBlockPreview;
         public int BlockPreviewAmount;
@@ -525,6 +528,8 @@ public class BattleManager : MonoBehaviour
             
            
             IsHidden = hs != null && hs.IsHidden,
+            IsStunned = hs != null && hs.IsStunned,
+            IsTripleBladeEmpowered = hs != null && hs.IsTripleBladeEmpoweredThisTurn,
 HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _awaitingPartyTarget && _pendingAbility != null && _pendingActorIndex == index && _pendingAbility.targetType == AbilityTargetType.Self && _pendingAbility.shieldAmount > 0,
             BlockPreviewAmount = ((_previewPartyTargetIndex == index) && _awaitingPartyTarget && _pendingAbility != null && _pendingActorIndex == index) ? Mathf.Max(0, _pendingAbility.shieldAmount) : 0
         };
@@ -843,6 +848,10 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
                         if (logFlow) Debug.Log($"[Battle][EnemyAtk][AoE] Applying incoming damage. attacker={(intent.enemy != null ? intent.enemy.name : "<null>")} targetIdx={pi} raw={raw} targetShieldBefore={hs.Shield}", this);
                         int dealt = hs.ApplyIncomingDamage(raw);
 
+
+                        // Optional: stun targets hit by this enemy's default attack.
+                        if (intent.enemy != null && intent.enemy.DefaultAttackStunsTarget)
+                            hs.StunForNextPlayerPhases(intent.enemy.DefaultAttackStunPlayerPhases);
                         // AoE breaks Conceal/Hidden.
                         if (hs.IsHidden) hs.SetHidden(false);
 
@@ -866,6 +875,10 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
                 // Apply damage (HeroStats handles shield+HP).
                 if (logFlow) Debug.Log($"[Battle][EnemyAtk] Applying incoming damage. attacker={(intent.enemy != null ? intent.enemy.name : "<null>")} targetIdx={targetIdx} raw={raw} targetShieldBefore={targetStats.Shield}", this);
                 int dealtSingle = targetStats.ApplyIncomingDamage(raw);
+
+                // Optional: stun the target hit by this enemy's default attack.
+                if (intent.enemy != null && intent.enemy.DefaultAttackStunsTarget)
+                    targetStats.StunForNextPlayerPhases(intent.enemy.DefaultAttackStunPlayerPhases);
                 if (logFlow) Debug.Log($"[Battle][EnemyAtk] Damage result. dealtToHp={dealtSingle} targetShieldAfter={targetStats.Shield}", this);
 
                 if (targetGO != null)
@@ -1334,7 +1347,7 @@ NotifyPartyChanged();
 
         ApplyPartyHiddenVisuals();
 
-actor.hasActedThisRound = true;
+        actor.hasActedThisRound = true;
 
         _resolving = false;
 
@@ -1452,7 +1465,14 @@ actor.hasActedThisRound = true;
     private void ResetPartyRoundFlags()
     {
         for (int i = 0; i < PartyCount; i++)
-            _party[i].hasActedThisRound = false;
+        {
+            HeroStats hs = _party[i].stats;
+            if (hs != null)
+                hs.StartPlayerPhaseStatuses();
+
+            // If stunned at the start of player phase, treat as already acted so the UI/input blocks actions.
+            _party[i].hasActedThisRound = (hs != null && hs.IsStunned);
+        }
 
         CancelPendingAbility();
         NotifyPartyChanged();
@@ -1873,6 +1893,12 @@ actor.hasActedThisRound = true;
     [Header("Conceal / Hidden Visuals")]
     [SerializeField] private Color hiddenTint = new Color(0.65f, 0.65f, 0.65f, 1f);
 
+
+    [Header("Status Icons (optional)")]
+    [SerializeField] private Sprite statusIconHiddenSprite;
+    [SerializeField] private Sprite statusIconStunnedSprite;
+    [SerializeField] private Sprite statusIconTripleBladeEmpoweredSprite;
+
     private void ApplyPartyHiddenVisuals()
     {
         if (_party == null) return;
@@ -1888,12 +1914,65 @@ actor.hasActedThisRound = true;
             // Tint the in-world sprite (prefab) gray when hidden.
             var sr = pm.avatarGO.GetComponentInChildren<SpriteRenderer>(true);
             if (sr != null)
-            {
                 sr.color = hidden ? hiddenTint : Color.white;
+
+            // Status icon above unit (Hidden / Stunned / Triple Blade Empowered).
+            StatusEffectIconController statusIcon = null;
+
+            Transform iconTf = null;
+
+            // Prefer: under HeroStats root (common structure)
+            if (hs != null)
+            {
+                iconTf = hs.transform.Find("_StatusIcon");
+                if (iconTf == null)
+                    iconTf = hs.transform.Find("__StatusIcon");
+            }
+
+            // Fallback: search anywhere under avatarGO
+            if (iconTf == null)
+            {
+                var all = pm.avatarGO.GetComponentsInChildren<Transform>(true);
+                for (int t = 0; t < all.Length; t++)
+                {
+                    if (all[t] != null && all[t].name == "_StatusIcon")
+                    {
+                        iconTf = all[t];
+                        break;
+                    }
+                }
+            }
+
+            if (iconTf != null)
+            {
+                statusIcon = iconTf.GetComponent<StatusEffectIconController>();
+                if (statusIcon == null)
+                    statusIcon = iconTf.gameObject.AddComponent<StatusEffectIconController>();
+            }
+
+            if (statusIcon != null)
+            {
+                statusIcon.ConfigureSprites(
+                    statusIconHiddenSprite,
+                    statusIconStunnedSprite,
+                    statusIconTripleBladeEmpoweredSprite
+                );
+                Debug.Log($"[StatusIcon] hero={pm.avatarGO.name} hidden={hidden} stunned={(hs != null && hs.IsStunned)} triple={(hs != null && hs.IsTripleBladeEmpoweredThisTurn)}",
+                    pm.avatarGO);
+
+                statusIcon.SetStates(
+                    hidden: hidden,
+                    stunned: (hs != null && hs.IsStunned),
+                    tripleBladeEmpowered: (hs != null && hs.IsTripleBladeEmpoweredThisTurn)
+                );
             }
         }
     }
 
+    public void RefreshStatusVisuals()
+    {
+        ApplyPartyHiddenVisuals(); // this updates tint + status icons
+    }
 
     private void SpawnDamageNumber(Vector3 worldPos, int amount)
     {

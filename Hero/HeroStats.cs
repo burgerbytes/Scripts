@@ -52,6 +52,15 @@ public class HeroStats : MonoBehaviour
     [SerializeField] private int currentShield = 0;
     [SerializeField] private bool isHidden = false;
 
+
+    [SerializeField] private bool isStunned = false;
+
+    [Tooltip("If > 0, this hero will be stunned for that many upcoming Player Phases (cannot act during those phases).")]
+    [SerializeField] private int stunnedPlayerPhasesRemaining = 0;
+
+    [Tooltip("True while Triple Blade's double-damage state is active for this hero this turn (consumed on first damaging attack).")]
+    [SerializeField] private bool tripleBladeEmpoweredThisTurn = false;
+
     // ---------------- Build Modifiers / Perks ----------------
     [Header("Build Modifiers (Campfire choices)")]
     [SerializeField] private bool canBlock = true;
@@ -154,6 +163,10 @@ public class HeroStats : MonoBehaviour
 
     public int Shield => currentShield;
     public bool IsHidden => isHidden;
+
+
+    public bool IsStunned => isStunned;
+    public bool IsTripleBladeEmpoweredThisTurn => tripleBladeEmpoweredThisTurn;
 
     public float ClassAttackModifier => Mathf.Max(0f, attackMultiplier) * Mathf.Max(0f, turnAttackMultiplier);
 
@@ -279,6 +292,60 @@ public class HeroStats : MonoBehaviour
     {
         if (isHidden == hidden) return;
         isHidden = hidden;
+        NotifyChanged();
+    }
+
+
+
+    // ---------------- Stun ----------------
+
+    /// <summary>
+    /// Clears any "remainder of current player phase" stun and consumes any queued stun (from enemy abilities)
+    /// so it applies to this player phase.
+    /// Call this once at the start of Player Phase.
+    /// </summary>
+    public void StartPlayerPhaseStatuses()
+    {
+        // Clear any leftover immediate stun from last phase.
+        isStunned = false;
+
+        // Consume queued stuns (from enemy phase).
+        if (stunnedPlayerPhasesRemaining > 0)
+        {
+            isStunned = true;
+            stunnedPlayerPhasesRemaining = Mathf.Max(0, stunnedPlayerPhasesRemaining - 1);
+        }
+
+        NotifyChanged();
+    }
+
+    /// <summary>
+    /// Stun this hero immediately for the remainder of the current player phase.
+    /// </summary>
+    public void StunForRemainderOfPlayerPhase()
+    {
+        if (isStunned) return;
+        isStunned = true;
+        NotifyChanged();
+    }
+
+    /// <summary>
+    /// Queue a stun so the hero is unable to act for upcoming Player Phases.
+    /// Use this when an enemy stuns the hero during Enemy Phase.
+    /// </summary>
+    public void StunForNextPlayerPhases(int playerPhases = 1)
+    {
+        if (playerPhases <= 0) return;
+        stunnedPlayerPhasesRemaining += playerPhases;
+        NotifyChanged();
+    }
+
+    // ---------------- Triple Blade flag ----------------
+
+    public void SetTripleBladeEmpoweredThisTurn(bool empowered)
+    {
+        if (tripleBladeEmpoweredThisTurn == empowered) return;
+        tripleBladeEmpoweredThisTurn = empowered;
         NotifyChanged();
     }
 
@@ -534,6 +601,9 @@ public class HeroStats : MonoBehaviour
         turnAttackMultiplier = 1.0f;
         maxDamageAttacksThisTurn = int.MaxValue;
         damageAttacksUsedThisTurn = 0;
+
+        // Triple Blade / turn-only flags
+        tripleBladeEmpoweredThisTurn = false;
     }
 
     /// <summary>
@@ -570,6 +640,13 @@ public class HeroStats : MonoBehaviour
     public void RegisterDamageAttackCommitted()
     {
         damageAttacksUsedThisTurn++;
+
+        // Triple Blade: after your empowered (double damage) attack, you become stunned for the remainder of the current player phase.
+        if (tripleBladeEmpoweredThisTurn)
+        {
+            tripleBladeEmpoweredThisTurn = false;
+            StunForRemainderOfPlayerPhase();
+        }
     }
 
     public int DamageAttacksUsedThisTurn => damageAttacksUsedThisTurn;

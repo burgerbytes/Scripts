@@ -41,6 +41,16 @@ public class ReelSpinSystem : MonoBehaviour
     [SerializeField] private int spinsPerTurn = 3;
     [SerializeField] private Button stopSpinningButton;
 
+    [Header("Spin SFX")]
+    [Tooltip("AudioSource used to play the reel spin sound. If left null, we'll try GetComponent<AudioSource>().")]
+    [SerializeField] private AudioSource spinSfxSource;
+
+    [Tooltip("Optional clip override. If null, uses spinSfxSource.clip.")]
+    [SerializeField] private AudioClip spinSfxClip;
+
+    [Tooltip("Play the spin sound when a spin begins.")]
+    [SerializeField] private bool playSpinSfx = true;
+
     [Header("Reward Reel Mode (Post-Battle)")]
     [Tooltip("Optional default reward config. BattleManager can override by calling EnterRewardMode(...)")]
     [SerializeField] private RewardReelConfigSO defaultRewardConfig;
@@ -84,7 +94,6 @@ public class ReelSpinSystem : MonoBehaviour
         public bool IsTripleAttack => symbols != null && symbols.Count > 0 && attackCount == symbols.Count;
     }
 
-    
     public int SpinsRemaining => spinsRemaining;
 
     // State
@@ -127,6 +136,10 @@ public class ReelSpinSystem : MonoBehaviour
 
         if (resourcePool == null)
             resourcePool = ResourcePool.Instance;
+
+        // If you put the AudioSource on the same GameObject as this script, this will auto-find it.
+        if (spinSfxSource == null)
+            spinSfxSource = GetComponent<AudioSource>();
     }
 
     private void OnDestroy()
@@ -307,7 +320,6 @@ public class ReelSpinSystem : MonoBehaviour
         return true;
     }
 
-
     private SpinLandedInfo BuildSpinLandedInfo(List<ReelSymbolSO> landed)
     {
         SpinLandedInfo info = new SpinLandedInfo
@@ -398,6 +410,29 @@ public class ReelSpinSystem : MonoBehaviour
         Debug.Log($"[ReelSpinSystem] Reward payout: {payoutType} x{amount} (symbol={a.name})");
     }
 
+    private void PlaySpinSfx()
+    {
+        if (!playSpinSfx) return;
+
+        if (spinSfxSource == null)
+        {
+            Debug.LogWarning("[ReelSpinSystem] Spin SFX requested but spinSfxSource is null.", this);
+            return;
+        }
+
+        // If an override clip is set, use it. Otherwise use the AudioSource's clip.
+        AudioClip clipToPlay = (spinSfxClip != null) ? spinSfxClip : spinSfxSource.clip;
+
+        if (clipToPlay == null)
+        {
+            Debug.LogWarning("[ReelSpinSystem] Spin SFX requested but no clip is assigned (spinSfxClip and spinSfxSource.clip are null).", this);
+            return;
+        }
+
+        // PlayOneShot is safer for SFX (doesn't care if source is already playing).
+        spinSfxSource.PlayOneShot(clipToPlay);
+    }
+
     private IEnumerator Spin3DPostSelectRoutine(System.Random rng)
     {
         var three = GetFirstThree3DReels();
@@ -407,6 +442,9 @@ public class ReelSpinSystem : MonoBehaviour
             _threeDSpinRoutine = null;
             yield break;
         }
+
+        // ✅ Play SFX at the exact moment we're about to start spinning the reels
+        PlaySpinSfx();
 
         foreach (var e in three)
             e.reel3d.SpinRandom(rng, minFullRotations3D);
@@ -525,6 +563,4 @@ public class ReelSpinSystem : MonoBehaviour
         pendingA = pendingD = pendingM = pendingW = 0;
     }
 }
-
-
 ////////////////////////////////////////////////////////////

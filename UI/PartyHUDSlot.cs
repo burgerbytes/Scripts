@@ -24,6 +24,13 @@ public class PartyHUDSlot : MonoBehaviour
     [Header("Conceal / Hidden")]
     [SerializeField] private Color hiddenPortraitTint = new Color(0.65f, 0.65f, 0.65f, 1f);
 
+
+    [Header("Stun")]
+    [SerializeField] private Color stunnedPortraitTint = new Color(0.55f, 0.55f, 1.0f, 1.0f);
+
+    [Header("Triple Blade (Empowered)")]
+    [SerializeField] private Color tripleBladeEmpoweredTint = new Color(1.0f, 0.9f, 0.55f, 1.0f);
+
     [Header("Texts")]
     [SerializeField] private TMP_Text nameText;
     [SerializeField] private TMP_Text hpText;
@@ -121,7 +128,14 @@ public class PartyHUDSlot : MonoBehaviour
 
         // Hidden (Conceal) visual: tint portrait gray.
         if (portraitImage != null)
-            portraitImage.color = snapshot.IsHidden ? hiddenPortraitTint : Color.white;
+            if (snapshot.IsStunned)
+                portraitImage.color = stunnedPortraitTint;
+            else if (snapshot.IsHidden)
+                portraitImage.color = hiddenPortraitTint;
+            else if (snapshot.IsTripleBladeEmpowered)
+                portraitImage.color = tripleBladeEmpoweredTint;
+            else
+                portraitImage.color = Color.white;
         if (hpText != null) hpText.text = $"{snapshot.HP}/{snapshot.MaxHP}";
 
         // --- HP prediction & damage segment ---
@@ -220,7 +234,7 @@ public class PartyHUDSlot : MonoBehaviour
 
 
         if (slotButton != null)
-            slotButton.interactable = !snapshot.IsDead;
+            slotButton.interactable = !snapshot.IsDead && !snapshot.HasActedThisRound && !snapshot.IsStunned;
     }
 
     private void SetDamagePreviewVisible(bool visible)

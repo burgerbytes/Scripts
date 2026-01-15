@@ -22,6 +22,13 @@ public class Monster : MonoBehaviour
 
         [Tooltip("AoE abilities hit all allies.")]
         public bool isAoe = false;
+
+        [Header("Status Effects")]
+        [Tooltip("If true, this attack will stun the target hero (preventing them from acting) for upcoming Player Phases.")]
+        public bool stunsTarget = false;
+
+        [Tooltip("How many upcoming Player Phases the target is stunned for (typically 1).")]
+        public int stunPlayerPhases = 1;
     }
 
     public event Action<int, int> OnHpChanged;
@@ -185,6 +192,24 @@ public class Monster : MonoBehaviour
     {
         var atk = GetDefaultAttack();
         return atk != null ? atk.damage : 0;
+    }
+
+    public bool DefaultAttackStunsTarget
+    {
+        get
+        {
+            var atk = GetDefaultAttack();
+            return atk != null && atk.stunsTarget;
+        }
+    }
+
+    public int DefaultAttackStunPlayerPhases
+    {
+        get
+        {
+            var atk = GetDefaultAttack();
+            return atk != null ? Mathf.Max(1, atk.stunPlayerPhases) : 1;
+        }
     }
 
     private MonsterAttack GetDefaultAttack()

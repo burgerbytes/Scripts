@@ -12,10 +12,13 @@ public class TripleBladeTurnEffectSystem : MonoBehaviour
     [SerializeField] private float attackMultiplierForTurn = 2.0f;
     [SerializeField] private int maxDamageAttacksThisTurn = 1;
 
+    private BattleManager _bm;
+
     private void Awake()
     {
         if (battleManager == null) battleManager = BattleManager.Instance;
         if (reelSpinSystem == null) reelSpinSystem = FindFirstObjectByType<ReelSpinSystem>();
+        _bm = FindObjectOfType<BattleManager>();
     }
 
     private void OnEnable()
@@ -95,7 +98,11 @@ public class TripleBladeTurnEffectSystem : MonoBehaviour
             h.MultiplyTurnAttack(attackMultiplierForTurn);
             h.ConstrainDamageAttacksThisTurn(maxDamageAttacksThisTurn);
 
-            appliedCount++;
+            
+            h.SetTripleBladeEmpoweredThisTurn(true);
+			appliedCount++;
+            var bm = FindObjectOfType<BattleManager>();
+            if (_bm != null) _bm.RefreshStatusVisuals();
             Debug.Log($"[TripleBlade] EFFECT ACTIVE on hero '{h.gameObject.name}' this turn: Attack x{attackMultiplierForTurn}, Max damaging attacks = {maxDamageAttacksThisTurn}.");
         }
 
