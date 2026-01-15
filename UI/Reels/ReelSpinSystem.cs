@@ -41,6 +41,13 @@ public class ReelSpinSystem : MonoBehaviour
     [SerializeField] private int spinsPerTurn = 3;
     [SerializeField] private Button stopSpinningButton;
 
+    [Header("Spin Timing (3D)")]
+    [Tooltip("If enabled, forces all 3D reels to spin for at least this many seconds.")]
+    [SerializeField] private bool overrideMinSpinDuration3D = true;
+
+    [Tooltip("Minimum time (seconds) the 3D reels must spin before they can stop.")]
+    [SerializeField] private float minSpinDurationOverride3D = 1.5f;
+
     [Header("Spin SFX")]
     [Tooltip("AudioSource used to play the reel spin sound. If left null, we'll try GetComponent<AudioSource>().")]
     [SerializeField] private AudioSource spinSfxSource;
@@ -50,6 +57,16 @@ public class ReelSpinSystem : MonoBehaviour
 
     [Tooltip("Play the spin sound when a spin begins.")]
     [SerializeField] private bool playSpinSfx = true;
+
+    [Header("3-in-a-Row SFX")]
+    [Tooltip("Play a special sound when the 3 landed midrow symbols match.")]
+    [SerializeField] private bool playThreeMatchSfx = true;
+
+    [Tooltip("AudioSource for the 3-in-a-row sound. If null, uses spinSfxSource.")]
+    [SerializeField] private AudioSource threeMatchSfxSource;
+
+    [Tooltip("Clip to play when 3-in-a-row happens.")]
+    [SerializeField] private AudioClip threeMatchSfxClip;
 
     [Header("Reward Reel Mode (Post-Battle)")]
     [Tooltip("Optional default reward config. BattleManager can override by calling EnterRewardMode(...)")]
@@ -137,9 +154,13 @@ public class ReelSpinSystem : MonoBehaviour
         if (resourcePool == null)
             resourcePool = ResourcePool.Instance;
 
-        // If you put the AudioSource on the same GameObject as this script, this will auto-find it.
+        // Auto-find spin audio source if on same GO.
         if (spinSfxSource == null)
             spinSfxSource = GetComponent<AudioSource>();
+
+        // Default 3-match source to spin source if not provided.
+        if (threeMatchSfxSource == null)
+            threeMatchSfxSource = spinSfxSource;
     }
 
     private void OnDestroy()
@@ -420,17 +441,44 @@ public class ReelSpinSystem : MonoBehaviour
             return;
         }
 
-        // If an override clip is set, use it. Otherwise use the AudioSource's clip.
         AudioClip clipToPlay = (spinSfxClip != null) ? spinSfxClip : spinSfxSource.clip;
-
         if (clipToPlay == null)
         {
             Debug.LogWarning("[ReelSpinSystem] Spin SFX requested but no clip is assigned (spinSfxClip and spinSfxSource.clip are null).", this);
             return;
         }
 
-        // PlayOneShot is safer for SFX (doesn't care if source is already playing).
         spinSfxSource.PlayOneShot(clipToPlay);
+    }
+
+    private void PlayThreeMatchSfx()
+    {
+        if (!playThreeMatchSfx) return;
+
+        if (threeMatchSfxClip == null)
+        {
+            // If you haven't assigned it yet, silently do nothing.
+            return;
+        }
+
+        AudioSource src = (threeMatchSfxSource != null) ? threeMatchSfxSource : spinSfxSource;
+        if (src == null)
+        {
+            Debug.LogWarning("[ReelSpinSystem] 3-match SFX requested but no AudioSource is available.", this);
+            return;
+        }
+
+        src.PlayOneShot(threeMatchSfxClip);
+    }
+
+    private static bool IsThreeOfAKind(List<ReelSymbolSO> landed)
+    {
+        if (landed == null || landed.Count < 3) return false;
+        ReelSymbolSO a = landed[0];
+        ReelSymbolSO b = landed[1];
+        ReelSymbolSO c = landed[2];
+        if (a == null || b == null || c == null) return false;
+        return (a == b && a == c);
     }
 
     private IEnumerator Spin3DPostSelectRoutine(System.Random rng)
@@ -443,7 +491,18 @@ public class ReelSpinSystem : MonoBehaviour
             yield break;
         }
 
-        // ✅ Play SFX at the exact moment we're about to start spinning the reels
+        // Apply global min duration override (optional)
+        if (overrideMinSpinDuration3D)
+        {
+            float dur = Mathf.Max(0f, minSpinDurationOverride3D);
+            for (int i = 0; i < three.Count; i++)
+            {
+                if (three[i]?.reel3d != null)
+                    three[i].reel3d.MinSpinDurationSeconds = dur;
+            }
+        }
+
+        // ✅ Play spin SFX exactly when we instruct reels to spin
         PlaySpinSfx();
 
         foreach (var e in three)
@@ -469,6 +528,10 @@ public class ReelSpinSystem : MonoBehaviour
 
         if (log3DMidRowSymbolsEachSpin)
             Debug.Log($"[ReelSpinSystem] 3D MidRow (post-select): {string.Join(" | ", parts)}");
+
+        // ✅ Play special SFX if 3-in-a-row
+        if (IsThreeOfAKind(landed))
+            PlayThreeMatchSfx();
 
         if (_rewardModeActive)
         {

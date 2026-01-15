@@ -46,6 +46,9 @@ public class Reel3DColumn : MonoBehaviour
     [Tooltip("Degrees per second for the spin animation.")]
     [SerializeField] private float spinDegreesPerSecond = 720f;
 
+    [Tooltip("Minimum amount of time (seconds) this reel must spin before it can stop. 0 = no minimum.")]
+    [SerializeField] private float minSpinDurationSeconds = 0f;
+
     [Tooltip("If true, the reel rotates in the negative direction around localSpinAxis.")]
     [SerializeField] private bool reverseSpinDirection = true;
 
@@ -78,6 +81,12 @@ public class Reel3DColumn : MonoBehaviour
 
     public ReelStripSO Strip => strip;
     public int QuadCount => quadCount;
+
+    public float MinSpinDurationSeconds
+    {
+        get => minSpinDurationSeconds;
+        set => minSpinDurationSeconds = Mathf.Max(0f, value);
+    }
 
     private float StepDeg => 360f / Mathf.Max(1, quadCount);
     private float StepDir => reverseSpinDirection ? -1f : 1f;
@@ -249,7 +258,7 @@ public class Reel3DColumn : MonoBehaviour
 
     /// <summary>
     /// Spins for a random number of steps (>= minFullRotations full turns) and stops exactly on a step.
-    /// The landed symbol is determined AFTER stopping (e.g., via MidrowPlane intersection).
+    /// Enforces minSpinDurationSeconds by increasing steps if needed.
     /// </summary>
     public void SpinRandom(System.Random rng, int minFullRotations = 1)
     {
@@ -270,6 +279,17 @@ public class Reel3DColumn : MonoBehaviour
     {
         if (stepsForward <= 0)
             stepsForward = Mathf.Max(1, quadCount);
+
+        // ✅ Enforce a minimum spin time by increasing the step count.
+        float speed = Mathf.Max(1f, spinDegreesPerSecond); // deg/sec
+        float minDur = Mathf.Max(0f, minSpinDurationSeconds);
+
+        if (minDur > 0f)
+        {
+            float minDeg = speed * minDur;                       // degrees we must travel to last minDur seconds
+            int minSteps = Mathf.CeilToInt(minDeg / StepDeg);    // steps needed to reach minDeg (must be whole steps)
+            stepsForward = Mathf.Max(stepsForward, minSteps);
+        }
 
         if (_routine != null)
             StopCoroutine(_routine);
@@ -339,10 +359,6 @@ public class Reel3DColumn : MonoBehaviour
         SetPrimaryAxisAngle(baseAngle);
     }
 
-    /// <summary>
-    /// Returns the symbol on the quad that intersects the given MidrowPlane (thin collider/renderer bounds).
-    /// Returns null if none is found.
-    /// </summary>
     public ReelSymbolSO GetMidrowSymbolByIntersection(GameObject midrowPlane, out int quadIndex)
     {
         quadIndex = -1;
@@ -363,7 +379,6 @@ public class Reel3DColumn : MonoBehaviour
     {
         EnsureBuilt();
 
-        // Prefer explicit intersection.
         for (int i = 0; i < _quads.Count; i++)
         {
             var mr = _quads[i].frontMr;
@@ -373,7 +388,6 @@ public class Reel3DColumn : MonoBehaviour
                 return i;
         }
 
-        // Fallback: choose closest quad to the plane center (helps if bounds miss due to thinness).
         Vector3 p = planeBounds.center;
         int best = -1;
         float bestDist = float.PositiveInfinity;
@@ -475,7 +489,6 @@ public class Reel3DColumn : MonoBehaviour
         if (!rebuildNow)
             return;
 
-        // Force rebuild
         _quads.Clear();
         _fixedSymbolOnQuad.Clear();
 
