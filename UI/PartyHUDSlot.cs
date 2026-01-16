@@ -1,6 +1,3 @@
-// GUID: 70f097a53128abb419f85d811ffa21eb
-////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -26,7 +23,6 @@ public class PartyHUDSlot : MonoBehaviour
     [Header("Conceal / Hidden")]
     [SerializeField] private Color hiddenPortraitTint = new Color(0.65f, 0.65f, 0.65f, 1f);
 
-
     [Header("Stun")]
     [SerializeField] private Color stunnedPortraitTint = new Color(0.55f, 0.55f, 1.0f, 1.0f);
 
@@ -44,7 +40,7 @@ public class PartyHUDSlot : MonoBehaviour
     [SerializeField] private TMP_Text blockValueText;
 
     [Header("Bars (HP)")]
-    [Tooltip("The filled HP bar (red) that shows predicted HP (or current HP when no preview). Must be Image Type=Filled.")]
+    [Tooltip("The HP bar foreground (red). We resize its RectTransform width (NOT fillAmount).")]
     [SerializeField] private Image hpFill;
 
     [Tooltip("A non-filled Image used as a RECT segment to show incoming damage (yellow).")]
@@ -69,17 +65,10 @@ public class PartyHUDSlot : MonoBehaviour
     public int PartyIndex => partyIndex;
     public RectTransform RectTransform => (RectTransform)transform;
 
-
-    // Cache to avoid spamming SetActive/logs every RefreshAllSlots.
-    private bool _blockDesiredVisible;
-
     // Debug/state tracking to avoid log spam.
     private bool _lastShowActualShield = false;
-    private bool _lastShowPreviewShield = false;
     private int _lastShieldValue = -1;
-    /// <summary>
-    /// Set the portrait sprite shown on this slot. Call this from PartyHUD / wherever you bind heroes to slots.
-    /// </summary>
+
     public void SetPortrait(Sprite portrait)
     {
         if (portraitImage == null)
@@ -96,8 +85,6 @@ public class PartyHUDSlot : MonoBehaviour
 
         portraitImage.enabled = true;
         portraitImage.sprite = s;
-
-        // Optional: keep portrait proportions sane
         portraitImage.preserveAspect = true;
     }
 
@@ -117,7 +104,6 @@ public class PartyHUDSlot : MonoBehaviour
         SetBlockVisualVisible(true);
         SetDamagePreviewVisible(false);
 
-        // Ensure portrait starts in a reasonable state
         SetPortrait(null);
     }
 
@@ -128,8 +114,9 @@ public class PartyHUDSlot : MonoBehaviour
     {
         if (nameText != null) nameText.text = snapshot.Name ?? $"Ally {partyIndex + 1}";
 
-        // Hidden (Conceal) visual: tint portrait gray.
+        // Status-based portrait tint
         if (portraitImage != null)
+        {
             if (snapshot.IsStunned)
                 portraitImage.color = stunnedPortraitTint;
             else if (snapshot.IsHidden)
@@ -138,9 +125,11 @@ public class PartyHUDSlot : MonoBehaviour
                 portraitImage.color = tripleBladeEmpoweredTint;
             else
                 portraitImage.color = Color.white;
+        }
+
         if (hpText != null) hpText.text = $"{snapshot.HP}/{snapshot.MaxHP}";
 
-        // --- HP prediction & damage segment ---
+        // --- HP current + incoming preview ---
         int currentHP = snapshot.HP;
         int maxHP = Mathf.Max(1, snapshot.MaxHP);
 
@@ -150,32 +139,34 @@ public class PartyHUDSlot : MonoBehaviour
         float current01 = Mathf.Clamp01((float)currentHP / maxHP);
         float predicted01 = Mathf.Clamp01((float)predictedHP / maxHP);
 
-        // Red HP fill shows predicted when incoming > 0, else current.
-        if (hpFill != null)
-            hpFill.fillAmount = (incoming > 0) ? predicted01 : current01;
+        // Ensure we have a valid bar width BEFORE resizing any rects
+        float barWidth = GetHpBarWidth();
 
-        // Yellow segment shows the "loss" region from predicted -> current.
-        if (incoming > 0 && hpDamagePreviewRect != null && hpBarFullRect != null)
+        // ✅ Red HP fill uses the same rect-width logic as the yellow preview
+        ApplyBarSegment(
+            rect: hpFill != null ? hpFill.rectTransform : null,
+            barWidth: barWidth,
+            left01: 0f,
+            right01: current01,
+            stretchFullHeight: true
+        );
+
+        // Yellow preview segment shows loss region predicted -> current
+        if (incoming > 0 && hpDamagePreviewRect != null && hpBarFullRect != null && predictedHP < currentHP)
         {
-            float barWidth = hpBarFullRect.rect.width;
+            ApplyBarSegment(
+                rect: hpDamagePreviewRect,
+                barWidth: barWidth,
+                left01: predicted01,
+                right01: current01,
+                stretchFullHeight: true
+            );
 
-            float left01 = predicted01;  // segment starts at predicted
-            float right01 = current01;   // segment ends at current
+            // Put yellow on top so it can't be hidden
+            hpDamagePreviewRect.SetAsLastSibling();
 
-            float leftX = left01 * barWidth;
-            float rightX = right01 * barWidth;
-
-            float width = Mathf.Max(0f, rightX - leftX);
-
-            // Anchors: left/stretchY. We set anchoredPosition.x as left edge, and sizeDelta.x as width.
-            hpDamagePreviewRect.anchorMin = new Vector2(0f, hpDamagePreviewRect.anchorMin.y);
-            hpDamagePreviewRect.anchorMax = new Vector2(0f, hpDamagePreviewRect.anchorMax.y);
-            hpDamagePreviewRect.pivot = new Vector2(0f, hpDamagePreviewRect.pivot.y);
-
-            hpDamagePreviewRect.anchoredPosition = new Vector2(leftX, hpDamagePreviewRect.anchoredPosition.y);
-            hpDamagePreviewRect.sizeDelta = new Vector2(width, hpDamagePreviewRect.sizeDelta.y);
-
-            SetDamagePreviewVisible(width > 0.5f);
+            float widthPx = Mathf.Max(0f, (current01 - predicted01) * barWidth);
+            SetDamagePreviewVisible(widthPx > 0.5f);
         }
         else
         {
@@ -186,7 +177,7 @@ public class PartyHUDSlot : MonoBehaviour
         if (staminaFill != null) staminaFill.fillAmount = snapshot.Stamina01;
         if (staminaText != null) staminaText.text = $"{snapshot.Stamina}/{snapshot.MaxStamina}";
 
-        // --- Status ---
+        // --- Status text ---
         if (statusText != null)
         {
             if (snapshot.IsDead) statusText.text = "Status: DEAD";
@@ -196,7 +187,6 @@ public class PartyHUDSlot : MonoBehaviour
         }
 
         // --- Block icon ---
-        // Block UI should only appear AFTER the ability has been cast (no preview while targeting).
         bool showActualShield = snapshot.Shield > 0;
         int shieldValueForUI = showActualShield ? snapshot.Shield : 0;
 
@@ -207,38 +197,70 @@ public class PartyHUDSlot : MonoBehaviour
                 Debug.Log($"[PartyHUDSlot][BlockUI] slot={partyIndex} showActual={showActualShield} value={shieldValueForUI}", this);
                 _lastShowActualShield = showActualShield;
                 _lastShieldValue = shieldValueForUI;
-
-                // Keep these in sync to avoid confusing future logs.
-                _lastShowPreviewShield = false;
             }
         }
 
-        bool desiredVisible = showActualShield;
-        _blockDesiredVisible = desiredVisible;
-
-        // Only toggle actual GameObjects when the desired visibility changes (avoids log spam).
-        //SetBlockVisualVisible(desiredVisible);
-
-        if (desiredVisible)
+        if (showActualShield)
         {
-            blockIcon.SetActive(true);
-            if (blockValueText != null)
-                blockValueText.text = shieldValueForUI.ToString();
+            if (blockIcon != null) blockIcon.SetActive(true);
+            if (blockValueText != null) blockValueText.text = shieldValueForUI.ToString();
         }
         else
         {
-            blockIcon.SetActive(false);
-            if (blockValueText != null)
-                blockValueText.text = string.Empty;
+            if (blockIcon != null) blockIcon.SetActive(false);
+            if (blockValueText != null) blockValueText.text = string.Empty;
         }
 
         SetSelected(isSelected);
 
-
         if (slotButton != null)
-            // Heroes can cast multiple abilities per turn (resource-limited).
-            // Only disable interaction for dead or stunned heroes.
             slotButton.interactable = !snapshot.IsDead && !snapshot.IsStunned;
+    }
+
+    private float GetHpBarWidth()
+    {
+        if (hpBarFullRect == null)
+            return 0f;
+
+        // Layout groups can report width as 0 unless rebuilt
+        LayoutRebuilder.ForceRebuildLayoutImmediate(hpBarFullRect);
+        return hpBarFullRect.rect.width;
+    }
+
+    /// <summary>
+    /// Resizes a rect to fill from left01 to right01 of the bar width.
+    /// This is the exact approach used by the yellow damage preview.
+    /// </summary>
+    private void ApplyBarSegment(RectTransform rect, float barWidth, float left01, float right01, bool stretchFullHeight)
+    {
+        if (rect == null) return;
+
+        left01 = Mathf.Clamp01(left01);
+        right01 = Mathf.Clamp01(right01);
+
+        float leftX = left01 * barWidth;
+        float rightX = right01 * barWidth;
+        float width = Mathf.Max(0f, rightX - leftX);
+
+        // Anchor to left edge, stretch vertical if desired
+        if (stretchFullHeight)
+        {
+            rect.anchorMin = new Vector2(0f, 0f);
+            rect.anchorMax = new Vector2(0f, 1f);
+            rect.pivot = new Vector2(0f, 0.5f);
+
+            rect.anchoredPosition = new Vector2(leftX, 0f);
+            rect.sizeDelta = new Vector2(width, 0f);
+        }
+        else
+        {
+            rect.anchorMin = new Vector2(0f, rect.anchorMin.y);
+            rect.anchorMax = new Vector2(0f, rect.anchorMax.y);
+            rect.pivot = new Vector2(0f, rect.pivot.y);
+
+            rect.anchoredPosition = new Vector2(leftX, rect.anchoredPosition.y);
+            rect.sizeDelta = new Vector2(width, rect.sizeDelta.y);
+        }
     }
 
     private void SetDamagePreviewVisible(bool visible)
@@ -280,7 +302,6 @@ public class PartyHUDSlot : MonoBehaviour
         }
     }
 
-
     private void SetBlockVisualVisible(bool visible)
     {
         if (blockIcon != null)
@@ -290,7 +311,3 @@ public class PartyHUDSlot : MonoBehaviour
             blockValueText.gameObject.SetActive(visible);
     }
 }
-
-
-
-////////////////////////////////////////////////////////////

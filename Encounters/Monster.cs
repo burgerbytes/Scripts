@@ -133,8 +133,12 @@ public class Monster : MonoBehaviour
     [Header("Status: Bleeding")]
     [SerializeField] private int _bleedStacks = 0;
 
+    [Tooltip("The PlayerTurnNumber when Bleed was most recently applied. Used to prevent same-turn ticking.")]
+    [SerializeField] private int _bleedAppliedOnPlayerTurn = -999;
+
     public int BleedStacks => _bleedStacks;
     public bool IsBleeding => _bleedStacks > 0;
+    public int BleedAppliedOnPlayerTurn => _bleedAppliedOnPlayerTurn;
     // ✅ These are required by MonsterHpBar.cs
     public int MaxHp => maxHp;
     public int CurrentHp => _currentHp;
@@ -363,11 +367,24 @@ public class Monster : MonoBehaviour
     {
         if (stacks <= 0) return;
         _bleedStacks = Mathf.Max(0, _bleedStacks + stacks);
+
+        if (BattleManager.Instance != null)
+            _bleedAppliedOnPlayerTurn = BattleManager.Instance.PlayerTurnNumber;
     }
 
     public void SetBleedStacks(int stacks)
     {
         _bleedStacks = Mathf.Max(0, stacks);
+        if (_bleedStacks <= 0)
+            _bleedAppliedOnPlayerTurn = -999;
+    }
+
+    public void SetBleedStacks(int stacks, int appliedOnPlayerTurn)
+    {
+        _bleedStacks = Mathf.Max(0, stacks);
+        _bleedAppliedOnPlayerTurn = appliedOnPlayerTurn;
+        if (_bleedStacks <= 0)
+            _bleedAppliedOnPlayerTurn = -999;
     }
 
     /// <summary>
@@ -376,12 +393,30 @@ public class Monster : MonoBehaviour
     /// </summary>
     public int TickBleedingAtTurnStart()
     {
+        // Backwards-compat wrapper. Bleed now ticks at END of the player's turn.
+        int turn = (BattleManager.Instance != null) ? BattleManager.Instance.PlayerTurnNumber : 0;
+        return TickBleedingAtEndOfPlayerTurn(turn);
+    }
+
+    /// <summary>
+    /// Ticks Bleeding at the END of the player's turn (starting after the turn it was applied).
+    /// Deals HP damage equal to stacks, then reduces stacks by 1.
+    /// Returns HP damage applied.
+    /// </summary>
+    public int TickBleedingAtEndOfPlayerTurn(int currentPlayerTurnNumber)
+    {
         if (_bleedStacks <= 0 || IsDead) return 0;
+
+        if (_bleedAppliedOnPlayerTurn == currentPlayerTurnNumber)
+            return 0;
 
         int dmg = Mathf.Max(0, _bleedStacks);
         int dealt = ApplyRawDamage(dmg);
 
         _bleedStacks = Mathf.Max(0, _bleedStacks - 1);
+        if (_bleedStacks <= 0)
+            _bleedAppliedOnPlayerTurn = -999;
+
         return dealt;
     }
 
@@ -395,4 +430,5 @@ public class Monster : MonoBehaviour
     }
 
 }
+
 

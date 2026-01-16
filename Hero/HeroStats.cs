@@ -1,5 +1,3 @@
-// GUID: a3e2dd32a76bf594ba876a56162b79f2
-////////////////////////////////////////////////////////////
 using System;
 using UnityEngine;
 
@@ -55,6 +53,9 @@ public class HeroStats : MonoBehaviour
     [Header("Damage-over-time")]
     [Tooltip("Bleeding stacks: each turn lose 1 HP per stack, then stacks reduce by 1.")]
     [SerializeField] private int bleedStacks = 0;
+
+    [Tooltip("The PlayerTurnNumber when Bleed was most recently applied. Used to prevent same-turn ticking.")]
+    [SerializeField] private int bleedAppliedOnPlayerTurn = -999;
 
 
     [SerializeField] private bool isStunned = false;
@@ -170,6 +171,7 @@ public class HeroStats : MonoBehaviour
 
     public int BleedStacks => bleedStacks;
     public bool IsBleeding => bleedStacks > 0;
+    public int BleedAppliedOnPlayerTurn => bleedAppliedOnPlayerTurn;
 
 
     public bool IsStunned => isStunned;
@@ -229,6 +231,7 @@ public class HeroStats : MonoBehaviour
         currentShield = 0;
         isHidden = false;
         bleedStacks = 0;
+        bleedAppliedOnPlayerTurn = -999;
 
         NotifyChanged();
     }
@@ -238,6 +241,7 @@ public class HeroStats : MonoBehaviour
         currentShield = 0;
         isHidden = false;
         bleedStacks = 0;
+        bleedAppliedOnPlayerTurn = -999;
         NotifyChanged();
     }
 
@@ -315,6 +319,11 @@ public class HeroStats : MonoBehaviour
     {
         if (stacks <= 0) return;
         bleedStacks = Mathf.Max(0, bleedStacks + stacks);
+
+        // Record the player turn this was applied so we can skip ticking on the same turn.
+        if (BattleManager.Instance != null)
+            bleedAppliedOnPlayerTurn = BattleManager.Instance.PlayerTurnNumber;
+
         NotifyChanged();
     }
 
@@ -325,14 +334,32 @@ public class HeroStats : MonoBehaviour
     /// </summary>
     public int TickBleedingAtTurnStart()
     {
+        // Backwards-compat wrapper. Bleed now ticks at END of the player's turn.
+        int turn = (BattleManager.Instance != null) ? BattleManager.Instance.PlayerTurnNumber : 0;
+        return TickBleedingAtEndOfPlayerTurn(turn);
+    }
+
+    /// <summary>
+    /// Ticks Bleeding at the END of the player's turn.
+    /// - Deals HP damage equal to current stacks
+    /// - Then reduces stacks by 1
+    /// - Does NOT tick on the same player turn it was applied
+    /// Returns the HP damage applied (bypasses Shield/Defense).
+    /// </summary>
+    public int TickBleedingAtEndOfPlayerTurn(int currentPlayerTurnNumber)
+    {
         if (bleedStacks <= 0)
+            return 0;
+
+        // Skip ticking on the same player turn the bleed was applied.
+        if (bleedAppliedOnPlayerTurn == currentPlayerTurnNumber)
             return 0;
 
         int dmg = Mathf.Max(0, bleedStacks);
         int before = currentHp;
         currentHp = Mathf.Max(0, currentHp - dmg);
 
-        // Reduce stacks by 1 each turn.
+        // Reduce stacks by 1 each tick.
         bleedStacks = Mathf.Max(0, bleedStacks - 1);
 
         NotifyChanged();
@@ -572,6 +599,16 @@ public class HeroStats : MonoBehaviour
         bleedStacks = Mathf.Max(0, stacks);
     }
 
+    /// <summary>
+    /// Used by BattleManager Undo. Restores bleed stacks and the "applied on player turn" marker.
+    /// This prevents bleed from incorrectly ticking immediately after an Undo.
+    /// </summary>
+    public void SetBleedStacks(int stacks, int appliedOnPlayerTurn)
+    {
+        bleedStacks = Mathf.Max(0, stacks);
+        bleedAppliedOnPlayerTurn = appliedOnPlayerTurn;
+    }
+
     public void GetEquippedItems()
     {
         if (equipmentSlots == null) return;
@@ -781,3 +818,4 @@ public class HeroStats : MonoBehaviour
 }
 
 ////////////////////////////////////////////////////////////
+

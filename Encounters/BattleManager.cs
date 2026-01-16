@@ -12,6 +12,11 @@ using System.Runtime.CompilerServices;
 
 public class BattleManager : MonoBehaviour
 {
+
+    // ================= Player Turn Tracking =================
+    // Increments at the start of each Player Phase. Used for bleed tick timing.
+    public int PlayerTurnNumber { get; private set; } = 0;
+
     public static event Action PartyReady;
     public static BattleManager Instance { get; private set; }
 
@@ -70,6 +75,7 @@ public class BattleManager : MonoBehaviour
         public int shield;
         public bool hidden;
         public int bleedStacks;
+        public int bleedAppliedOnPlayerTurn;
         public bool hasActedThisRound;
     }
 
@@ -80,6 +86,7 @@ public class BattleManager : MonoBehaviour
         public bool isActive;
         public int hp;
         public int bleedStacks;
+        public int bleedAppliedOnPlayerTurn;
         public Vector3 position;
         public Quaternion rotation;
     }
@@ -291,23 +298,6 @@ public class BattleManager : MonoBehaviour
 
     private bool _postBattleRunning;
 
-    // ================= ENCOUNTER PROGRESSION =================
-    // Tracks the current fight number within the run.
-    // We keep this locally because StretchController.BattlesCompleted may represent
-    // a different concept (e.g., "battles completed in current stretch") and may
-    // not change when you transition from fight to fight.
-    [SerializeField] private int debugStartingFightIndex = 1;
-    private int _runFightIndex = 1;
-
-    private int CurrentFightIndex
-    {
-        get
-        {
-            // 1-based: first battle = 1
-            return Mathf.Max(1, _runFightIndex);
-        }
-    }
-
     // IMPORTANT: finds inactive objects too (e.g., UI panels disabled by default)
     private static T FindInSceneIncludingInactive<T>() where T : UnityEngine.Object
     {
@@ -471,9 +461,6 @@ public class BattleManager : MonoBehaviour
     {
         _startupRewardHandled = false;
 
-        // Reset run fight progression.
-        _runFightIndex = Mathf.Max(1, debugStartingFightIndex);
-
         CleanupExistingEncounter();
         DestroyPartyAvatars();
 
@@ -594,10 +581,29 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
         {
             var intent = _plannedIntents[i];
             if (intent.enemy == null || intent.enemy.IsDead) continue;
-            if (intent.targetPartyIndex != index) continue;
+            // Include AoE intents for every party member.
+            bool hitsThisPartyIndex = intent.isAoe || intent.targetPartyIndex == index;
+            if (!hitsThisPartyIndex) continue;
 
-            total += Mathf.Max(0, intent.enemy.GetDamage());
+            // Prefer the intent's chosen damage payload so preview matches execution.
+            int dmg = intent.damage;
+            if (dmg <= 0)
+                dmg = intent.enemy.GetDamage();
+
+            total += Mathf.Max(0, dmg);
         }
+
+        // Include end-of-player-turn status damage (e.g., Bleed) in the same preview bar.
+        // Bleed ticks at the END of the player's turn, and does NOT tick on the same player-turn it was applied.
+        var hs = _party != null && index >= 0 && index < _party.Count ? _party[index]?.stats : null;
+        if (hs != null && hs.CurrentHp > 0)
+        {
+            if (hs.BleedStacks > 0 && hs.BleedAppliedOnPlayerTurn != PlayerTurnNumber)
+            {
+                total += Mathf.Max(0, hs.BleedStacks);
+            }
+        }
+
         return total;
     }
 
@@ -824,7 +830,10 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
         if (_resolving) return;
         if (_enemyTurnRoutine != null) return;
 
-        // Clear resources at end of player turn
+                // Bleed ticks here (end of player turn)
+        TickBleeding_EndOfPlayerTurn();
+
+// Clear resources at end of player turn
         if (resourcePool != null)
             resourcePool.ClearAll();
         
@@ -835,7 +844,54 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
     }
 
 
-    private IEnumerator EnemyPhaseRoutine()
+    
+
+    /// <summary>
+    /// Bleed ticks at END of the player's turn, starting AFTER the turn it was applied.
+    /// Deals 1 HP per stack, then reduces stacks by 1.
+    /// </summary>
+    private void TickBleeding_EndOfPlayerTurn()
+    {
+        // Heroes
+        for (int i = 0; i < PartyCount; i++)
+        {
+            var pm = _party[i];
+            if (pm == null) continue;
+
+            HeroStats hs = pm.stats;
+            if (hs == null) continue;
+            if (hs.CurrentHp <= 0) continue;
+
+            int bleedDamage = hs.TickBleedingAtEndOfPlayerTurn(PlayerTurnNumber);
+            if (bleedDamage > 0 && pm.avatarGO != null)
+                SpawnDamageNumber(pm.avatarGO.transform.position, bleedDamage);
+        }
+
+        // Monsters (iterate backwards because a bleed tick might kill & remove a monster)
+        if (_activeMonsters != null && _activeMonsters.Count > 0)
+        {
+            for (int mi = _activeMonsters.Count - 1; mi >= 0; mi--)
+            {
+                Monster m = _activeMonsters[mi];
+                if (m == null || m.IsDead) continue;
+
+                int bleedDamage = m.TickBleedingAtEndOfPlayerTurn(PlayerTurnNumber);
+                if (bleedDamage > 0)
+                {
+                    SpawnDamageNumber(m.transform.position, bleedDamage);
+
+                    if (m.IsDead)
+                    {
+                        m.PlayDeathEffects();
+                        RemoveMonster(m);
+                    }
+                }
+            }
+        }
+
+        NotifyPartyChanged();
+    }
+private IEnumerator EnemyPhaseRoutine()
     {
         // Enter enemy phase.
         SetState(BattleState.EnemyPhase);
@@ -1693,37 +1749,16 @@ NotifyPartyChanged();
 
     private void ResetPartyRoundFlags()
     {
-        // Bleeding now ticks only at the start of the Player Phase (for both heroes and monsters).
-        // Tick monster bleeding first so icons/numbers reflect the post-tick state when the player regains control.
-        if (_activeMonsters != null && _activeMonsters.Count > 0)
-        {
-            for (int mi = 0; mi < _activeMonsters.Count; mi++)
-            {
-                Monster m = _activeMonsters[mi];
-                if (m == null || m.IsDead) continue;
+        // Start of Player Phase.
+        PlayerTurnNumber++;
 
-                int bleedDamage = m.TickBleedingAtTurnStart();
-                if (bleedDamage > 0)
-                {
-                    SpawnDamageNumber(m.transform.position, bleedDamage);
-
-                    // If the bleed tick killed the monster, play death effects now.
-                    if (m.IsDead)
-                        m.PlayDeathEffects();
-                }
-            }
-        }
+        // Bleed no longer ticks here. It ticks at END of the player's turn, starting AFTER the turn it was applied.
 
         for (int i = 0; i < PartyCount; i++)
         {
             HeroStats hs = _party[i].stats;
             if (hs != null)
             {
-                // Bleeding ticks once per turn (start of Player Phase).
-                int bleedDamage = hs.TickBleedingAtTurnStart();
-                if (bleedDamage > 0 && _party[i].avatarGO != null)
-                    SpawnDamageNumber(_party[i].avatarGO.transform.position, bleedDamage);
-
                 // Stun/phase statuses consume at the start of the player phase.
                 hs.StartPlayerPhaseStatuses();
             }
@@ -1741,6 +1776,7 @@ NotifyPartyChanged();
 
     }
 
+
     private int GetFirstAlivePartyIndex()
     {
         for (int i = 0; i < PartyCount; i++)
@@ -1756,31 +1792,6 @@ NotifyPartyChanged();
 
         if (living.Count == 0) return -1;
         return living[UnityEngine.Random.Range(0, living.Count)];
-    }
-
-    private EnemyPartyCompositionSO PickWeighted(List<EnemyPartyCompositionSO> list)
-    {
-        if (list == null || list.Count == 0) return null;
-
-        float total = 0f;
-        for (int i = 0; i < list.Count; i++)
-            total += Mathf.Max(0f, list[i] != null ? list[i].selectionWeight : 0f);
-
-        if (total <= 0f)
-            return list[UnityEngine.Random.Range(0, list.Count)];
-
-        float r = UnityEngine.Random.value * total;
-        float running = 0f;
-
-        for (int i = 0; i < list.Count; i++)
-        {
-            var p = list[i];
-            running += Mathf.Max(0f, p != null ? p.selectionWeight : 0f);
-            if (r <= running)
-                return p;
-        }
-
-        return list[list.Count - 1];
     }
 
     private void SpawnEncounterMonsters()
@@ -1804,37 +1815,17 @@ NotifyPartyChanged();
         }
         else if (enemyPartyPool != null && enemyPartyPool.Count > 0)
         {
-            // Progression-aware selection: pick from parties eligible for the current fight index.
-            int fightIndex = CurrentFightIndex;
-
-            List<EnemyPartyCompositionSO> eligible = new List<EnemyPartyCompositionSO>();
-            for (int i = 0; i < enemyPartyPool.Count; i++)
+            if (randomizeEnemyPartyFromPool)
             {
-                var p = enemyPartyPool[i];
-                if (p != null && p.IsEligibleForFight(fightIndex))
-                    eligible.Add(p);
-            }
-
-            if (eligible.Count > 0)
-            {
-                // Weighted random among eligible.
-                chosen = PickWeighted(eligible);
-
-                if (logFlow)
-                {
-                    string eligNames = "";
-                    for (int ei = 0; ei < eligible.Count; ei++)
-                    {
-                        if (ei > 0) eligNames += ", ";
-                        eligNames += eligible[ei] != null ? eligible[ei].name : "<null>";
-                    }
-                    Debug.Log($"[BattleManager] FightIndex={fightIndex} EligibleParties=[{eligNames}] Chosen={(chosen != null ? chosen.name : "<null>")}", this);
-                }
+                chosen = enemyPartyPool[UnityEngine.Random.Range(0, enemyPartyPool.Count)];
             }
             else
             {
-                Debug.LogWarning($"[BattleManager] No EnemyPartyComposition eligible for fight {fightIndex}. Falling back to full pool.", this);
-                chosen = enemyPartyPool[UnityEngine.Random.Range(0, enemyPartyPool.Count)];
+                if (_enemyPartyPoolIndex < 0) _enemyPartyPoolIndex = 0;
+                if (_enemyPartyPoolIndex >= enemyPartyPool.Count) _enemyPartyPoolIndex = 0;
+
+                chosen = enemyPartyPool[_enemyPartyPoolIndex];
+                _enemyPartyPoolIndex = (_enemyPartyPoolIndex + 1) % enemyPartyPool.Count;
             }
         }
 
@@ -1898,6 +1889,7 @@ NotifyPartyChanged();
                 }
         }
     }
+
 
 
     /// <summary>
@@ -2103,14 +2095,13 @@ NotifyPartyChanged();
 
         _postBattleRunning = false;
 
-        // Advance run progression so fight-gated enemy party compositions can change.
-        _runFightIndex = Mathf.Max(1, _runFightIndex + 1);
-
         StartBattle();
     }
 
     private void CleanupExistingEncounter()
     {
+        PlayerTurnNumber = 0;
+
         for (int i = 0; i < _activeMonsters.Count; i++)
             if (_activeMonsters[i] != null) Destroy(_activeMonsters[i].gameObject);
 
@@ -2440,6 +2431,7 @@ NotifyPartyChanged();
                 shield = hs.Shield,
                 hidden = hs.IsHidden,
                 bleedStacks = hs.BleedStacks,
+                bleedAppliedOnPlayerTurn = hs.BleedAppliedOnPlayerTurn,
                 hasActedThisRound = pm.hasActedThisRound
             });
         }
@@ -2468,6 +2460,7 @@ NotifyPartyChanged();
                 isActive = m.gameObject.activeSelf && !m.IsDead,
                 hp = m.CurrentHp,
                 bleedStacks = m.BleedStacks,
+                bleedAppliedOnPlayerTurn = m.BleedAppliedOnPlayerTurn,
                 position = m.transform.position,
                 rotation = m.transform.rotation
             });
@@ -2523,7 +2516,7 @@ NotifyPartyChanged();
             if (pm == null || pm.stats == null) continue;
 
             pm.stats.SetRuntimeState(h.hp, h.stamina, h.shield, h.hidden);
-            pm.stats.SetBleedStacks(h.bleedStacks);
+            pm.stats.SetBleedStacks(h.bleedStacks, h.bleedAppliedOnPlayerTurn);
             pm.hasActedThisRound = h.hasActedThisRound;
         }
 
@@ -2553,7 +2546,7 @@ NotifyPartyChanged();
             {
                 m.gameObject.SetActive(true);
                 m.SetCurrentHp(ms.hp);
-                m.SetBleedStacks(ms.bleedStacks);
+                m.SetBleedStacks(ms.bleedStacks, ms.bleedAppliedOnPlayerTurn);
                 if (!m.IsDead)
                     _activeMonsters.Add(m);
             }
@@ -2561,7 +2554,7 @@ NotifyPartyChanged();
             {
                 // Keep dead/inactive monsters hidden
                 m.SetCurrentHp(ms.hp);
-                m.SetBleedStacks(ms.bleedStacks);
+                m.SetBleedStacks(ms.bleedStacks, ms.bleedAppliedOnPlayerTurn);
                 if (m.IsDead || !ms.isActive)
                     m.gameObject.SetActive(false);
             }
