@@ -5,6 +5,12 @@ public class ResourcePool : MonoBehaviour
 {
     public static ResourcePool Instance { get; private set; }
 
+    /// <summary>
+    /// Fired whenever resources are actually added to the pool (finalized payout).
+    /// UI can subscribe to show " +X " popups for each resource type.
+    /// </summary>
+    public static event Action<ResourceType, int> OnResourceAdded;
+
     [SerializeField] private long attack;
     [SerializeField] private long defense;
     [SerializeField] private long magic;
@@ -54,11 +60,37 @@ public class ResourcePool : MonoBehaviour
 
     public void Add(long addAttack, long addDefense, long addMagic, long addWild)
     {
-        if (addAttack > 0) attack += addAttack;
-        if (addDefense > 0) defense += addDefense;
-        if (addMagic > 0) magic += addMagic;
-        if (addWild > 0) wild += addWild;
+        if (addAttack > 0)
+        {
+            attack += addAttack;
+            OnResourceAdded?.Invoke(ResourceType.Attack, SafeInt(addAttack));
+        }
+
+        if (addDefense > 0)
+        {
+            defense += addDefense;
+            OnResourceAdded?.Invoke(ResourceType.Defense, SafeInt(addDefense));
+        }
+
+        if (addMagic > 0)
+        {
+            magic += addMagic;
+            OnResourceAdded?.Invoke(ResourceType.Magic, SafeInt(addMagic));
+        }
+
+        if (addWild > 0)
+        {
+            wild += addWild;
+            OnResourceAdded?.Invoke(ResourceType.Wild, SafeInt(addWild));
+        }
         OnChanged?.Invoke();
+    }
+
+    private static int SafeInt(long v)
+    {
+        if (v <= 0) return 0;
+        if (v > int.MaxValue) return int.MaxValue;
+        return (int)v;
     }
 
     public bool CanAfford(ResourceCost cost)
