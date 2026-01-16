@@ -5,11 +5,8 @@ public class ResourcePool : MonoBehaviour
 {
     public static ResourcePool Instance { get; private set; }
 
-    /// <summary>
-    /// Fired whenever resources are actually added to the pool (finalized payout).
-    /// UI can subscribe to show " +X " popups for each resource type.
-    /// </summary>
-    public static event Action<ResourceType, int> OnResourceAdded;
+    // Fired once per resource type when resources are added (for UI feedback like "+X" popups).
+    public static event Action<ResourceType, long> OnResourceAdded;
 
     [SerializeField] private long attack;
     [SerializeField] private long defense;
@@ -60,37 +57,34 @@ public class ResourcePool : MonoBehaviour
 
     public void Add(long addAttack, long addDefense, long addMagic, long addWild)
     {
+        // Three-of-a-kind bonus: if a resource payout is exactly 3, grant +1 extra.
+        if (addAttack == 3) addAttack += 1;
+        if (addDefense == 3) addDefense += 1;
+        if (addMagic == 3) addMagic += 1;
+        if (addWild == 3) addWild += 1;
+
         if (addAttack > 0)
         {
             attack += addAttack;
-            OnResourceAdded?.Invoke(ResourceType.Attack, SafeInt(addAttack));
+            OnResourceAdded?.Invoke(ResourceType.Attack, addAttack);
         }
-
         if (addDefense > 0)
         {
             defense += addDefense;
-            OnResourceAdded?.Invoke(ResourceType.Defense, SafeInt(addDefense));
+            OnResourceAdded?.Invoke(ResourceType.Defense, addDefense);
         }
-
         if (addMagic > 0)
         {
             magic += addMagic;
-            OnResourceAdded?.Invoke(ResourceType.Magic, SafeInt(addMagic));
+            OnResourceAdded?.Invoke(ResourceType.Magic, addMagic);
         }
-
         if (addWild > 0)
         {
             wild += addWild;
-            OnResourceAdded?.Invoke(ResourceType.Wild, SafeInt(addWild));
+            OnResourceAdded?.Invoke(ResourceType.Wild, addWild);
         }
-        OnChanged?.Invoke();
-    }
 
-    private static int SafeInt(long v)
-    {
-        if (v <= 0) return 0;
-        if (v > int.MaxValue) return int.MaxValue;
-        return (int)v;
+        OnChanged?.Invoke();
     }
 
     public bool CanAfford(ResourceCost cost)

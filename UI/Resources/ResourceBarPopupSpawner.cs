@@ -12,7 +12,6 @@ public class ResourceBarPopupSpawner : MonoBehaviour
 
     private void OnEnable()
     {
-        // Listen for finalized resource gains (i.e., when the pool actually increases).
         ResourcePool.OnResourceAdded += HandleResourceAdded;
     }
 
@@ -21,7 +20,7 @@ public class ResourceBarPopupSpawner : MonoBehaviour
         ResourcePool.OnResourceAdded -= HandleResourceAdded;
     }
 
-    private void HandleResourceAdded(ResourceType type, int amount)
+    private void HandleResourceAdded(ResourceType type, long amount)
     {
         if (amount <= 0) return;
 

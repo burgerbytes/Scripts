@@ -11,12 +11,12 @@ public class ResourceGainPopup : MonoBehaviour
     private Vector3 startPos;
     private float timer;
 
-    public void Initialize(int amount, Color color)
+    public void Initialize(long amount, Color color)
     {
         text = GetComponent<TextMeshProUGUI>();
         startPos = transform.localPosition;
 
-        text.text = $"+{amount}";
+        text.text = "+" + amount.ToString();
         text.color = color;
     }
 
