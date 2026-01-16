@@ -291,6 +291,23 @@ public class BattleManager : MonoBehaviour
 
     private bool _postBattleRunning;
 
+    // ================= ENCOUNTER PROGRESSION =================
+    // Tracks the current fight number within the run.
+    // We keep this locally because StretchController.BattlesCompleted may represent
+    // a different concept (e.g., "battles completed in current stretch") and may
+    // not change when you transition from fight to fight.
+    [SerializeField] private int debugStartingFightIndex = 1;
+    private int _runFightIndex = 1;
+
+    private int CurrentFightIndex
+    {
+        get
+        {
+            // 1-based: first battle = 1
+            return Mathf.Max(1, _runFightIndex);
+        }
+    }
+
     // IMPORTANT: finds inactive objects too (e.g., UI panels disabled by default)
     private static T FindInSceneIncludingInactive<T>() where T : UnityEngine.Object
     {
@@ -453,6 +470,9 @@ public class BattleManager : MonoBehaviour
     public void StartNewRun()
     {
         _startupRewardHandled = false;
+
+        // Reset run fight progression.
+        _runFightIndex = Mathf.Max(1, debugStartingFightIndex);
 
         CleanupExistingEncounter();
         DestroyPartyAvatars();
@@ -1738,6 +1758,31 @@ NotifyPartyChanged();
         return living[UnityEngine.Random.Range(0, living.Count)];
     }
 
+    private EnemyPartyCompositionSO PickWeighted(List<EnemyPartyCompositionSO> list)
+    {
+        if (list == null || list.Count == 0) return null;
+
+        float total = 0f;
+        for (int i = 0; i < list.Count; i++)
+            total += Mathf.Max(0f, list[i] != null ? list[i].selectionWeight : 0f);
+
+        if (total <= 0f)
+            return list[UnityEngine.Random.Range(0, list.Count)];
+
+        float r = UnityEngine.Random.value * total;
+        float running = 0f;
+
+        for (int i = 0; i < list.Count; i++)
+        {
+            var p = list[i];
+            running += Mathf.Max(0f, p != null ? p.selectionWeight : 0f);
+            if (r <= running)
+                return p;
+        }
+
+        return list[list.Count - 1];
+    }
+
     private void SpawnEncounterMonsters()
     {
         _activeMonsters.Clear();
@@ -1759,17 +1804,37 @@ NotifyPartyChanged();
         }
         else if (enemyPartyPool != null && enemyPartyPool.Count > 0)
         {
-            if (randomizeEnemyPartyFromPool)
+            // Progression-aware selection: pick from parties eligible for the current fight index.
+            int fightIndex = CurrentFightIndex;
+
+            List<EnemyPartyCompositionSO> eligible = new List<EnemyPartyCompositionSO>();
+            for (int i = 0; i < enemyPartyPool.Count; i++)
             {
-                chosen = enemyPartyPool[UnityEngine.Random.Range(0, enemyPartyPool.Count)];
+                var p = enemyPartyPool[i];
+                if (p != null && p.IsEligibleForFight(fightIndex))
+                    eligible.Add(p);
+            }
+
+            if (eligible.Count > 0)
+            {
+                // Weighted random among eligible.
+                chosen = PickWeighted(eligible);
+
+                if (logFlow)
+                {
+                    string eligNames = "";
+                    for (int ei = 0; ei < eligible.Count; ei++)
+                    {
+                        if (ei > 0) eligNames += ", ";
+                        eligNames += eligible[ei] != null ? eligible[ei].name : "<null>";
+                    }
+                    Debug.Log($"[BattleManager] FightIndex={fightIndex} EligibleParties=[{eligNames}] Chosen={(chosen != null ? chosen.name : "<null>")}", this);
+                }
             }
             else
             {
-                if (_enemyPartyPoolIndex < 0) _enemyPartyPoolIndex = 0;
-                if (_enemyPartyPoolIndex >= enemyPartyPool.Count) _enemyPartyPoolIndex = 0;
-
-                chosen = enemyPartyPool[_enemyPartyPoolIndex];
-                _enemyPartyPoolIndex = (_enemyPartyPoolIndex + 1) % enemyPartyPool.Count;
+                Debug.LogWarning($"[BattleManager] No EnemyPartyComposition eligible for fight {fightIndex}. Falling back to full pool.", this);
+                chosen = enemyPartyPool[UnityEngine.Random.Range(0, enemyPartyPool.Count)];
             }
         }
 
@@ -1833,7 +1898,6 @@ NotifyPartyChanged();
                 }
         }
     }
-
 
 
     /// <summary>
@@ -2038,6 +2102,9 @@ NotifyPartyChanged();
         yield return null;
 
         _postBattleRunning = false;
+
+        // Advance run progression so fight-gated enemy party compositions can change.
+        _runFightIndex = Mathf.Max(1, _runFightIndex + 1);
 
         StartBattle();
     }

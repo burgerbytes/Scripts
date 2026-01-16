@@ -30,7 +30,22 @@ public class EnemyPartyCompositionSO : ScriptableObject
     [Tooltip("Reward reel configuration used after this battle (keys / special symbols). If null, the normal combat reels remain.")]
     public RewardReelConfigSO rewardReelConfig;
 
-[Header("Loot (Optional Override)")]
+    [Header("Progression Gating")]
+    [Tooltip("First fight index this party can appear (1-based).")]
+    [Min(1)] public int minFightIndex = 1;
+
+    [Tooltip("Last fight index this party can appear (inclusive).")]
+    [Min(1)] public int maxFightIndex = 999;
+
+    [Tooltip("Relative chance when multiple parties are eligible for the same fight.")]
+    [Min(0f)] public float selectionWeight = 1f;
+
+    public bool IsEligibleForFight(int fightIndex)
+    {
+        return fightIndex >= minFightIndex && fightIndex <= maxFightIndex;
+    }
+
+    [Header("Loot (Optional Override)")]
     [Tooltip("If set, post-battle rewards will be rolled ONLY from this list for this encounter.\nIf null/empty, BattleManager uses the global reward pool (existing behavior).")]
     public List<ItemOptionSO> lootTable;
 }
