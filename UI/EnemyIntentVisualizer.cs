@@ -1,7 +1,3 @@
-////////////////////////////////////////////////////////////
-// PATH: Assets/Scripts/UI/Inventory/EquipmentSlotDropLogger.cs
-// GUID: bb8b6ed1dc668d341a393e83c74ce25b
-////////////////////////////////////////////////////////////
 using UnityEngine;
 using UnityEngine.EventSystems;
 using System.Collections.Generic;
@@ -39,6 +35,10 @@ public class EnemyIntentVisualizer : MonoBehaviour
     [SerializeField] private Vector2 slotScreenOffset = Vector2.zero;
 
     [Header("Intent Icons")]
+    [Tooltip("Optional: if set, intent icons will be chosen by EnemyIntent.category (Normal, Status, Damage+Status, AoE, etc.).")]
+    [SerializeField] private IntentIconSetSO intentIconSet;
+
+    [Header("Legacy Icons (fallback if IntentIconSet is not assigned)")]
     [SerializeField] private Sprite attackIcon;
     [SerializeField] private Sprite aoeAttackIcon;
     [SerializeField] private Vector2 intentIconSize = new Vector2(56f, 56f);
@@ -199,7 +199,7 @@ public class EnemyIntentVisualizer : MonoBehaviour
             iconGo.transform.SetParent(uiRoot, false);
 
             iconImg = iconGo.AddComponent<Image>();
-            iconImg.sprite = GetIconForIntent(intent.type);
+            iconImg.sprite = GetIconForIntent(intent);
             iconImg.preserveAspect = true;
             iconImg.raycastTarget = false;
 
@@ -285,7 +285,20 @@ public class EnemyIntentVisualizer : MonoBehaviour
         return null;
     }
 
-    private Sprite GetIconForIntent(BattleManager.IntentType type)
+    private Sprite GetIconForIntent(BattleManager.EnemyIntent intent)
+    {
+        // Preferred: category-driven icon selection (new system)
+        if (intentIconSet != null)
+        {
+            var s = intentIconSet.Get(intent.category);
+            if (s != null) return s;
+        }
+
+        // Fallback: old AoE vs Attack sprites
+        return GetLegacyIconForIntentType(intent.type);
+    }
+
+    private Sprite GetLegacyIconForIntentType(BattleManager.IntentType type)
     {
         return type == BattleManager.IntentType.AoEAttack ? aoeAttackIcon : attackIcon;
     }
@@ -509,4 +522,3 @@ public class EnemyIntentVisualizer : MonoBehaviour
         }
     }
 }
-
