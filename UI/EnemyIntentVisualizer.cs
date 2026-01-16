@@ -1,9 +1,13 @@
-using System;
-using System.Collections.Generic;
-using System.Reflection;
+////////////////////////////////////////////////////////////
+// PATH: Assets/Scripts/UI/Inventory/EquipmentSlotDropLogger.cs
+// GUID: bb8b6ed1dc668d341a393e83c74ce25b
+////////////////////////////////////////////////////////////
 using UnityEngine;
+using UnityEngine.EventSystems;
+using System.Collections.Generic;
 using UnityEngine.UI;
-using TMPro;
+using TMPro;              
+using System.Reflection;
 
 public class EnemyIntentVisualizer : MonoBehaviour
 {
@@ -162,14 +166,15 @@ public class EnemyIntentVisualizer : MonoBehaviour
         if (intents == null || intents.Count == 0) return;
         EnsureUIRefs();
 
-        foreach (var intent in intents)
+        for (int i = 0; i < intents.Count; i++)
         {
+            var intent = intents[i];
             if (intent.enemy == null) continue;
-            CreateVisual(intent);
+            CreateVisual(intent, i);
         }
     }
 
-    private void CreateVisual(BattleManager.EnemyIntent intent)
+    private void CreateVisual(BattleManager.EnemyIntent intent, int enemyIndex)
     {
         GameObject root = new GameObject($"IntentVisual_{intent.enemy.name}");
         root.transform.SetParent(transform, false);
@@ -236,6 +241,7 @@ public class EnemyIntentVisualizer : MonoBehaviour
         _visuals.Add(new IntentVisual(
             intent.enemy,
             intent.enemy.transform,
+            enemyIndex,
             intent.targetPartyIndex,
             intent.type,
             lr,
@@ -298,6 +304,7 @@ public class EnemyIntentVisualizer : MonoBehaviour
     {
         private readonly Monster enemyRef;
         private readonly Transform enemyTf;
+        private readonly int enemyIndex;
         private readonly int targetIndex;
         private readonly BattleManager.IntentType type;
         private readonly LineRenderer lr;
@@ -314,6 +321,7 @@ public class EnemyIntentVisualizer : MonoBehaviour
         public IntentVisual(
             Monster enemyRef,
             Transform enemyTf,
+            int enemyIndex,
             int targetIndex,
             BattleManager.IntentType type,
             LineRenderer lr,
@@ -328,6 +336,7 @@ public class EnemyIntentVisualizer : MonoBehaviour
         {
             this.enemyRef = enemyRef;
             this.enemyTf = enemyTf;
+            this.enemyIndex = enemyIndex;
             this.targetIndex = targetIndex;
             this.type = type;
             this.lr = lr;
@@ -423,7 +432,35 @@ public class EnemyIntentVisualizer : MonoBehaviour
 
                 if (dmg != null)
                 {
-                    int raw = (enemyRef != null) ? enemyRef.GetDamage() : 0;
+                    int raw = 0;
+
+                    // Try to pull planned intent damage from BattleManager.enemyIntents[targetEnemyIndex]
+                    if (bm != null)
+                    {
+                        // enemyIndex should be the index of THIS enemy in the encounter.
+                        // In this class, that is usually the same as 'enemyIndex' or 'index'. If you don't have one, use 'targetIndex' only if it represents enemy slot index (not hero target).
+                        int idx = enemyIndex; // <-- IMPORTANT: if your field is named differently, change this line only.
+
+                        var fi = bm.GetType().GetField("enemyIntents", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                        var list = fi != null ? fi.GetValue(bm) as System.Collections.IList : null;
+
+                        if (list != null && idx >= 0 && idx < list.Count)
+                        {
+                            object intentObj = list[idx];
+                            if (intentObj != null)
+                            {
+                                var dmgField = intentObj.GetType().GetField("damage", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                                if (dmgField != null)
+                                {
+                                    object v = dmgField.GetValue(intentObj);
+                                    if (v is int intVal) raw = intVal;
+                                }
+                            }
+                        }
+                    }
+
+                    if (raw <= 0 && enemyRef != null) raw = enemyRef.GetDamage();
+
                     dmg.text = raw.ToString();
                     dmg.color = Color.white;
                 }
@@ -472,3 +509,4 @@ public class EnemyIntentVisualizer : MonoBehaviour
         }
     }
 }
+

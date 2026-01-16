@@ -1,11 +1,6 @@
-// GUID: ea47960c4ce364a4980645e51f542a03
-////////////////////////////////////////////////////////////
-// GUID: ea47960c4ce364a4980645e51f542a03
-////////////////////////////////////////////////////////////
 using System;
-using System.Collections;
-using System.Reflection;
 using UnityEngine;
+using System.Collections; 
 
 public class Monster : MonoBehaviour
 {
@@ -29,6 +24,13 @@ public class Monster : MonoBehaviour
 
         [Tooltip("How many upcoming Player Phases the target is stunned for (typically 1).")]
         public int stunPlayerPhases = 1;
+
+        [Header("Bleeding")]
+        [Tooltip("If true, this attack applies Bleeding stacks to the target hero.")]
+        public bool appliesBleed = false;
+
+        [Tooltip("How many Bleeding stacks are applied when this attack lands.")]
+        public int bleedStacks = 1;
     }
 
     public event Action<int, int> OnHpChanged;
@@ -127,6 +129,12 @@ public class Monster : MonoBehaviour
     [Header("Runtime")]
     [SerializeField] private int _currentHp = 10;
 
+
+    [Header("Status: Bleeding")]
+    [SerializeField] private int _bleedStacks = 0;
+
+    public int BleedStacks => _bleedStacks;
+    public bool IsBleeding => _bleedStacks > 0;
     // ✅ These are required by MonsterHpBar.cs
     public int MaxHp => maxHp;
     public int CurrentHp => _currentHp;
@@ -350,6 +358,33 @@ public class Monster : MonoBehaviour
     }
 
 
+
+    public void AddBleedStacks(int stacks)
+    {
+        if (stacks <= 0) return;
+        _bleedStacks = Mathf.Max(0, _bleedStacks + stacks);
+    }
+
+    public void SetBleedStacks(int stacks)
+    {
+        _bleedStacks = Mathf.Max(0, stacks);
+    }
+
+    /// <summary>
+    /// Called at the start of Enemy Phase. Deals 1 HP per stack, then reduces stacks by 1.
+    /// Returns the amount of HP lost from the bleed tick.
+    /// </summary>
+    public int TickBleedingAtTurnStart()
+    {
+        if (_bleedStacks <= 0 || IsDead) return 0;
+
+        int dmg = Mathf.Max(0, _bleedStacks);
+        int dealt = ApplyRawDamage(dmg);
+
+        _bleedStacks = Mathf.Max(0, _bleedStacks - 1);
+        return dealt;
+    }
+
     /// <summary>
     /// Used by BattleManager Undo. Sets current HP directly and refreshes UI events.
     /// </summary>
@@ -360,3 +395,4 @@ public class Monster : MonoBehaviour
     }
 
 }
+

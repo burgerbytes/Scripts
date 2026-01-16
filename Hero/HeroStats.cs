@@ -52,6 +52,10 @@ public class HeroStats : MonoBehaviour
     [SerializeField] private int currentShield = 0;
     [SerializeField] private bool isHidden = false;
 
+    [Header("Damage-over-time")]
+    [Tooltip("Bleeding stacks: each turn lose 1 HP per stack, then stacks reduce by 1.")]
+    [SerializeField] private int bleedStacks = 0;
+
 
     [SerializeField] private bool isStunned = false;
 
@@ -164,6 +168,9 @@ public class HeroStats : MonoBehaviour
     public int Shield => currentShield;
     public bool IsHidden => isHidden;
 
+    public int BleedStacks => bleedStacks;
+    public bool IsBleeding => bleedStacks > 0;
+
 
     public bool IsStunned => isStunned;
     public bool IsTripleBladeEmpoweredThisTurn => tripleBladeEmpoweredThisTurn;
@@ -221,6 +228,7 @@ public class HeroStats : MonoBehaviour
         // Reset combat state
         currentShield = 0;
         isHidden = false;
+        bleedStacks = 0;
 
         NotifyChanged();
     }
@@ -229,6 +237,7 @@ public class HeroStats : MonoBehaviour
     {
         currentShield = 0;
         isHidden = false;
+        bleedStacks = 0;
         NotifyChanged();
     }
 
@@ -293,6 +302,41 @@ public class HeroStats : MonoBehaviour
         if (isHidden == hidden) return;
         isHidden = hidden;
         NotifyChanged();
+    }
+
+    // ---------------- Bleeding ----------------
+
+    /// <summary>
+    /// Adds Bleeding stacks.
+    /// Bleeding deals 1 HP per stack at the start of each Player Phase,
+    /// then reduces stacks by 1.
+    /// </summary>
+    public void AddBleedStacks(int stacks)
+    {
+        if (stacks <= 0) return;
+        bleedStacks = Mathf.Max(0, bleedStacks + stacks);
+        NotifyChanged();
+    }
+
+    /// <summary>
+    /// Ticks Bleeding once for this turn.
+    /// Returns the HP damage applied.
+    /// NOTE: Bleed damage bypasses Shield and Defense (direct HP loss).
+    /// </summary>
+    public int TickBleedingAtTurnStart()
+    {
+        if (bleedStacks <= 0)
+            return 0;
+
+        int dmg = Mathf.Max(0, bleedStacks);
+        int before = currentHp;
+        currentHp = Mathf.Max(0, currentHp - dmg);
+
+        // Reduce stacks by 1 each turn.
+        bleedStacks = Mathf.Max(0, bleedStacks - 1);
+
+        NotifyChanged();
+        return Mathf.Max(0, before - currentHp);
     }
 
 
@@ -518,6 +562,14 @@ public class HeroStats : MonoBehaviour
         currentHp = Mathf.Clamp(hp, 0, maxHp);
         currentShield = Mathf.Max(0, shield);
         isHidden = hidden;
+    }
+
+    /// <summary>
+    /// Used by BattleManager Undo. Restores bleed stacks directly.
+    /// </summary>
+    public void SetBleedStacks(int stacks)
+    {
+        bleedStacks = Mathf.Max(0, stacks);
     }
 
     public void GetEquippedItems()

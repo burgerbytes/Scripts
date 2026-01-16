@@ -36,6 +36,17 @@ public class BattleManager : MonoBehaviour
         public IntentType type;
         public Monster enemy;
         public int targetPartyIndex;
+
+        // Chosen attack payload (so intent preview + execution stay consistent, and Undo can restore them).
+        public int attackIndex;
+        public int damage;
+        public bool isAoe;
+
+        public bool stunsTarget;
+        public int stunPlayerPhases;
+
+        public bool appliesBleed;
+        public int bleedStacks;
     }
 
 
@@ -58,6 +69,7 @@ public class BattleManager : MonoBehaviour
         public float stamina;
         public int shield;
         public bool hidden;
+        public int bleedStacks;
         public bool hasActedThisRound;
     }
 
@@ -67,6 +79,7 @@ public class BattleManager : MonoBehaviour
         public int instanceId;
         public bool isActive;
         public int hp;
+        public int bleedStacks;
         public Vector3 position;
         public Quaternion rotation;
     }
@@ -77,6 +90,16 @@ public class BattleManager : MonoBehaviour
         public IntentType type;
         public int enemyInstanceId;
         public int targetPartyIndex;
+
+        public int attackIndex;
+        public int damage;
+        public bool isAoe;
+
+        public bool stunsTarget;
+        public int stunPlayerPhases;
+
+        public bool appliesBleed;
+        public int bleedStacks;
     }
 
     [Serializable]
@@ -106,6 +129,7 @@ public class BattleManager : MonoBehaviour
 
         public bool IsStunned;
         public bool IsTripleBladeEmpowered;
+        public bool IsBleeding;
 
         // UI-only: preview for pending Block cast (shield not yet applied yet)
         public bool HasBlockPreview;
@@ -530,6 +554,7 @@ public class BattleManager : MonoBehaviour
             IsHidden = hs != null && hs.IsHidden,
             IsStunned = hs != null && hs.IsStunned,
             IsTripleBladeEmpowered = hs != null && hs.IsTripleBladeEmpoweredThisTurn,
+            IsBleeding = hs != null && hs.IsBleeding,
 HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _awaitingPartyTarget && _pendingAbility != null && _pendingActorIndex == index && _pendingAbility.targetType == AbilityTargetType.Self && _pendingAbility.shieldAmount > 0,
             BlockPreviewAmount = ((_previewPartyTargetIndex == index) && _awaitingPartyTarget && _pendingAbility != null && _pendingActorIndex == index) ? Mathf.Max(0, _pendingAbility.shieldAmount) : 0
         };
@@ -798,6 +823,9 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
         // Make sure no pending target selection / casts linger.
         CancelPendingAbility();
 
+        // NOTE: Bleeding now ticks only at the start of the Player Phase (for both heroes and monsters).
+        // Do NOT tick monster bleeding here.
+
         // If intents were never planned (or were cleared), plan them now.
         if (_plannedIntents.Count == 0) PlanEnemyIntents();
 
@@ -832,7 +860,8 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
             // Lunge/translate attack (no animation clips required). Damage is applied at the lunge peak.
             yield return EnemyLungeAttack(intent.enemy, targetTf, () =>
             {
-                int raw = intent.enemy != null ? intent.enemy.GetDamage() : 0;
+                int raw = intent.damage;
+                if (raw <= 0 && intent.enemy != null) raw = intent.enemy.GetDamage();
 
                 // Conceal / Hidden logic:
                 // - Single-target attacks miss hidden heroes entirely.
@@ -850,8 +879,11 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
 
 
                         // Optional: stun targets hit by this enemy's default attack.
-                        if (intent.enemy != null && intent.enemy.DefaultAttackStunsTarget)
-                            hs.StunForNextPlayerPhases(intent.enemy.DefaultAttackStunPlayerPhases);
+                        if (intent.stunsTarget)
+                            hs.StunForNextPlayerPhases(intent.stunPlayerPhases);
+
+                        if (intent.appliesBleed && intent.bleedStacks > 0)
+                            ApplyBleedStacksToHero(hs, intent.bleedStacks);
                         // AoE breaks Conceal/Hidden.
                         if (hs.IsHidden) hs.SetHidden(false);
 
@@ -877,8 +909,11 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
                 int dealtSingle = targetStats.ApplyIncomingDamage(raw);
 
                 // Optional: stun the target hit by this enemy's default attack.
-                if (intent.enemy != null && intent.enemy.DefaultAttackStunsTarget)
-                    targetStats.StunForNextPlayerPhases(intent.enemy.DefaultAttackStunPlayerPhases);
+                if (intent.stunsTarget)
+                    targetStats.StunForNextPlayerPhases(intent.stunPlayerPhases);
+
+                if (intent.appliesBleed && intent.bleedStacks > 0)
+                    ApplyBleedStacksToHero(targetStats, intent.bleedStacks);
                 if (logFlow) Debug.Log($"[Battle][EnemyAtk] Damage result. dealtToHp={dealtSingle} targetShieldAfter={targetStats.Shield}", this);
 
                 if (targetGO != null)
@@ -1347,9 +1382,7 @@ NotifyPartyChanged();
 
         ApplyPartyHiddenVisuals();
 
-        // NOTE: Do NOT mark hasActedThisRound here.
-        // Heroes can cast multiple abilities per turn as long as resources allow.
-        // Action-locking is handled via HeroStats.IsStunned (e.g., Stun / Triple Blade).
+        actor.hasActedThisRound = true;
 
         _resolving = false;
 
@@ -1452,11 +1485,31 @@ NotifyPartyChanged();
             int targetIdx = GetRandomLivingTargetIndex();
             if (targetIdx < 0) continue;
 
+            // Choose an attack from the monster's authored attack list.
+            ChooseMonsterAttackForIntent(m,
+                out int attackIndex,
+                out int damage,
+                out bool isAoe,
+                out bool stunsTarget,
+                out int stunPlayerPhases,
+                out bool appliesBleed,
+                out int bleedStacks);
+
             _plannedIntents.Add(new EnemyIntent
             {
-                type = (m != null && m.IsDefaultAttackAoE) ? IntentType.AoEAttack : IntentType.Attack,
+                type = isAoe ? IntentType.AoEAttack : IntentType.Attack,
                 enemy = m,
-                targetPartyIndex = targetIdx
+                targetPartyIndex = targetIdx,
+
+                attackIndex = attackIndex,
+                damage = damage,
+                isAoe = isAoe,
+
+                stunsTarget = stunsTarget,
+                stunPlayerPhases = stunPlayerPhases,
+
+                appliesBleed = appliesBleed,
+                bleedStacks = bleedStacks
             });
         }
 
@@ -1464,19 +1517,199 @@ NotifyPartyChanged();
         NotifyPartyChanged();
     }
 
+    private void ChooseMonsterAttackForIntent(Monster m,
+        out int attackIndex,
+        out int damage,
+        out bool isAoe,
+        out bool stunsTarget,
+        out int stunPlayerPhases,
+        out bool appliesBleed,
+        out int bleedStacks)
+    {
+        attackIndex = -1;
+        damage = 0;
+        isAoe = false;
+        stunsTarget = false;
+        stunPlayerPhases = 1;
+        appliesBleed = false;
+        bleedStacks = 0;
+
+        if (m == null) return;
+
+        // Reflection keeps this resilient to small data model changes.
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+        object attacksObj = null;
+        var t = m.GetType();
+
+        var fiAttacks = t.GetField("attacks", flags);
+        if (fiAttacks != null)
+            attacksObj = fiAttacks.GetValue(m);
+
+        // Support arrays (MonsterAttack[]) primarily.
+        System.Array attacksArray = attacksObj as System.Array;
+        int count = attacksArray != null ? attacksArray.Length : 0;
+
+        if (count <= 0)
+        {
+            // Fallback to default attack.
+            try { damage = m.GetDamage(); } catch { damage = 0; }
+
+            try
+            {
+                var pi = t.GetProperty("IsDefaultAttackAoE", flags);
+                if (pi != null) isAoe = (bool)pi.GetValue(m, null);
+            }
+            catch { isAoe = false; }
+
+            try
+            {
+                stunsTarget = m.DefaultAttackStunsTarget;
+                stunPlayerPhases = m.DefaultAttackStunPlayerPhases;
+            }
+            catch { stunsTarget = false; stunPlayerPhases = 1; }
+
+            return;
+        }
+
+        attackIndex = UnityEngine.Random.Range(0, count);
+        var atk = attacksArray.GetValue(attackIndex);
+        if (atk == null) return;
+
+        var atkType = atk.GetType();
+        damage = ReadInt(atk, atkType, "damage", 0);
+        isAoe = ReadBool(atk, atkType, "isAoe", false);
+
+        stunsTarget = ReadBool(atk, atkType, "stunsTarget", false);
+        stunPlayerPhases = Mathf.Max(1, ReadInt(atk, atkType, "stunPlayerPhases", 1));
+
+        appliesBleed = ReadBool(atk, atkType, "appliesBleed", false);
+        if (!appliesBleed) appliesBleed = ReadBool(atk, atkType, "bleedsTarget", false);
+
+        bleedStacks = Mathf.Max(0, ReadInt(atk, atkType, "bleedStacks", 0));
+        if (bleedStacks == 0) bleedStacks = Mathf.Max(0, ReadInt(atk, atkType, "bleedAmount", 0));
+    }
+
+    private static int ReadInt(object obj, Type t, string name, int fallback)
+    {
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        var fi = t.GetField(name, flags);
+        if (fi != null && fi.FieldType == typeof(int)) return (int)fi.GetValue(obj);
+        var pi = t.GetProperty(name, flags);
+        if (pi != null && pi.PropertyType == typeof(int)) return (int)pi.GetValue(obj, null);
+        return fallback;
+    }
+
+    private static bool ReadBool(object obj, Type t, string name, bool fallback)
+    {
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        var fi = t.GetField(name, flags);
+        if (fi != null && fi.FieldType == typeof(bool)) return (bool)fi.GetValue(obj);
+        var pi = t.GetProperty(name, flags);
+        if (pi != null && pi.PropertyType == typeof(bool)) return (bool)pi.GetValue(obj, null);
+        return fallback;
+    }
+
+    private static void ApplyBleedStacksToHero(HeroStats hs, int stacksToAdd)
+    {
+        if (hs == null || stacksToAdd <= 0) return;
+
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        var t = hs.GetType();
+
+        // Prefer an explicit method if your HeroStats provides one.
+        var miAdd = t.GetMethod("AddBleedStacks", flags, null, new[] { typeof(int) }, null);
+        if (miAdd != null)
+        {
+            miAdd.Invoke(hs, new object[] { stacksToAdd });
+            return;
+        }
+
+        var miSet = t.GetMethod("SetBleedStacks", flags, null, new[] { typeof(int) }, null);
+        if (miSet != null)
+        {
+            int current = 0;
+            try
+            {
+                // Property/field common names
+                var pi = t.GetProperty("BleedStacks", flags);
+                if (pi != null && pi.PropertyType == typeof(int)) current = (int)pi.GetValue(hs, null);
+                else
+                {
+                    var fi = t.GetField("BleedStacks", flags) ?? t.GetField("bleedStacks", flags);
+                    if (fi != null && fi.FieldType == typeof(int)) current = (int)fi.GetValue(hs);
+                }
+            }
+            catch { current = 0; }
+
+            miSet.Invoke(hs, new object[] { current + stacksToAdd });
+            return;
+        }
+
+        // Last resort: write directly to a field/property.
+        try
+        {
+            var pi = t.GetProperty("BleedStacks", flags);
+            if (pi != null && pi.CanWrite && pi.PropertyType == typeof(int))
+            {
+                int cur = (int)(pi.GetValue(hs, null) ?? 0);
+                pi.SetValue(hs, cur + stacksToAdd, null);
+                return;
+            }
+        }
+        catch { }
+
+        try
+        {
+            var fi = t.GetField("BleedStacks", flags) ?? t.GetField("bleedStacks", flags);
+            if (fi != null && fi.FieldType == typeof(int))
+            {
+                int cur = (int)(fi.GetValue(hs) ?? 0);
+                fi.SetValue(hs, cur + stacksToAdd);
+            }
+        }
+        catch { }
+    }
+
     private void ResetPartyRoundFlags()
     {
+        // Bleeding now ticks only at the start of the Player Phase (for both heroes and monsters).
+        // Tick monster bleeding first so icons/numbers reflect the post-tick state when the player regains control.
+        if (_activeMonsters != null && _activeMonsters.Count > 0)
+        {
+            for (int mi = 0; mi < _activeMonsters.Count; mi++)
+            {
+                Monster m = _activeMonsters[mi];
+                if (m == null || m.IsDead) continue;
+
+                int bleedDamage = m.TickBleedingAtTurnStart();
+                if (bleedDamage > 0)
+                {
+                    SpawnDamageNumber(m.transform.position, bleedDamage);
+
+                    // If the bleed tick killed the monster, play death effects now.
+                    if (m.IsDead)
+                        m.PlayDeathEffects();
+                }
+            }
+        }
+
         for (int i = 0; i < PartyCount; i++)
         {
             HeroStats hs = _party[i].stats;
             if (hs != null)
-                hs.StartPlayerPhaseStatuses();
+            {
+                // Bleeding ticks once per turn (start of Player Phase).
+                int bleedDamage = hs.TickBleedingAtTurnStart();
+                if (bleedDamage > 0 && _party[i].avatarGO != null)
+                    SpawnDamageNumber(_party[i].avatarGO.transform.position, bleedDamage);
 
-            // Reset per-round "acted" flag.
-            // NOTE: We intentionally do NOT use hasActedThisRound to gate player actions anymore
-            // (heroes may cast multiple abilities per turn).
-            // UI/input should gate on HeroStats.IsStunned instead.
-            _party[i].hasActedThisRound = false;
+                // Stun/phase statuses consume at the start of the player phase.
+                hs.StartPlayerPhaseStatuses();
+            }
+
+            // If stunned at the start of player phase, treat as already acted so the UI/input blocks actions.
+            _party[i].hasActedThisRound = (hs != null && hs.IsStunned);
         }
 
         CancelPendingAbility();
@@ -1892,6 +2125,7 @@ NotifyPartyChanged();
     private void NotifyPartyChanged()
     {
         ApplyPartyHiddenVisuals();
+        ApplyMonsterStatusVisuals();
         OnPartyChanged?.Invoke();
     }
 
@@ -1903,6 +2137,7 @@ NotifyPartyChanged();
     [SerializeField] private Sprite statusIconHiddenSprite;
     [SerializeField] private Sprite statusIconStunnedSprite;
     [SerializeField] private Sprite statusIconTripleBladeEmpoweredSprite;
+    [SerializeField] private Sprite statusIconBleedingSprite;
 
     private void ApplyPartyHiddenVisuals()
     {
@@ -1960,23 +2195,60 @@ NotifyPartyChanged();
                 statusIcon.ConfigureSprites(
                     statusIconHiddenSprite,
                     statusIconStunnedSprite,
-                    statusIconTripleBladeEmpoweredSprite
+                    statusIconTripleBladeEmpoweredSprite,
+                    statusIconBleedingSprite
                 );
-                Debug.Log($"[StatusIcon] hero={pm.avatarGO.name} hidden={hidden} stunned={(hs != null && hs.IsStunned)} triple={(hs != null && hs.IsTripleBladeEmpoweredThisTurn)}",
-                    pm.avatarGO);
 
                 statusIcon.SetStates(
                     hidden: hidden,
                     stunned: (hs != null && hs.IsStunned),
-                    tripleBladeEmpowered: (hs != null && hs.IsTripleBladeEmpoweredThisTurn)
+                    tripleBladeEmpowered: (hs != null && hs.IsTripleBladeEmpoweredThisTurn),
+                    bleeding: (hs != null && hs.IsBleeding)
                 );
+
+                // Bleed stacks overlay (only shown when Bleeding icon is active).
+                statusIcon.SetBleedStacks(hs != null ? hs.BleedStacks : 0);
             }
+        }
+    }
+
+    private void ApplyMonsterStatusVisuals()
+    {
+        if (_activeMonsters == null) return;
+
+        for (int i = 0; i < _activeMonsters.Count; i++)
+        {
+            var m = _activeMonsters[i];
+            if (m == null) continue;
+
+            // Find or create a child named "_StatusIcon" under the monster.
+            Transform iconTf = m.transform.Find("_StatusIcon");
+            if (iconTf == null)
+            {
+                var go = new GameObject("_StatusIcon");
+                go.transform.SetParent(m.transform, false);
+                iconTf = go.transform;
+                // Default offset above the monster.
+                iconTf.localPosition = new Vector3(0f, 1.2f, 0f);
+                iconTf.localScale = Vector3.one;
+            }
+
+            var ctrl = iconTf.GetComponent<MonsterStatusEffectIconController>();
+            if (ctrl == null)
+                ctrl = iconTf.gameObject.AddComponent<MonsterStatusEffectIconController>();
+
+            ctrl.Configure(statusIconBleedingSprite);
+
+            int stacks = 0;
+            try { stacks = m.BleedStacks; } catch { stacks = 0; }
+            ctrl.SetBleedStacks(stacks);
         }
     }
 
     public void RefreshStatusVisuals()
     {
-        ApplyPartyHiddenVisuals(); // this updates tint + status icons
+        ApplyPartyHiddenVisuals();
+        ApplyMonsterStatusVisuals();
     }
 
     private void SpawnDamageNumber(Vector3 worldPos, int amount)
@@ -2100,6 +2372,7 @@ NotifyPartyChanged();
                 stamina = hs.CurrentStamina,
                 shield = hs.Shield,
                 hidden = hs.IsHidden,
+                bleedStacks = hs.BleedStacks,
                 hasActedThisRound = pm.hasActedThisRound
             });
         }
@@ -2127,6 +2400,7 @@ NotifyPartyChanged();
                 instanceId = m.GetInstanceID(),
                 isActive = m.gameObject.activeSelf && !m.IsDead,
                 hp = m.CurrentHp,
+                bleedStacks = m.BleedStacks,
                 position = m.transform.position,
                 rotation = m.transform.rotation
             });
@@ -2142,7 +2416,14 @@ NotifyPartyChanged();
             {
                 type = it.type,
                 enemyInstanceId = it.enemy.GetInstanceID(),
-                targetPartyIndex = it.targetPartyIndex
+                targetPartyIndex = it.targetPartyIndex,
+                attackIndex = it.attackIndex,
+                damage = it.damage,
+                isAoe = it.isAoe,
+                stunsTarget = it.stunsTarget,
+                stunPlayerPhases = it.stunPlayerPhases,
+                appliesBleed = it.appliesBleed,
+                bleedStacks = it.bleedStacks
             });
         }
 
@@ -2175,6 +2456,7 @@ NotifyPartyChanged();
             if (pm == null || pm.stats == null) continue;
 
             pm.stats.SetRuntimeState(h.hp, h.stamina, h.shield, h.hidden);
+            pm.stats.SetBleedStacks(h.bleedStacks);
             pm.hasActedThisRound = h.hasActedThisRound;
         }
 
@@ -2204,6 +2486,7 @@ NotifyPartyChanged();
             {
                 m.gameObject.SetActive(true);
                 m.SetCurrentHp(ms.hp);
+                m.SetBleedStacks(ms.bleedStacks);
                 if (!m.IsDead)
                     _activeMonsters.Add(m);
             }
@@ -2211,6 +2494,7 @@ NotifyPartyChanged();
             {
                 // Keep dead/inactive monsters hidden
                 m.SetCurrentHp(ms.hp);
+                m.SetBleedStacks(ms.bleedStacks);
                 if (m.IsDead || !ms.isActive)
                     m.gameObject.SetActive(false);
             }
@@ -2230,7 +2514,14 @@ NotifyPartyChanged();
                 {
                     type = it.type,
                     enemy = em,
-                    targetPartyIndex = it.targetPartyIndex
+                    targetPartyIndex = it.targetPartyIndex,
+                    attackIndex = it.attackIndex,
+                    damage = it.damage,
+                    isAoe = it.isAoe,
+                    stunsTarget = it.stunsTarget,
+                    stunPlayerPhases = it.stunPlayerPhases,
+                    appliesBleed = it.appliesBleed,
+                    bleedStacks = it.bleedStacks
                 });
             }
         }
@@ -2293,5 +2584,3 @@ NotifyPartyChanged();
 
 ////////////////////////////////////////////////////////////
 
-
-////////////////////////////////////////////////////////////

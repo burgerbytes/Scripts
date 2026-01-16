@@ -105,8 +105,5 @@ public class TripleBladeTurnEffectSystem : MonoBehaviour
             if (_bm != null) _bm.RefreshStatusVisuals();
             Debug.Log($"[TripleBlade] EFFECT ACTIVE on hero '{h.gameObject.name}' this turn: Attack x{attackMultiplierForTurn}, Max damaging attacks = {maxDamageAttacksThisTurn}.");
         }
-
-        if (appliedCount == 0)
-            Debug.Log("[TripleBlade] Triple attack landed, but no equipped heroes were found with Triple Blade.");
     }
 }
