@@ -1,3 +1,6 @@
+// PATH: Assets/Scripts/Encounters/Monster.cs
+// GUID: ea47960c4ce364a4980645e51f542a03
+////////////////////////////////////////////////////////////
 using System;
 using UnityEngine;
 using System.Collections; 
@@ -114,6 +117,13 @@ public class Monster : MonoBehaviour
     [Tooltip("Reduces incoming hero damage. Used in legacy TakeDamage() and in ability formula.")]
     [SerializeField] private int defense = 0;
 
+    [Header("Rewards")]
+    [Tooltip("XP awarded to the hero that lands the killing blow.")]
+    [SerializeField] private int xpReward = 5;
+
+    [Tooltip("Gold rewarded when this monster dies. If Max > Min, the value is rolled inclusively.")]
+    [SerializeField] private Vector2Int goldRewardRange = new Vector2Int(0, 0);
+
     [Header("Attacks")]
     [SerializeField] private MonsterAttack[] attacks = new MonsterAttack[] { new MonsterAttack() };
     [SerializeField] private int defaultAttackIndex = 0;
@@ -143,6 +153,16 @@ public class Monster : MonoBehaviour
     public int MaxHp => maxHp;
     public int CurrentHp => _currentHp;
     public int Defense => defense;
+
+    // Rewards (used by BattleManager for victory XP/Gold summaries)
+    public int XpReward => Mathf.Max(0, xpReward);
+
+    public int RollGoldReward()
+    {
+        int min = Mathf.Min(goldRewardRange.x, goldRewardRange.y);
+        int max = Mathf.Max(goldRewardRange.x, goldRewardRange.y);
+        return UnityEngine.Random.Range(min, max + 1);
+    }
 
     public bool IsDead => _currentHp <= 0;
 
@@ -432,3 +452,6 @@ public class Monster : MonoBehaviour
 }
 
 
+
+
+////////////////////////////////////////////////////////////

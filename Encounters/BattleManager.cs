@@ -1,3 +1,6 @@
+// PATH: Assets/Scripts/Encounters/BattleManager.cs
+// GUID: 30f201f35d336bf4d840162cd6fd1fde
+////////////////////////////////////////////////////////////
 // GUID: 30f201f35d336bf4d840162cd6fd1fde
 ////////////////////////////////////////////////////////////
 using System;
@@ -213,6 +216,13 @@ public class BattleManager : MonoBehaviour
     [Tooltip("Panel that shows Small/Large chests and a Skip option.")] 
     [SerializeField] private PostBattleChestPanel postBattleChestPanel;
 
+    [Header("Post-Battle Results")]
+    [Tooltip("Optional: shown immediately after victory to summarize gold / XP gained.")]
+    [SerializeField] private PostBattleResultsPanel postBattleResultsPanel;
+
+    [Tooltip("Optional: tracks in-battle performance for bonus XP awards.")]
+    [SerializeField] private BattlePerformanceTracker performanceTracker;
+
     [Tooltip("Optional: shown after post-battle rewards so the player can reorganize before the next fight.")] 
     [SerializeField] private PostBattlePrepPanel postBattlePrepPanel;
 
@@ -353,6 +363,16 @@ public class BattleManager : MonoBehaviour
         if (inventory == null) inventory = FindInSceneIncludingInactive<PlayerInventory>();
         if (startRewardPanel == null) startRewardPanel = FindInSceneIncludingInactive<PostBattleRewardPanel>();
         if (postBattleRewardPanel == null) postBattleRewardPanel = startRewardPanel;
+        if (postBattleResultsPanel == null) postBattleResultsPanel = FindInSceneIncludingInactive<PostBattleResultsPanel>();
+        if (performanceTracker == null) performanceTracker = FindInSceneIncludingInactive<BattlePerformanceTracker>();
+
+        // If no tracker exists in-scene, create one on this BattleManager so results panel still works.
+        if (performanceTracker == null)
+        {
+            performanceTracker = GetComponent<BattlePerformanceTracker>();
+            if (performanceTracker == null)
+                performanceTracker = gameObject.AddComponent<BattlePerformanceTracker>();
+        }
 
 
         if (reelSpinSystem == null) reelSpinSystem = FindInSceneIncludingInactive<ReelSpinSystem>();
@@ -1011,6 +1031,9 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
                         if (logFlow) Debug.Log($"[Battle][EnemyAtk][AoE] Applying incoming damage. attacker={(intent.enemy != null ? intent.enemy.name : "<null>")} targetIdx={pi} raw={raw} targetShieldBefore={hs.Shield}", this);
                         int dealt = hs.ApplyIncomingDamage(raw);
 
+                        if (performanceTracker != null)
+                            performanceTracker.RecordDamageTaken(hs, dealt);
+
 
                         // Optional: stun targets hit by this enemy's default attack.
                         if (intent.stunsTarget)
@@ -1041,6 +1064,9 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
                 // Apply damage (HeroStats handles shield+HP).
                 if (logFlow) Debug.Log($"[Battle][EnemyAtk] Applying incoming damage. attacker={(intent.enemy != null ? intent.enemy.name : "<null>")} targetIdx={targetIdx} raw={raw} targetShieldBefore={targetStats.Shield}", this);
                 int dealtSingle = targetStats.ApplyIncomingDamage(raw);
+
+                if (performanceTracker != null)
+                    performanceTracker.RecordDamageTaken(targetStats, dealtSingle);
 
                 // Optional: stun the target hit by this enemy's default attack.
                 if (intent.stunsTarget)
@@ -1208,6 +1234,17 @@ NotifyPartyChanged();
         ResetPartyRoundFlags();
         SpawnEncounterMonsters();
 
+        // Performance tracking for post-battle XP bonuses.
+        if (performanceTracker != null)
+        {
+            var heroes = new List<HeroStats>(_party != null ? _party.Count : 0);
+            if (_party != null)
+                for (int i = 0; i < _party.Count; i++)
+                    if (_party[i] != null && _party[i].stats != null)
+                        heroes.Add(_party[i].stats);
+            performanceTracker.BeginBattle(heroes);
+        }
+
         if (_activeMonsters.Count == 0)
         {
             SetState(BattleState.Idle);
@@ -1298,6 +1335,14 @@ NotifyPartyChanged();
             CancelPendingAbility();
             yield break;
         }
+
+        // Track ability usage for post-battle bonus XP rules.
+        if (performanceTracker != null && ability != null)
+            performanceTracker.RecordAbilityUse(actorStats, ability);
+
+        // Track ability usage for bonus XP rules.
+        if (performanceTracker != null)
+            performanceTracker.RecordAbilityUse(actorStats, ability);
 
         Monster enemyTarget = _selectedEnemyTarget;
         if (ability.targetType == AbilityTargetType.Enemy)
@@ -1456,6 +1501,9 @@ NotifyPartyChanged();
                 element: ability.element,
                 abilityTags: ability.tags);
 
+            if (performanceTracker != null)
+                performanceTracker.RecordDamageDealt(actorStats, dealt);
+
             SpawnDamageNumber(enemyTarget.transform.position, dealt);
             actorStats.ApplyOnHitEffectsTo(enemyTarget);
 
@@ -1466,7 +1514,13 @@ NotifyPartyChanged();
 
             if (enemyTarget.IsDead)
             {
-                actorStats.GainXP(5);
+                int xpAward = (enemyTarget != null) ? enemyTarget.XpReward : 5;
+                // IMPORTANT: Defer XP application until the post-battle results panel
+                // so we can animate XP bars from the pre-battle state.
+                if (performanceTracker != null)
+                    performanceTracker.RecordBaseXpGained(actorStats, xpAward);
+                else
+                    actorStats.GainXP(xpAward);
                 RemoveMonster(enemyTarget);
                 // Enemy intents are locked once planned at the start of the turn.
                 // Do not re-plan here, or surviving enemies' targets will change mid-turn.
@@ -2061,6 +2115,34 @@ NotifyPartyChanged();
 
         if (goldOwner != null && _activeEnemyParty != null && _activeEnemyParty.goldReward > 0)
             goldOwner.AddGold(_activeEnemyParty.goldReward);
+
+        // Show a quick post-battle summary (gold gained + XP gained and bonus XP awards).
+        if (postBattleResultsPanel != null && performanceTracker != null)
+        {
+            // The Results panel GameObject is typically disabled at scene start.
+            // Calling methods on a disabled panel won't show anything, so ensure it's enabled.
+            if (!postBattleResultsPanel.gameObject.activeSelf)
+                postBattleResultsPanel.gameObject.SetActive(true);
+
+            var heroes = new List<HeroStats>(_party != null ? _party.Count : 0);
+            if (_party != null)
+                for (int i = 0; i < _party.Count; i++)
+                    if (_party[i] != null && _party[i].stats != null)
+                        heroes.Add(_party[i].stats);
+
+            long goldGained = (_activeEnemyParty != null) ? _activeEnemyParty.goldReward : 0;
+            var summaries = performanceTracker.ComputeSummaries(heroes);
+
+            bool resultsDone = false;
+            postBattleResultsPanel.Show(goldGained, summaries, () =>
+            {
+                // Apply all XP (base + bonus) once the player continues.
+                performanceTracker.ApplySummaries(summaries);
+                resultsDone = true;
+            });
+            yield return new WaitUntil(() => resultsDone);
+            postBattleResultsPanel.Hide();
+        }
 
         // Use encounter-specific loot if present; else fall back to global pool.
         List<ItemOptionSO> pool =
