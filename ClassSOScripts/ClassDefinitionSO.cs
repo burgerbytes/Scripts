@@ -1,4 +1,3 @@
-// PATH: Assets/Scripts/Classes/ClassDefinitionSO.cs
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -27,6 +26,12 @@ public class ClassDefinitionSO : ScriptableObject
 
     [Tooltip("For Advanced classes, which Base class is required?")]
     public ClassDefinitionSO requiredBaseClass;
+
+    [Header("Level Up Growth")]
+    [Tooltip("Flat stat gains applied each time this class levels up.")]
+    public int levelUpMaxHp = 10;
+    public int levelUpAttack = 1;
+    public int levelUpDefense = 1;
 
     [Header("Modifiers")]
     public bool canBlock = true;

@@ -485,9 +485,17 @@ public class HeroStats : MonoBehaviour
     {
         level += 1;
 
-        maxHp += 10;
-        attack += 1;
-        defense += 1;
+        // Stat growth is defined by the hero's active class (Advanced if present, else Base).
+        // If no class is assigned yet, fall back to the previous default growth.
+        ClassDefinitionSO growthDef = GetActiveClassDefinition();
+
+        int hpGain = (growthDef != null) ? growthDef.levelUpMaxHp : 10;
+        int atkGain = (growthDef != null) ? growthDef.levelUpAttack : 1;
+        int defGain = (growthDef != null) ? growthDef.levelUpDefense : 1;
+
+        maxHp += hpGain;
+        attack += atkGain;
+        defense += defGain;
 
         currentHp = maxHp;
 
