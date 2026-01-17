@@ -22,6 +22,13 @@ public class MonsterHpBar : MonoBehaviour
     private int _lastHp = -1;
     private int _lastMaxHp = -1;
 
+    // Some prefabs use a Filled Image (fillAmount), others use a Simple/Sliced image with a mask.
+    // Support both by falling back to resizing/scaling when fillAmount has no effect.
+    private bool _useFillAmount = true;
+    private bool _useScaleFallback = false;
+    private float _fullWidth = 0f;
+    private Vector3 _baseScale = Vector3.one;
+
     private void Reset()
     {
         monster = GetComponentInParent<Monster>();
@@ -32,6 +39,8 @@ public class MonsterHpBar : MonoBehaviour
     {
         if (monster == null) monster = GetComponentInParent<Monster>();
         AutoFindFillImage();
+
+        CacheFillMode();
 
         DisableLegacyGhostFill();
         EnsurePreviewObjects();
@@ -137,6 +146,67 @@ public class MonsterHpBar : MonoBehaviour
         hpDamagePreviewRect.localScale = src.localScale;
     }
 
+    private void CacheFillMode()
+    {
+        if (fillImage == null) return;
+
+        // If it's a Filled image, fillAmount works.
+        _useFillAmount = (fillImage.type == Image.Type.Filled);
+
+        RectTransform rt = fillImage.rectTransform;
+        if (rt == null)
+            return;
+
+        _baseScale = rt.localScale;
+
+        if (_useFillAmount)
+        {
+            _useScaleFallback = false;
+            _fullWidth = 0f;
+            return;
+        }
+
+        // Non-filled images: either resize (if fixed anchors) or scale (if stretch anchors).
+        _useScaleFallback = !Mathf.Approximately(rt.anchorMin.x, rt.anchorMax.x);
+
+        // Try to capture the full width at "100% HP". If current HP isn't full, we'll still use the current rect width
+        // and scale from there – better than doing nothing.
+        _fullWidth = rt.rect.width;
+        if (_fullWidth <= 0.01f)
+            _fullWidth = rt.sizeDelta.x;
+    }
+
+    private void SetFill01(float value01)
+    {
+        if (fillImage == null) return;
+
+        value01 = Mathf.Clamp01(value01);
+
+        if (_useFillAmount && fillImage.type == Image.Type.Filled)
+        {
+            fillImage.fillAmount = value01;
+            return;
+        }
+
+        RectTransform rt = fillImage.rectTransform;
+        if (rt == null) return;
+
+        // If the prefab uses stretch anchors, changing sizeDelta won't do what we want.
+        if (_useScaleFallback)
+        {
+            Vector3 s = _baseScale;
+            s.x = _baseScale.x * value01;
+            rt.localScale = s;
+        }
+        else
+        {
+            float w = _fullWidth;
+            if (w <= 0.01f)
+                w = rt.rect.width;
+            rt.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, w * value01);
+        }
+    }
+
     private void HandleHpChanged(int current, int max)
     {
         _lastHp = current;
@@ -146,7 +216,7 @@ public class MonsterHpBar : MonoBehaviour
 
         int safeMax = Mathf.Max(1, max);
         float current01 = Mathf.Clamp01((float)current / safeMax);
-        fillImage.fillAmount = current01;
+        SetFill01(current01);
     }
 
     /// <summary>
@@ -175,7 +245,7 @@ public class MonsterHpBar : MonoBehaviour
         float predicted01 = Mathf.Clamp01((float)predictedHP / maxHP);
 
         // Shrink main fill to predicted
-        fillImage.fillAmount = predicted01;
+        SetFill01(predicted01);
 
         // Create a segment from predicted -> current
         float barWidth = hpBarFullRect.rect.width;
@@ -201,7 +271,8 @@ public class MonsterHpBar : MonoBehaviour
         {
             int maxHP = Mathf.Max(1, monster.MaxHp);
             float current01 = Mathf.Clamp01((float)monster.CurrentHp / maxHP);
-            fillImage.fillAmount = current01;
+            SetFill01(current01);
         }
     }
 }
+

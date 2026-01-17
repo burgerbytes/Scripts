@@ -1,4 +1,5 @@
-// PATH: Assets/Scripts/Encounters/BattleManager.cs
+// GUID: 30f201f35d336bf4d840162cd6fd1fde
+////////////////////////////////////////////////////////////
 // GUID: 30f201f35d336bf4d840162cd6fd1fde
 ////////////////////////////////////////////////////////////
 // GUID: 30f201f35d336bf4d840162cd6fd1fde
@@ -194,6 +195,13 @@ public class BattleManager : MonoBehaviour
     [SerializeField] private DamageNumber damageNumberPrefab;
     [SerializeField] private Vector3 damageNumberWorldOffset = new Vector3(0f, 1.2f, 0f);
     [SerializeField] private Vector3 damageNumberRandomJitter = new Vector3(0.2f, 0.15f, 0f);
+
+    [Tooltip("If Damage Number Prefab is not assigned, BattleManager will spawn a simple TextMeshPro damage number in world-space.")]
+    [SerializeField] private bool enableRuntimeDamageNumbers = true;
+
+    [SerializeField] private float runtimeDamageNumberLifetime = 0.75f;
+    [SerializeField] private float runtimeDamageNumberRiseDistance = 0.8f;
+    [SerializeField] private float runtimeDamageNumberFontSize = 3.5f;
 
     [Header("Start-of-Run Rewards (First Battle Only)")]
     [SerializeField] private bool showStartRewardsOnFirstBattle = true;
@@ -1495,9 +1503,13 @@ NotifyPartyChanged();
                 if (logFlow) Debug.Log($"[Battle][Resolve] Done waiting for impact. impactFired={_impactFired} elapsed={elapsed:0.000}s", this);
             }
 
+            int totalBaseDamage = Mathf.Max(0, actorStats.Attack) + Mathf.Max(0, ability.baseDamage);
+
             int dealt = enemyTarget.TakeDamageFromAbility(
-                abilityBaseDamage: ability.baseDamage,
-                classAttackModifier: actorStats.ClassAttackModifier,
+                // Ability damage = hero base Attack + authored ability bonus.
+                abilityBaseDamage: totalBaseDamage,
+                // Attack already includes the hero's multipliers (including turn buffs), so don't multiply again here.
+                classAttackModifier: 1f,
                 element: ability.element,
                 abilityTags: ability.tags);
 
@@ -1509,7 +1521,7 @@ NotifyPartyChanged();
 
 
             // Mark that this hero has committed a damaging attack this turn (for per-turn limits).
-            if (ability.baseDamage > 0)
+            if (totalBaseDamage > 0)
                 actorStats.RegisterDamageAttackCommitted();
 
             if (enemyTarget.IsDead)
@@ -1619,9 +1631,13 @@ NotifyPartyChanged();
         var actor = _party[_pendingActorIndex];
         if (actor == null || actor.stats == null || actor.IsDead) return;
 
+        int totalBaseDamage = Mathf.Max(0, actor.stats.Attack) + Mathf.Max(0, _pendingAbility.baseDamage);
+
         int predictedDamage = target.CalculateDamageFromAbility(
-            abilityBaseDamage: _pendingAbility.baseDamage,
-            classAttackModifier: actor.stats.ClassAttackModifier,
+            // Ability damage = hero base Attack + authored ability bonus.
+            abilityBaseDamage: totalBaseDamage,
+            // Attack already includes the hero's multipliers (including turn buffs), so don't multiply again here.
+            classAttackModifier: 1f,
             element: _pendingAbility.element,
             abilityTags: _pendingAbility.tags);
 
@@ -2401,6 +2417,19 @@ NotifyPartyChanged();
                 }
             }
 
+
+
+            // If the prefab doesn't already have a _StatusIcon object, create one so hero status icons can still work.
+            if (iconTf == null)
+            {
+                Transform parent = (hs != null) ? hs.transform : pm.avatarGO.transform;
+                var go = new GameObject("_StatusIcon");
+                go.transform.SetParent(parent, false);
+                iconTf = go.transform;
+                // Default offset above the hero (tweak in StatusEffectIconController if desired).
+                iconTf.localPosition = new Vector3(0f, 1.25f, 0f);
+                iconTf.localScale = Vector3.one;
+            }
             if (iconTf != null)
             {
                 statusIcon = iconTf.GetComponent<StatusEffectIconController>();
@@ -2471,7 +2500,7 @@ NotifyPartyChanged();
 
     private void SpawnDamageNumber(Vector3 worldPos, int amount)
     {
-        if (damageNumberPrefab == null) return;
+        if (amount == 0) return;
 
         Vector3 jitter = new Vector3(
             UnityEngine.Random.Range(-damageNumberRandomJitter.x, damageNumberRandomJitter.x),
@@ -2479,17 +2508,40 @@ NotifyPartyChanged();
             UnityEngine.Random.Range(-damageNumberRandomJitter.z, damageNumberRandomJitter.z)
         );
 
-        DamageNumber dn = Instantiate(damageNumberPrefab);
-        dn.transform.position = worldPos + damageNumberWorldOffset + jitter;
+        Vector3 spawnPos = worldPos + damageNumberWorldOffset + jitter;
 
-        TrySetDamageNumberValue(dn, amount);
+        // Preferred: use an authored prefab (lets you use TMPUGUI, fancy anims, etc.)
+        if (damageNumberPrefab != null)
+        {
+            DamageNumber dn = Instantiate(damageNumberPrefab);
+            dn.transform.position = spawnPos;
+            TrySetDamageNumberValue(dn, amount);
+            return;
+        }
+
+        // Fallback: create a simple world-space TextMeshPro number at runtime.
+        if (!enableRuntimeDamageNumbers)
+            return;
+
+        var go = new GameObject($"DamageNumber_{amount}");
+        go.transform.position = spawnPos;
+
+        var tmp = go.AddComponent<TextMeshPro>();
+        tmp.text = amount.ToString();
+        tmp.fontSize = runtimeDamageNumberFontSize;
+        tmp.alignment = TextAlignmentOptions.Center;
+        tmp.enableWordWrapping = false;
+        tmp.color = Color.white;
+
+        var runtime = go.AddComponent<RuntimeDamageNumber>();
+        runtime.Initialize(Camera.main, runtimeDamageNumberLifetime, runtimeDamageNumberRiseDistance);
     }
 
     private static void TrySetDamageNumberValue(DamageNumber dn, int amount)
     {
         if (dn == null) return;
 
-        string[] names = { "SetValue", "SetAmount", "SetNumber", "SetDamage", "Initialize", "Setup" };
+        string[] names = { "Init", "SetValue", "SetAmount", "SetNumber", "SetDamage", "Initialize", "Setup" };
 
         Type t = dn.GetType();
         const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -2509,6 +2561,18 @@ NotifyPartyChanged();
                 miStr.Invoke(dn, new object[] { amount.ToString() });
                 return;
             }
+        }
+
+        
+
+        // Fallback: try to directly set a TMP_Text on the prefab (common in this project)
+        // so authored DamageNumber prefabs that use an internal TMP_Text field still work.
+        TMP_Text tmp = dn.GetComponent<TMP_Text>();
+        if (tmp == null) tmp = dn.GetComponentInChildren<TMP_Text>(true);
+        if (tmp != null)
+        {
+            tmp.text = amount.ToString();
+            return;
         }
 
         dn.gameObject.SendMessage("SetValue", amount, SendMessageOptions.DontRequireReceiver);
@@ -2799,6 +2863,9 @@ NotifyPartyChanged();
         return partyMemberInstances[index];
     }
 }
+
+
+////////////////////////////////////////////////////////////
 
 
 ////////////////////////////////////////////////////////////
