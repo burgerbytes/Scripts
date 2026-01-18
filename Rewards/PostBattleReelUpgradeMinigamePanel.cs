@@ -1,3 +1,5 @@
+// GUID: a7aeeac56029a2e4296e5db5583f0c70
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -166,7 +168,22 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         );
 
         ReelSymbolSO fromSym, toSym;
-        bool upgraded = _hero.TryApplyPendingReelUpgradeFromQuadIndex(quadIndex, out fromSym, out toSym);
+        int appliedStripIndex;
+        bool upgraded = _hero.TryApplyPendingReelUpgradeFromQuadIndex(quadIndex, out fromSym, out toSym, out appliedStripIndex);
+
+        // If the landed symbol wasn't upgradeable, HeroStats may have upgraded a different symbol on the strip.
+        // Convert that strip index back into the corresponding quad index for live visual replacement.
+        int appliedQuadIndex = quadIndex;
+        if (appliedStripIndex >= 0 && reel3d != null && reel3d.Strip != null && reel3d.Strip.symbols != null)
+        {
+            int n = reel3d.Strip.symbols.Count;
+            if (n > 0)
+            {
+                int startStripIndex = ((quadIndex % n) + n) % n;
+                int delta = (appliedStripIndex - startStripIndex + n) % n;
+                appliedQuadIndex = quadIndex + delta;
+            }
+        }
 
         if (upgraded)
         {
@@ -179,9 +196,9 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
             // Live in-place replacement of the landed quad (no rebuild, no reel jump)
             if (toSym != null)
             {
-                ReelSymbolSO visualBefore = reel3d.GetSymbolAtQuadIndex(quadIndex);
-                Debug.Log($"[LevelUpReel] LiveReplace quadIndex={quadIndex} visualBefore='{(visualBefore != null ? visualBefore.name : "NULL")}' -> '{toSym.name}'");
-                reel3d.ReplaceSymbolAtQuadIndex(quadIndex, toSym);
+                ReelSymbolSO visualBefore = reel3d.GetSymbolAtQuadIndex(appliedQuadIndex);
+                Debug.Log($"[LevelUpReel] LiveReplace quadIndex={appliedQuadIndex} visualBefore='{(visualBefore != null ? visualBefore.name : "NULL")}' -> '{toSym.name}'");
+                reel3d.ReplaceSymbolAtQuadIndex(appliedQuadIndex, toSym);
             }
             yield return ShakeAndPopRoutine(reel3d.transform);
         }
@@ -298,3 +315,6 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         }
     }
 }
+
+
+////////////////////////////////////////////////////////////

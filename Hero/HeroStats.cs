@@ -1,5 +1,7 @@
 // GUID: a3e2dd32a76bf594ba876a56162b79f2
 ////////////////////////////////////////////////////////////
+// GUID: a3e2dd32a76bf594ba876a56162b79f2
+////////////////////////////////////////////////////////////
 using System;
 using UnityEngine;
 
@@ -506,32 +508,66 @@ public class HeroStats : MonoBehaviour
     // ---------------- Reel Upgrade Minigame Support ----------------
     /// <summary>
     /// Applies ONE pending reel upgrade using the symbol located at the provided quad index.
-    /// Returns true if an upgrade was applied (and decremented from PendingReelUpgrades).
+    /// 
+    /// IMPORTANT: This method must never allow PendingReelUpgrades to get "stuck".
+    /// If the landed symbol cannot be upgraded, we will search forward (wrapping) for the nearest
+    /// upgradeable symbol and upgrade that instead.
+    /// 
+    /// Returns true only if an upgrade was actually applied.
+    /// PendingReelUpgrades is decremented whenever we attempt to resolve one upgrade (even if nothing is upgradeable).
     /// </summary>
     public bool TryApplyPendingReelUpgradeFromQuadIndex(int quadIndex, out ReelSymbolSO from, out ReelSymbolSO to)
     {
+        int _;
+        return TryApplyPendingReelUpgradeFromQuadIndex(quadIndex, out from, out to, out _);
+    }
+
+    /// <summary>
+    /// Same as <see cref="TryApplyPendingReelUpgradeFromQuadIndex(int,out ReelSymbolSO,out ReelSymbolSO)"/>,
+    /// but also returns the strip index that was actually upgraded.
+    /// </summary>
+    public bool TryApplyPendingReelUpgradeFromQuadIndex(int quadIndex, out ReelSymbolSO from, out ReelSymbolSO to, out int appliedStripIndex)
+    {
         from = null;
         to = null;
+        appliedStripIndex = -1;
 
         if (pendingReelUpgrades <= 0) return false;
         if (reelStrip == null || reelStrip.symbols == null || reelStrip.symbols.Count == 0) return false;
         if (reelUpgradeRules == null) return false;
 
         int n = reelStrip.symbols.Count;
-        int stripIndex = ((quadIndex % n) + n) % n;
+        int startStripIndex = ((quadIndex % n) + n) % n;
 
-        from = reelStrip.symbols[stripIndex];
-        if (from == null) return false;
+        // 1) Prefer upgrading the landed symbol.
+        // 2) If not upgradeable, search forward (wrapping) for the nearest upgradeable symbol.
+        for (int step = 0; step < n; step++)
+        {
+            int idx = (startStripIndex + step) % n;
+            ReelSymbolSO candidate = reelStrip.symbols[idx];
+            if (candidate == null) continue;
 
-        ReelSymbolSO upgrade = reelUpgradeRules.GetUpgradeFor(from);
-        if (upgrade == null) return false;
+            ReelSymbolSO upgrade = reelUpgradeRules.GetUpgradeFor(candidate);
+            if (upgrade == null) continue;
 
-        reelStrip.symbols[stripIndex] = upgrade;
-        to = upgrade;
+            reelStrip.symbols[idx] = upgrade;
+            from = candidate;
+            to = upgrade;
+            appliedStripIndex = idx;
 
+            pendingReelUpgrades -= 1;
+            NotifyChanged();
+            return true;
+        }
+
+        // Nothing on the strip is upgradeable, but we still need to consume the pending upgrade
+        // so the post-battle flow cannot loop forever.
+        appliedStripIndex = startStripIndex;
+        from = reelStrip.symbols[startStripIndex];
         pendingReelUpgrades -= 1;
         NotifyChanged();
-        return true;
+        Debug.LogWarning($"[HeroStats] No upgradeable symbols found on reel strip for hero '{name}'. Consuming 1 PendingReelUpgrades to avoid soft-lock.");
+        return false;
     }
 
     private void LevelUp()
@@ -884,6 +920,9 @@ public class HeroStats : MonoBehaviour
 
 ////////////////////////////////////////////////////////////
 
+
+
+////////////////////////////////////////////////////////////
 
 
 ////////////////////////////////////////////////////////////
