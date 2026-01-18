@@ -8,6 +8,7 @@ public class PartyHUD : MonoBehaviour
     [Header("Refs")]
     [SerializeField] private BattleManager battleManager;
     [SerializeField] private AbilityMenuUI abilityMenu;
+    [SerializeField] private HeroStatsPanelUI statsPanel;
 
     [Header("Slots")]
     [SerializeField] private PartyHUDSlot[] slots;
@@ -15,11 +16,15 @@ public class PartyHUD : MonoBehaviour
     [Header("Behavior")]
     [SerializeField] private bool togglePanelWhenClickingSelectedSlot = false;
 
+    [Tooltip("If true, the HeroStatsPanel stays hidden until the player clicks a PickAlly slot.\nThis prevents the panel from auto-appearing during startup / after class selection when BattleManager sets an initial active party member.")]
+    [SerializeField] private bool showStatsOnlyAfterPickAllyClick = true;
+
     [Header("Debug")]
     [SerializeField] private bool debugLogs = true;
 
     private int _selectedIndex = -1;
     private bool _panelVisible = false;
+    private bool _hasShownStatsOnce = false;
 
     private void Awake()
     {
@@ -29,8 +34,15 @@ public class PartyHUD : MonoBehaviour
         if (abilityMenu == null)
             abilityMenu = FindFirstObjectByType<AbilityMenuUI>();
 
+        if (statsPanel == null)
+            statsPanel = FindFirstObjectByType<HeroStatsPanelUI>();
+
         if (slots == null || slots.Length == 0)
             slots = GetComponentsInChildren<PartyHUDSlot>(true);
+
+        // Keep the stats panel hidden on boot unless the player explicitly selects a hero.
+        if (statsPanel != null && showStatsOnlyAfterPickAllyClick)
+            statsPanel.Hide();
 
         // Initialize slots
         if (slots != null)
@@ -56,6 +68,10 @@ public class PartyHUD : MonoBehaviour
             battleManager.OnBattleStateChanged += OnBattleStateChanged;
         }
 
+        // Class selection -> battle scene transition can re-enable objects; keep stats hidden until user clicks.
+        if (statsPanel != null && showStatsOnlyAfterPickAllyClick && !_hasShownStatsOnce)
+            statsPanel.Hide();
+
         RefreshAllSlots();
     }
 
@@ -80,6 +96,18 @@ public class PartyHUD : MonoBehaviour
         // Keep HUD selection in sync with battle manager.
         _selectedIndex = newIndex;
         _panelVisible = true;
+
+        // Update stats only if we're allowed to auto-show, or the player has already shown it at least once.
+        if (statsPanel != null && battleManager != null)
+        {
+            HeroStats hero = battleManager.GetHeroAtPartyIndex(newIndex);
+
+            if (!showStatsOnlyAfterPickAllyClick || _hasShownStatsOnce)
+                statsPanel.ShowForHero(hero);
+            else
+                statsPanel.SetHero(null); // stay hidden until click
+        }
+
         RefreshAllSlots();
     }
 
@@ -133,6 +161,14 @@ public class PartyHUD : MonoBehaviour
         }
 
         battleManager.SetActivePartyMember(index);
+
+        // Update stats panel to match the clicked hero (and ensure it's visible).
+        if (statsPanel != null)
+        {
+            HeroStats clickedHero = battleManager.GetHeroAtPartyIndex(index);
+            statsPanel.ShowForHero(clickedHero);
+            _hasShownStatsOnce = true;
+        }
 
         if (togglePanelWhenClickingSelectedSlot && _selectedIndex == index)
             _panelVisible = !_panelVisible;

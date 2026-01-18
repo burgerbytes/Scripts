@@ -44,6 +44,11 @@ public class ReelSpinSystem : MonoBehaviour
     [SerializeField] private int spinsPerTurn = 3;
     [SerializeField] private Button stopSpinningButton;
 
+    [Header("Shutters / Post-Spin Space")]
+    [Tooltip("Optional. If set, pressing Cashout/Stop will close shutters and disable spin/cashout + 3D reels.\n" +
+             "This creates a temporary space below the reels for ability UI + stats panels.")]
+    [SerializeField] private ReelShutterController shutterController;
+
     [Header("Spin Timing (3D)")]
     [Tooltip("If enabled, forces all 3D reels to spin for at least this many seconds.")]
     [SerializeField] private bool overrideMinSpinDuration3D = true;
@@ -160,6 +165,9 @@ public class ReelSpinSystem : MonoBehaviour
         if (stopSpinningButton != null)
             stopSpinningButton.onClick.AddListener(StopSpinningAndCollect);
 
+        if (shutterController == null)
+            shutterController = FindFirstObjectByType<ReelShutterController>();
+
         if (resourcePool == null)
             resourcePool = ResourcePool.Instance;
 
@@ -182,6 +190,11 @@ public class ReelSpinSystem : MonoBehaviour
     {
         spinsRemaining = spinsPerTurn;
         OnSpinsRemainingChanged?.Invoke(spinsRemaining);
+
+        // New turn = open shutters (reveal reels) and re-enable 3D reels.
+        Set3DReelsActive(true);
+        if (shutterController != null)
+            shutterController.OpenShutters();
     }
 
     /// <summary>
@@ -605,6 +618,11 @@ public class ReelSpinSystem : MonoBehaviour
     {
         if (spinning) return;
 
+        // Spinning should always reveal the reels.
+        Set3DReelsActive(true);
+        if (shutterController != null)
+            shutterController.OpenShutters();
+
         if (_rewardModeActive)
         {
             if (_rewardConfig == null) _rewardConfig = defaultRewardConfig;
@@ -653,6 +671,26 @@ public class ReelSpinSystem : MonoBehaviour
         if (_rewardModeActive) return;
 
         CollectPendingPayout();
+
+        // After cashout, close shutters and disable reels/buttons so the "post-spin" space can be used.
+        Set3DReelsActive(false);
+        if (stopSpinningButton != null)
+            stopSpinningButton.interactable = false;
+
+        if (shutterController != null)
+            shutterController.CloseShutters();
+    }
+
+    private void Set3DReelsActive(bool active)
+    {
+        if (reels == null) return;
+        for (int i = 0; i < reels.Count; i++)
+        {
+            var entry = reels[i];
+            if (entry == null) continue;
+            if (entry.reel3d != null)
+                entry.reel3d.gameObject.SetActive(active);
+        }
     }
 
     private void CollectPendingPayout()
