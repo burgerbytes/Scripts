@@ -1,3 +1,5 @@
+// GUID: a3e2dd32a76bf594ba876a56162b79f2
+////////////////////////////////////////////////////////////
 using System;
 using UnityEngine;
 
@@ -118,12 +120,24 @@ public class HeroStats : MonoBehaviour
     [Tooltip("Reel strip used for this hero's reel.")]
     [SerializeField] private ReelStripSO reelStrip;
 
-    [Tooltip("Portrait sprite used for this hero's reel picker button / UI.")]
+    [Tooltip("Portrait sprite used for this hero's reel picker button / UI.") ]
     [SerializeField] private Sprite portrait;
+
+    [Header("Reel Upgrade (Level Up)")]
+    [Tooltip("If true, leveling up queues a reel symbol upgrade to be resolved via the Reel Upgrade Minigame.")]
+    [SerializeField] private bool upgradeReelOnLevelUp = true;
+
+    [Tooltip("Upgrade mapping rules (e.g., Attack->DoubleAttack, Null->Wild).") ]
+    [SerializeField] private ReelUpgradeRulesSO reelUpgradeRules;
+
+    [Tooltip("How many reel upgrades are pending for this hero (usually equals number of level-ups gained).") ]
+    [SerializeField] private int pendingReelUpgrades = 0;
 
     public ReelStripSO ReelStrip => reelStrip;
     public Sprite Portrait => portrait;
 
+    public int PendingReelUpgrades => pendingReelUpgrades;
+    public bool HasPendingReelUpgrades => pendingReelUpgrades > 0;
     // ---------------- Equipment (NEW) ----------------
     [Header("Equipment (UI only, no effects yet)")]
     public int equipmentSlotSize = 1;
@@ -187,6 +201,11 @@ public class HeroStats : MonoBehaviour
         currentStamina = Mathf.Clamp(currentStamina, 0f, maxStamina);
         currentShield = Mathf.Max(0, currentShield);
 
+        
+        // Ensure reel upgrades are per-hero (do not mutate shared ScriptableObject assets).
+        if (Application.isPlaying && reelStrip != null)
+            reelStrip = Instantiate(reelStrip);
+
         InitEquipmentWatcher();      // legacy array watcher (safe to keep)
         RefreshEquipSlotsFromGrid(); // runtime EquipGrid watcher
         NotifyChanged();
@@ -221,6 +240,7 @@ public class HeroStats : MonoBehaviour
         xp = 0;
         xpToNextLevel = 10;
         pendingLevelUps = 0;
+        pendingReelUpgrades = 0;
 
         currentHp = maxHp;
         currentStamina = maxStamina;
@@ -481,6 +501,39 @@ public class HeroStats : MonoBehaviour
         return true;
     }
 
+
+
+    // ---------------- Reel Upgrade Minigame Support ----------------
+    /// <summary>
+    /// Applies ONE pending reel upgrade using the symbol located at the provided quad index.
+    /// Returns true if an upgrade was applied (and decremented from PendingReelUpgrades).
+    /// </summary>
+    public bool TryApplyPendingReelUpgradeFromQuadIndex(int quadIndex, out ReelSymbolSO from, out ReelSymbolSO to)
+    {
+        from = null;
+        to = null;
+
+        if (pendingReelUpgrades <= 0) return false;
+        if (reelStrip == null || reelStrip.symbols == null || reelStrip.symbols.Count == 0) return false;
+        if (reelUpgradeRules == null) return false;
+
+        int n = reelStrip.symbols.Count;
+        int stripIndex = ((quadIndex % n) + n) % n;
+
+        from = reelStrip.symbols[stripIndex];
+        if (from == null) return false;
+
+        ReelSymbolSO upgrade = reelUpgradeRules.GetUpgradeFor(from);
+        if (upgrade == null) return false;
+
+        reelStrip.symbols[stripIndex] = upgrade;
+        to = upgrade;
+
+        pendingReelUpgrades -= 1;
+        NotifyChanged();
+        return true;
+    }
+
     private void LevelUp()
     {
         level += 1;
@@ -503,6 +556,10 @@ public class HeroStats : MonoBehaviour
         currentStamina = Mathf.Min(currentStamina, maxStamina);
 
         xpToNextLevel = Mathf.RoundToInt(xpToNextLevel * 1.25f) + 5;
+
+        // Queue a reel upgrade to be resolved via the Reel Upgrade Minigame.
+        if (upgradeReelOnLevelUp && reelUpgradeRules != null && reelStrip != null)
+            pendingReelUpgrades += 1;
     }
 
     // ---------------- Damage / Resources ----------------
@@ -827,3 +884,6 @@ public class HeroStats : MonoBehaviour
 
 ////////////////////////////////////////////////////////////
 
+
+
+////////////////////////////////////////////////////////////

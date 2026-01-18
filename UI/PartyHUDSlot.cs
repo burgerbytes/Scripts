@@ -194,7 +194,6 @@ public class PartyHUDSlot : MonoBehaviour
         {
             if (showActualShield != _lastShowActualShield || shieldValueForUI != _lastShieldValue)
             {
-                Debug.Log($"[PartyHUDSlot][BlockUI] slot={partyIndex} showActual={showActualShield} value={shieldValueForUI}", this);
                 _lastShowActualShield = showActualShield;
                 _lastShieldValue = shieldValueForUI;
             }

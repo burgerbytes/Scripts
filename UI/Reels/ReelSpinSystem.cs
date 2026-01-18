@@ -30,6 +30,9 @@ public class ReelSpinSystem : MonoBehaviour
     {
         public ReelSymbolSO symbol;
         public ResourceType resourceType;
+
+        [Tooltip("How much of the resource this symbol grants (e.g. DEF2 = 2).")]
+        public int amount = 1;
     }
 
     public enum ResourceType { Attack, Defend, Magic, Wild }
@@ -123,8 +126,14 @@ public class ReelSpinSystem : MonoBehaviour
     private int pendingM;
     private int pendingW;
 
-    // Map cache
-    private Dictionary<ReelSymbolSO, ResourceType> _symbolMap;
+    // Map cache (type + amount)
+    private struct SymbolMapValue
+    {
+        public ResourceType type;
+        public int amount;
+    }
+
+    private Dictionary<ReelSymbolSO, SymbolMapValue> _symbolMap;
 
     // Resource pool integration
     [SerializeField] private ResourcePool resourcePool;
@@ -302,20 +311,50 @@ public class ReelSpinSystem : MonoBehaviour
 
     private void BuildSymbolMapCache()
     {
-        _symbolMap = new Dictionary<ReelSymbolSO, ResourceType>();
+        _symbolMap = new Dictionary<ReelSymbolSO, SymbolMapValue>();
         foreach (var e in symbolToResourceMap)
         {
             if (e == null || e.symbol == null) continue;
-            _symbolMap[e.symbol] = e.resourceType;
+
+            int amt = Mathf.Max(1, e.amount);
+            _symbolMap[e.symbol] = new SymbolMapValue
+            {
+                type = e.resourceType,
+                amount = amt
+            };
         }
     }
 
+    // Backward-compatible: old callers that only care about type
     private bool TryMapSymbol(ReelSymbolSO sym, out ResourceType rt)
     {
         rt = ResourceType.Attack;
         if (sym == null) return false;
         if (_symbolMap == null) BuildSymbolMapCache();
-        return _symbolMap.TryGetValue(sym, out rt);
+
+        if (_symbolMap.TryGetValue(sym, out var v))
+        {
+            rt = v.type;
+            return true;
+        }
+        return false;
+    }
+
+    // New: callers that need amount too
+    private bool TryMapSymbol(ReelSymbolSO sym, out ResourceType rt, out int amount)
+    {
+        rt = ResourceType.Attack;
+        amount = 1;
+        if (sym == null) return false;
+        if (_symbolMap == null) BuildSymbolMapCache();
+
+        if (_symbolMap.TryGetValue(sym, out var v))
+        {
+            rt = v.type;
+            amount = Mathf.Max(1, v.amount);
+            return true;
+        }
+        return false;
     }
 
     private List<ReelEntry> GetFirstThree3DReels()
@@ -355,6 +394,8 @@ public class ReelSpinSystem : MonoBehaviour
         if (landed == null)
             return info;
 
+        // NOTE: Keep these counts as "number of symbols" (not amount),
+        // so triple-attack/item checks that expect 3 are not broken.
         foreach (var sym in landed)
         {
             if (sym == null)
@@ -382,14 +423,14 @@ public class ReelSpinSystem : MonoBehaviour
 
         foreach (var s in syms)
         {
-            if (s != null && TryMapSymbol(s, out ResourceType rt))
+            if (s != null && TryMapSymbol(s, out ResourceType rt, out int amt))
             {
                 switch (rt)
                 {
-                    case ResourceType.Attack: pendingA++; break;
-                    case ResourceType.Defend: pendingD++; break;
-                    case ResourceType.Magic: pendingM++; break;
-                    case ResourceType.Wild: pendingW++; break;
+                    case ResourceType.Attack: pendingA += amt; break;
+                    case ResourceType.Defend: pendingD += amt; break;
+                    case ResourceType.Magic: pendingM += amt; break;
+                    case ResourceType.Wild: pendingW += amt; break;
                 }
             }
         }

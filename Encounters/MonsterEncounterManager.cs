@@ -143,7 +143,7 @@ public class MonsterEncounterManager : MonoBehaviour
                 Monster clicked = TryGetClickedMonster();
                 if (clicked != null && _activeMonsters.Contains(clicked) && !clicked.IsDead)
                 {
-                    if (heroStats == null)
+                    if (heroStats != null)
                         OnMonsterClicked(clicked);
                 }
             }
@@ -288,6 +288,13 @@ public class MonsterEncounterManager : MonoBehaviour
 
     private void MaintainIdleBlockState()
     {
+        // During startup/class-select, HeroStats may not exist yet.
+        if (heroStats == null)
+        {
+            heroStats = FindFirstObjectByType<HeroStats>();
+            if (heroStats == null) return;
+        }
+
         if (!heroStats.CanBlock || playerAnimator == null || _activeMonsters.Count == 0)
             return;
 

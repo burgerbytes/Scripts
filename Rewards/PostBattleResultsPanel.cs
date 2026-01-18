@@ -130,7 +130,7 @@ public class PostBattleResultsPanel : MonoBehaviour
         _onContinue = onContinue;
 
         if (continueButton != null)
-            continueButton.interactable = false;
+            continueButton.interactable = true; // allow 1-click skip of XP animation
 
         if (goldText != null)
             goldText.text = $"Gold gained: +{goldGained}";
@@ -522,3 +522,5 @@ public class PostBattleResultsPanel : MonoBehaviour
         cb?.Invoke();
     }
 }
+
+

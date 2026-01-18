@@ -504,4 +504,39 @@ public class Reel3DColumn : MonoBehaviour
         if (billboardToCamera)
             FaceQuadsToCamera();
     }
+
+    /// <summary>
+    /// Returns the symbol currently assigned to a specific quad index.
+    /// </summary>
+    public ReelSymbolSO GetSymbolAtQuadIndex(int quadIndex)
+    {
+        EnsureBuilt();
+
+        if (quadIndex < 0 || quadIndex >= _fixedSymbolOnQuad.Count)
+            return null;
+
+        return _fixedSymbolOnQuad[quadIndex];
+    }
+
+    /// <summary>
+    /// Replaces the symbol on a specific quad index IN PLACE (no rebuild, no rotation changes).
+    /// Updates both the authoritative mapping and the visible quad(s).
+    /// </summary>
+    public void ReplaceSymbolAtQuadIndex(int quadIndex, ReelSymbolSO newSymbol)
+    {
+        EnsureBuilt();
+
+        if (quadIndex < 0 || quadIndex >= _fixedSymbolOnQuad.Count)
+        {
+            Debug.LogWarning($"[{nameof(Reel3DColumn)}] ReplaceSymbolAtQuadIndex out of range: {quadIndex} (count={_fixedSymbolOnQuad.Count})", this);
+            return;
+        }
+
+        _fixedSymbolOnQuad[quadIndex] = newSymbol;
+
+        // Update visible quad(s)
+        var qp = _quads[quadIndex];
+        if (qp.front != null) qp.front.SetSymbol(newSymbol);
+        if (qp.back != null) qp.back.SetSymbol(newSymbol);
+    }
 }

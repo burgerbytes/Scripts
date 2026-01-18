@@ -1,7 +1,4 @@
-// GUID: 30f201f35d336bf4d840162cd6fd1fde
-////////////////////////////////////////////////////////////
-// GUID: 30f201f35d336bf4d840162cd6fd1fde
-////////////////////////////////////////////////////////////
+// PATH: Assets/Scripts/Encounters/BattleManager.cs
 // GUID: 30f201f35d336bf4d840162cd6fd1fde
 ////////////////////////////////////////////////////////////
 using System;
@@ -19,6 +16,12 @@ public class BattleManager : MonoBehaviour
     public  int PlayerTurnNumber;
     public static event Action PartyReady;
     public static BattleManager Instance { get; private set; }
+
+    // Startup flow:
+    // BattleManager now defers starting a run until partyMemberPrefabs are populated.
+    // This allows a class-selection UI to decide the party before any heroes are spawned.
+    private bool _runStarted;
+    private bool _startHasRun;
 
     public enum BattleState { Idle, BattleStart, PlayerPhase, EnemyPhase, BattleEnd }
     public enum PlayerActionType { None, Ability1, Ability2 }
@@ -228,6 +231,10 @@ public class BattleManager : MonoBehaviour
     [Tooltip("Optional: shown immediately after victory to summarize gold / XP gained.")]
     [SerializeField] private PostBattleResultsPanel postBattleResultsPanel;
 
+    [Header("Post-Battle Reel Upgrade Minigame")]
+    [Tooltip("Optional: shown after Results (and before reward reels) to let the player spin to upgrade a reel symbol for each level up.")]
+    [SerializeField] private PostBattleReelUpgradeMinigamePanel postBattleReelUpgradeMinigamePanel;
+
     [Tooltip("Optional: tracks in-battle performance for bonus XP awards.")]
     [SerializeField] private BattlePerformanceTracker performanceTracker;
 
@@ -354,6 +361,27 @@ public class BattleManager : MonoBehaviour
         return null;
     }
 
+    public int PartySize => partySize;
+
+    /// <summary>
+    /// Called by startup UI to set the party member prefabs chosen by the player.
+    /// If Start() already ran and we were waiting on this data, this will immediately begin the run.
+    /// </summary>
+    public void SetPartyMemberPrefabs(GameObject[] chosen)
+    {
+        // Always normalize to length 3 for safety.
+        if (chosen == null) chosen = Array.Empty<GameObject>();
+        var normalized = new GameObject[3];
+        for (int i = 0; i < 3; i++)
+            normalized[i] = i < chosen.Length ? chosen[i] : null;
+
+        partyMemberPrefabs = normalized;
+
+        // If Start() already ran and we were blocked waiting for selection, kick off now.
+        if (_startHasRun && !_runStarted && ArePartyPrefabsReady())
+            BeginRunAndBattle();
+    }
+
     private void Awake()
     {
 
@@ -372,6 +400,7 @@ public class BattleManager : MonoBehaviour
         if (startRewardPanel == null) startRewardPanel = FindInSceneIncludingInactive<PostBattleRewardPanel>();
         if (postBattleRewardPanel == null) postBattleRewardPanel = startRewardPanel;
         if (postBattleResultsPanel == null) postBattleResultsPanel = FindInSceneIncludingInactive<PostBattleResultsPanel>();
+        if (postBattleReelUpgradeMinigamePanel == null) postBattleReelUpgradeMinigamePanel = FindInSceneIncludingInactive<PostBattleReelUpgradeMinigamePanel>();
         if (performanceTracker == null) performanceTracker = FindInSceneIncludingInactive<BattlePerformanceTracker>();
 
         // If no tracker exists in-scene, create one on this BattleManager so results panel still works.
@@ -427,12 +456,48 @@ public class BattleManager : MonoBehaviour
         if (confirmText != null)
             confirmText.gameObject.SetActive(false); // disabled by default
 
-        StartNewRun();
+        // NOTE: Do NOT StartNewRun() here.
+        // Awake() executes even if this component is disabled, so startup bootstrappers
+        // cannot reliably prevent a run from starting in Awake().
+        // We begin the run in Start() once party prefabs have been provided.
     }
 
     private void Start()
     {
+        _startHasRun = true;
+        if (!_runStarted)
+        {
+            if (!ArePartyPrefabsReady())
+            {
+                Debug.LogWarning("[BattleManager] Party prefabs not set yet. Waiting for class selection UI to provide partyMemberPrefabs.");
+                return;
+            }
+
+            BeginRunAndBattle();
+        }
+    }
+
+    private void BeginRunAndBattle()
+    {
+        // Safety: avoid double-start if multiple callers race.
+        if (_runStarted) return;
+
+        _runStarted = true;
+        StartNewRun();
         StartBattle();
+    }
+
+    private bool ArePartyPrefabsReady()
+    {
+        int count = Mathf.Clamp(partySize, 1, 3);
+        if (partyMemberPrefabs == null || partyMemberPrefabs.Length < count)
+            return false;
+        for (int i = 0; i < count; i++)
+        {
+            if (partyMemberPrefabs[i] == null)
+                return false;
+        }
+        return true;
     }
 
     private void Update()
@@ -2153,11 +2218,42 @@ NotifyPartyChanged();
             postBattleResultsPanel.Show(goldGained, summaries, () =>
             {
                 // Apply all XP (base + bonus) once the player continues.
+                // Ensure level-ups are allowed so reel-upgrade minigames can be queued immediately.
+                if (heroes != null)
+                {
+                    for (int hi = 0; hi < heroes.Count; hi++)
+                        if (heroes[hi] != null)
+                            heroes[hi].SetAllowLevelUps(true);
+                }
+
                 performanceTracker.ApplySummaries(summaries);
                 resultsDone = true;
             });
             yield return new WaitUntil(() => resultsDone);
+
             postBattleResultsPanel.Hide();
+        }
+
+        // Reel Upgrade Minigame (if any heroes leveled up)
+        if (postBattleReelUpgradeMinigamePanel != null && _party != null)
+        {
+            // Ensure panel object can display (it is often disabled at scene start).
+            if (!postBattleReelUpgradeMinigamePanel.gameObject.activeSelf)
+                postBattleReelUpgradeMinigamePanel.gameObject.SetActive(true);
+
+            for (int i = 0; i < _party.Count; i++)
+            {
+                HeroStats hs = _party[i] != null ? _party[i].stats : null;
+                if (hs == null) continue;
+
+                while (hs.PendingReelUpgrades > 0)
+                {
+                    bool done = false;
+                    postBattleReelUpgradeMinigamePanel.Show(hs, () => done = true);
+                    yield return new WaitUntil(() => done);
+                    postBattleReelUpgradeMinigamePanel.Hide();
+                }
+            }
         }
 
         // Use encounter-specific loot if present; else fall back to global pool.
@@ -2417,19 +2513,6 @@ NotifyPartyChanged();
                 }
             }
 
-
-
-            // If the prefab doesn't already have a _StatusIcon object, create one so hero status icons can still work.
-            if (iconTf == null)
-            {
-                Transform parent = (hs != null) ? hs.transform : pm.avatarGO.transform;
-                var go = new GameObject("_StatusIcon");
-                go.transform.SetParent(parent, false);
-                iconTf = go.transform;
-                // Default offset above the hero (tweak in StatusEffectIconController if desired).
-                iconTf.localPosition = new Vector3(0f, 1.25f, 0f);
-                iconTf.localScale = Vector3.one;
-            }
             if (iconTf != null)
             {
                 statusIcon = iconTf.GetComponent<StatusEffectIconController>();
@@ -2869,3 +2952,5 @@ NotifyPartyChanged();
 
 
 ////////////////////////////////////////////////////////////
+
+
