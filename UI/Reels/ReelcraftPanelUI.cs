@@ -51,6 +51,9 @@ public class ReelcraftPanelUI : MonoBehaviour
 
     private void OnEnable()
     {
+        if (reelcraft != null)
+            reelcraft.OnReelcraftUsed += HandleReelcraftUsed;
+
         if (reelSpinSystem != null)
         {
             reelSpinSystem.OnReelPhaseChanged += HandleReelPhaseChanged;
@@ -60,11 +63,25 @@ public class ReelcraftPanelUI : MonoBehaviour
 
     private void OnDisable()
     {
+        if (reelcraft != null)
+            reelcraft.OnReelcraftUsed -= HandleReelcraftUsed;
+
         if (reelSpinSystem != null)
         {
             reelSpinSystem.OnReelPhaseChanged -= HandleReelPhaseChanged;
             reelSpinSystem.OnPendingPayoutChanged -= HandlePendingChanged;
         }
+    }
+
+    private void HandleReelcraftUsed(int partyIndex)
+    {
+        // If the currently displayed hero uses Reelcraft, close the panel immediately
+        // and lock out all buttons (once-per-battle).
+        if (!gameObject.activeSelf) return;
+        if (partyIndex != _partyIndex) return;
+
+        DisableAllButtons();
+        Hide();
     }
 
     private void HandleReelPhaseChanged(bool inReelPhase)
@@ -124,6 +141,17 @@ public class ReelcraftPanelUI : MonoBehaviour
         _hero = null;
         if (gameObject != null)
             gameObject.SetActive(false);
+    }
+
+    private void DisableAllButtons()
+    {
+        if (steelNudgeUpButton != null) steelNudgeUpButton.interactable = false;
+        if (steelNudgeDownButton != null) steelNudgeDownButton.interactable = false;
+        if (transmuteSelectButton != null) transmuteSelectButton.interactable = false;
+        if (transmuteAtkToMagicButton != null) transmuteAtkToMagicButton.interactable = false;
+        if (transmuteDefToMagicButton != null) transmuteDefToMagicButton.interactable = false;
+        if (transmuteWildToMagicButton != null) transmuteWildToMagicButton.interactable = false;
+        if (twofoldShadowButton != null) twofoldShadowButton.interactable = false;
     }
 
     public void Refresh()
@@ -204,6 +232,15 @@ public class ReelcraftPanelUI : MonoBehaviour
         if (logFlow)
             Debug.Log($"[ReelcraftPanel] SteelNudge dir={dir} ok={ok}", this);
 
+        // Panel will auto-close via OnReelcraftUsed, but keep this safe in case
+        // the event isn't wired for some reason.
+        if (ok)
+        {
+            DisableAllButtons();
+            Hide();
+            return;
+        }
+
         Refresh();
     }
 
@@ -235,6 +272,13 @@ public class ReelcraftPanelUI : MonoBehaviour
         bool ok = reelcraft.TryTwofoldShadow(_partyIndex);
         if (logFlow)
             Debug.Log($"[ReelcraftPanel] TwofoldShadow ok={ok}", this);
+
+        if (ok)
+        {
+            DisableAllButtons();
+            Hide();
+            return;
+        }
 
         Refresh();
     }

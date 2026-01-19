@@ -89,6 +89,23 @@ public class Reel3DColumn : MonoBehaviour
 
     [Tooltip("How long to shake the selected icon (seconds).")]
     [SerializeField] private float reelcraftIconShakeDuration = 0.12f;
+
+    [Tooltip("How much to desaturate the doubled copy (0 = no desat, 1 = full gray).")]
+    [SerializeField, Range(0f, 1f)] private float twofoldShadowDesaturation = 0.35f;
+
+    [Tooltip("Brightness multiplier for the doubled copy (lower = darker).")]
+    [SerializeField, Range(0.5f, 1f)] private float twofoldShadowBrightness = 0.85f;
+
+    [Header("Reelcraft: Twofold Shadow VFX")]
+    [Tooltip("Optional: prefab spawned when Twofold Shadow is applied (e.g., a dense white smoke poof).")]
+    [SerializeField] private GameObject twofoldShadowSmokePrefab;
+
+    [Tooltip("Local-space offset for the smoke prefab (relative to the front quad transform).")]
+    [SerializeField] private Vector3 twofoldShadowSmokeLocalOffset = new Vector3(0.02f, -0.02f, -0.05f);
+
+    [Tooltip("Seconds before the smoke object auto-destroys.")]
+    [SerializeField] private float twofoldShadowSmokeLifetime = 0.85f;
+
     private readonly HashSet<int> _glowingQuads = new();
 
     private Coroutine _routine;
@@ -169,6 +186,39 @@ public class Reel3DColumn : MonoBehaviour
         }
 
         t.localPosition = start;
+    }
+
+    /// <summary>
+    /// Spawns an optional smoke poof prefab at the given icon quad. Used for Twofold Shadow.
+    /// </summary>
+    public GameObject SpawnTwofoldShadowSmoke(int quadIndex)
+    {
+        EnsureBuilt();
+        if (twofoldShadowSmokePrefab == null) return null;
+        if (quadIndex < 0 || quadIndex >= _quads.Count) return null;
+
+        Transform iconT = _quads[quadIndex].frontT;
+        if (iconT == null) return null;
+
+        GameObject go = Instantiate(twofoldShadowSmokePrefab, iconT);
+        go.transform.localPosition = twofoldShadowSmokeLocalOffset;
+        go.transform.localRotation = Quaternion.identity;
+        go.transform.localScale = Vector3.one;
+
+        float life = Mathf.Max(0.05f, twofoldShadowSmokeLifetime);
+        Destroy(go, life);
+        return go;
+    }
+
+    /// <summary>
+    /// Temporarily hide/show the front renderer for a quad (helps VFX obscure the symbol swap).
+    /// </summary>
+    public void SetFrontQuadVisible(int quadIndex, bool visible)
+    {
+        EnsureBuilt();
+        if (quadIndex < 0 || quadIndex >= _quads.Count) return;
+        MeshRenderer mr = _quads[quadIndex].frontMr;
+        if (mr != null) mr.enabled = visible;
     }
 
     public int GetMultiplierForQuad(int quadIndex)
@@ -481,20 +531,57 @@ public class Reel3DColumn : MonoBehaviour
         if (_quads[quadIndex].back != null)
             _quads[quadIndex].back.SetSymbol(sym);
 
-        // If this quad is "doubled" (ninja), keep the shadow sprite in sync.
+        // If this quad is "doubled" (ninja), keep the shadow sprite in sync and keep the subtle gray tint.
         if (_doubledQuads.Contains(quadIndex) && _shadowRenderers.TryGetValue(quadIndex, out var mr) && mr != null)
         {
             var quad = mr.GetComponent<Reel3DSymbolQuad>();
             if (quad != null)
                 quad.SetSymbol(sym);
 
-            // Dark tint (best-effort across shaders)
-            var mpb = new MaterialPropertyBlock();
-            mr.GetPropertyBlock(mpb);
-            mpb.SetColor("_Color", new Color(0f, 0f, 0f, 0.6f));
-            mpb.SetColor("_BaseColor", new Color(0f, 0f, 0f, 0.6f));
-            mr.SetPropertyBlock(mpb);
+            ApplyTwofoldShadowTint(_quads[quadIndex].frontMr, mr);
         }
+    }
+
+    /// <summary>
+    /// Applies a "double" look: same symbol/material, but slightly desaturated + slightly darker (opaque).
+    /// This is intentionally NOT a black shadow.
+    /// </summary>
+    private void ApplyTwofoldShadowTint(MeshRenderer baseMr, MeshRenderer shadowMr)
+    {
+        if (baseMr == null || shadowMr == null) return;
+
+        Color baseColor = Color.white;
+
+        // Try from shared material (most common)
+        if (baseMr.sharedMaterial != null)
+        {
+            if (baseMr.sharedMaterial.HasProperty("_Color"))
+                baseColor = baseMr.sharedMaterial.color;
+            else if (baseMr.sharedMaterial.HasProperty("_BaseColor"))
+                baseColor = baseMr.sharedMaterial.GetColor("_BaseColor");
+        }
+
+        // Slight desaturation toward gray
+        float gray = (baseColor.r + baseColor.g + baseColor.b) / 3f;
+
+        float desat = Mathf.Clamp01(twofoldShadowDesaturation);
+        float bright = Mathf.Clamp(twofoldShadowBrightness, 0.5f, 1f);
+
+        Color outCol = new Color(
+            Mathf.Lerp(baseColor.r, gray, desat),
+            Mathf.Lerp(baseColor.g, gray, desat),
+            Mathf.Lerp(baseColor.b, gray, desat),
+            1f
+        );
+
+        outCol *= bright;
+        outCol.a = 1f;
+
+        var mpb = new MaterialPropertyBlock();
+        shadowMr.GetPropertyBlock(mpb);
+        mpb.SetColor("_Color", outCol);
+        mpb.SetColor("_BaseColor", outCol);
+        shadowMr.SetPropertyBlock(mpb);
     }
 
     /// <summary>
@@ -662,12 +749,8 @@ public class Reel3DColumn : MonoBehaviour
         ReelSymbolSO sym = (quadIndex < _currentSymbolOnQuad.Count) ? _currentSymbolOnQuad[quadIndex] : null;
         quad.SetSymbol(sym);
 
-        // Dark tint
-        var mpb = new MaterialPropertyBlock();
-        mr.GetPropertyBlock(mpb);
-        mpb.SetColor("_Color", new Color(0f, 0f, 0f, 0.6f));
-        mpb.SetColor("_BaseColor", new Color(0f, 0f, 0f, 0.6f));
-        mr.SetPropertyBlock(mpb);
+        // Subtle gray "double" tint (not a black shadow)
+        ApplyTwofoldShadowTint(baseMr, mr);
     }
 
     private void SetQuadGlow(int quadIndex, bool on)
@@ -863,5 +946,3 @@ public class Reel3DColumn : MonoBehaviour
         if (qp.back != null) qp.back.SetSymbol(newSymbol);
     }
 }
-
-

@@ -16,12 +16,22 @@ public class ReelcraftController : MonoBehaviour
     [Header("Refs")]
     [SerializeField] private BattleManager battleManager;
     [SerializeField] private ReelSpinSystem reelSpinSystem;
+    [SerializeField] private AudioSource reelcraftAudioSource;
+    [SerializeField] private AudioClip reelcraftActivateClip;
+
 
     [Header("Debug")]
     [SerializeField] private bool logFlow = true;
 
     private bool[] _usedThisBattle;
     private int _cachedPartyCount;
+
+    /// <summary>
+    /// Fired when a hero successfully consumes their once-per-battle Reelcraft.
+    /// For Steel Nudge / Twofold Shadow this fires immediately when pressed.
+    /// For Arcane Transmutation this fires after the icon click applies.
+    /// </summary>
+    public event Action<int> OnReelcraftUsed;
 
     // Mage transmute selection state
     private bool _transmuteSelecting;
@@ -234,7 +244,18 @@ public class ReelcraftController : MonoBehaviour
     {
         if (_usedThisBattle == null) return;
         if (partyIndex < 0 || partyIndex >= _usedThisBattle.Length) return;
+        if (_usedThisBattle[partyIndex])
+            return;
+
         _usedThisBattle[partyIndex] = true;
+        try
+        {
+            OnReelcraftUsed?.Invoke(partyIndex);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogException(ex, this);
+        }
     }
 
     // ---------------- Reelcrafts ----------------
@@ -318,6 +339,12 @@ public class ReelcraftController : MonoBehaviour
         // Shake the selected icon (matches the "upgrade" feedback feel, but scoped to the icon)
         yield return column.ShakeIconRoutine(quadIndex);
 
+        // Poof of dense smoke to obscure the change
+        column.SpawnTwofoldShadowSmoke(quadIndex);
+        column.SetFrontQuadVisible(quadIndex, false);
+        yield return new WaitForSeconds(0.08f);
+        column.SetFrontQuadVisible(quadIndex, true);
+
         bool ok = column.MarkQuadDoubled(quadIndex, enableShadowVisual: true);
         if (!ok) yield break;
 
@@ -325,6 +352,10 @@ public class ReelcraftController : MonoBehaviour
         if (reelSpinSystem != null)
             reelSpinSystem.TryNudgeReel(partyIndex, 0);
 
+        if (reelcraftAudioSource != null && reelcraftActivateClip != null)
+        {
+            reelcraftAudioSource.PlayOneShot(reelcraftActivateClip);
+        }
         if (logFlow)
             Debug.Log($"[Reelcraft] Twofold Shadow used. partyIndex={partyIndex} quadIndex={quadIndex} sym={(sym != null ? sym.name : "<null>")}", this);
     }
