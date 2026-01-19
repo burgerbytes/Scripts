@@ -5,7 +5,7 @@ using UnityEngine;
 /// Manages per-hero "Reelcraft" (once-per-battle) abilities and applies their effects to ReelSpinSystem.
 ///
 /// Current starter Reelcrafts:
-/// - Fighter: Steel Nudge (nudge their own reel up/down 1 step)
+/// - Fighter: MeasuredBash (nudge their own reel up/down 1 step)
 /// - Mage: Arcane Transmutation (pick a symbol icon on any reel to permanently transmute to Magic for this battle)
 /// - Ninja: Twofold Shadow (pick the ninja's currently landed icon and make it count as 2 for this battle)
 /// </summary>
@@ -28,7 +28,7 @@ public class ReelcraftController : MonoBehaviour
 
     /// <summary>
     /// Fired when a hero successfully consumes their once-per-battle Reelcraft.
-    /// For Steel Nudge / Twofold Shadow this fires immediately when pressed.
+    /// For Measured Bash / Twofold Shadow this fires immediately when pressed.
     /// For Arcane Transmutation this fires after the icon click applies.
     /// </summary>
     public event Action<int> OnReelcraftUsed;
@@ -260,7 +260,7 @@ public class ReelcraftController : MonoBehaviour
 
     // ---------------- Reelcrafts ----------------
 
-    public bool TrySteelNudge(int partyIndex, int deltaSteps)
+    public bool TryMeasuredBash(int partyIndex, int deltaSteps)
     {
         if (!CanUse(partyIndex)) return false;
         if (reelSpinSystem == null) return false;
@@ -269,11 +269,11 @@ public class ReelcraftController : MonoBehaviour
         // If the routine fails for any reason, we don't refund the use.
         MarkUsed(partyIndex);
 
-        StartCoroutine(SteelNudgeRoutine(partyIndex, deltaSteps));
+        StartCoroutine(MeasuredBashRoutine(partyIndex, deltaSteps));
         return true;
     }
 
-    private System.Collections.IEnumerator SteelNudgeRoutine(int partyIndex, int deltaSteps)
+    private System.Collections.IEnumerator MeasuredBashRoutine(int partyIndex, int deltaSteps)
     {
         var entry = (reelSpinSystem != null) ? reelSpinSystem.GetReelEntryAt(partyIndex) : null;
         if (entry == null || entry.reel3d == null)
@@ -284,7 +284,7 @@ public class ReelcraftController : MonoBehaviour
         bool ok = reelSpinSystem.TryNudgeReel(partyIndex, deltaSteps);
         if (!ok) yield break;
         if (logFlow)
-            Debug.Log($"[Reelcraft] Steel Nudge used. partyIndex={partyIndex} deltaSteps={deltaSteps}", this);
+            Debug.Log($"[Reelcraft] Measured Bash used. partyIndex={partyIndex} deltaSteps={deltaSteps}", this);
     }
 
     /// <summary>

@@ -120,7 +120,7 @@ public class Reel3DColumn : MonoBehaviour
 
     /// <summary>
     /// Nudges the reel by an integer number of steps while stopped.
-    /// Used by Reelcraft abilities (e.g., Steel Nudge).
+    /// Used by Reelcraft abilities (e.g., Measured Bash).
     /// </summary>
     public bool TryNudgeSteps(int deltaSteps)
     {

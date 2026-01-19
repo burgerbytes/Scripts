@@ -1,4 +1,7 @@
+// GUID: a3e2dd32a76bf594ba876a56162b79f2
+////////////////////////////////////////////////////////////
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 public class HeroStats : MonoBehaviour
@@ -194,6 +197,10 @@ public class HeroStats : MonoBehaviour
 
     public event Action OnChanged;
 
+    // ---------------- Ability Per-Turn Limits (Runtime) ----------------
+    // Tracks abilities that are marked "usableOncePerTurn" so they can't be used repeatedly in the same player turn.
+    private Dictionary<AbilityDefinitionSO, int> _abilityLastUsedOnPlayerTurn;
+
     private void Awake()
     {
         currentHp = Mathf.Clamp(currentHp, 0, maxHp);
@@ -208,6 +215,28 @@ public class HeroStats : MonoBehaviour
         InitEquipmentWatcher();      // legacy array watcher (safe to keep)
         RefreshEquipSlotsFromGrid(); // runtime EquipGrid watcher
         NotifyChanged();
+    }
+
+    // ---------------- Ability Per-Turn Limits ----------------
+    public bool CanUseAbilityThisTurn(AbilityDefinitionSO ability)
+    {
+        if (ability == null) return false;
+        if (!ability.usableOncePerTurn) return true;
+
+        int turn = (BattleManager.Instance != null) ? BattleManager.Instance.PlayerTurnNumber : 0;
+        if (_abilityLastUsedOnPlayerTurn != null && _abilityLastUsedOnPlayerTurn.TryGetValue(ability, out int lastTurn))
+            return lastTurn != turn;
+
+        return true;
+    }
+
+    public void RegisterAbilityUsedThisTurn(AbilityDefinitionSO ability)
+    {
+        if (ability == null || !ability.usableOncePerTurn) return;
+
+        int turn = (BattleManager.Instance != null) ? BattleManager.Instance.PlayerTurnNumber : 0;
+        _abilityLastUsedOnPlayerTurn ??= new Dictionary<AbilityDefinitionSO, int>(16);
+        _abilityLastUsedOnPlayerTurn[ability] = turn;
     }
 
     private void NotifyChanged() => OnChanged?.Invoke();
@@ -803,6 +832,10 @@ public class HeroStats : MonoBehaviour
 
         // Triple Blade / turn-only flags
         tripleBladeEmpoweredThisTurn = false;
+
+        // Once-per-turn abilities
+        if (_abilityLastUsedOnPlayerTurn != null)
+            _abilityLastUsedOnPlayerTurn.Clear();
     }
 
     /// <summary>
@@ -929,6 +962,9 @@ public class HeroStats : MonoBehaviour
 
 ////////////////////////////////////////////////////////////
 
+
+
+////////////////////////////////////////////////////////////
 
 
 ////////////////////////////////////////////////////////////

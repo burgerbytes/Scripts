@@ -1,3 +1,6 @@
+// PATH: Assets/Scripts/UI/Reels/ReelSpinSystem.cs
+// GUID: 1b9947b6d65d049459a446a098bd7cb3
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -977,9 +980,16 @@ public class ReelSpinSystem : MonoBehaviour
         _currentLandedMultipliers = null;
         OnPendingPayoutChanged?.Invoke(pendingA, pendingD, pendingM, pendingW);
     }
+
+    public void ClearAllTemporaryDoubles()
+    {
+        if (reels == null) return;
+        for (int i = 0; i < reels.Count; i++)
+        {
+            var e = reels[i];
+            if (e == null || e.reel3d == null) continue;
+            e.reel3d.ClearAllDoubles();
+        }
+    }
 }
 ////////////////////////////////////////////////////////////
-
-////////////////////////////////////////////////////////////
-
-

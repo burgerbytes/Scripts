@@ -1,3 +1,5 @@
+// GUID: 341fb70d5f7f2f6418a9eacb8b240559
+////////////////////////////////////////////////////////////
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
@@ -120,7 +122,8 @@ public class AbilityMenuUI : MonoBehaviour
                     ability,
                     resourcePool,
                     OnAbilityButtonSelected,
-                    OnAbilityConfirmed
+                    OnAbilityConfirmed,
+                    CanUseAbilityNow
                 );
 
                 buttons.Add(btn);
@@ -196,6 +199,30 @@ public class AbilityMenuUI : MonoBehaviour
                 b.RefreshInteractable();
     }
 
+    private bool CanUseAbilityNow(AbilityDefinitionSO ability)
+    {
+        if (currentHero == null || ability == null)
+            return false;
+
+        // Once-per-turn abilities
+        if (!currentHero.CanUseAbilityThisTurn(ability))
+            return false;
+
+        // Per-turn damaging attack limit (keeps UI consistent with BattleManager's gating)
+        if (ability.baseDamage > 0 && !currentHero.CanCommitDamageAttackThisTurn())
+            return false;
+
+        // Optional: if hero is stunned, no actions this phase.
+        if (currentHero.IsStunned)
+            return false;
+
+        // Keep UI consistent with BattleManager gating.
+        if (battleManager != null && !battleManager.IsPlayerPhase)
+            return false;
+
+        return true;
+    }
+
     private void ClearButtons()
     {
         if (listParent == null)
@@ -244,3 +271,6 @@ public class AbilityMenuUI : MonoBehaviour
 }
 
 
+
+
+////////////////////////////////////////////////////////////

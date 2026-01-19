@@ -1,5 +1,7 @@
 // GUID: 30f201f35d336bf4d840162cd6fd1fde
 ////////////////////////////////////////////////////////////
+// GUID: 30f201f35d336bf4d840162cd6fd1fde
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -792,6 +794,13 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
             return;
         }
 
+        // Once-per-turn abilities (per hero)
+        if (actor.stats != null && !actor.stats.CanUseAbilityThisTurn(ability))
+        {
+            if (logFlow) Debug.Log($"[Battle][Ability] Blocked: {actor.name} already used '{ability.abilityName}' this player turn.", this);
+            return;
+        }
+
         if (logFlow)
             Debug.Log($"[Battle][Ability] Pending set. actorIndex={actorIndex} ability={ability.abilityName} targetType={ability.targetType} shieldAmount={ability.shieldAmount} healAmount={ability.healAmount} baseDamage={ability.baseDamage} cost={cost}");
 
@@ -904,6 +913,11 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
             resourcePool.ClearAll();
 
         TickBleedingAtEndOfPlayerTurn();
+
+        // Ninja Reelcraft: Twofold Shadow should only persist for the current turn.
+        // Clear the temporary doubled-icon visuals so they do not carry into the next turn.
+        if (reelSpinSystem != null)
+            reelSpinSystem.ClearAllTemporaryDoubles();
 
         if (_state == BattleState.BattleEnd)
             return;
@@ -1363,6 +1377,10 @@ NotifyPartyChanged();
             CancelPendingAbility();
             yield break;
         }
+
+        // Mark once-per-turn ability usage only after the cast is truly committed (cost successfully spent).
+        if (actorStats != null)
+            actorStats.RegisterAbilityUsedThisTurn(ability);
 
         if (logFlow) Debug.Log($"[Battle][Resolve] Resources spent. cost={cost}. Proceeding to apply ability effects.", this);
         _resolving = true;
@@ -2976,9 +2994,6 @@ NotifyPartyChanged();
             SetUndoButtonEnabled(false);
     }
 }
-
-
-////////////////////////////////////////////////////////////
 
 
 ////////////////////////////////////////////////////////////

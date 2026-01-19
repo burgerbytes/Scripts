@@ -1,6 +1,6 @@
-// PATH: Assets/Scripts/UI/Abilities/AbilityButtonUI.cs
 // GUID: 55d9a61f8cba7d34ba7f0c8ffb4a45f6
 ////////////////////////////////////////////////////////////
+using System;
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
@@ -42,6 +42,7 @@ public class AbilityButtonUI : MonoBehaviour
 
     private AbilityDefinitionSO ability;
     private ResourcePool resourcePool;
+    private Func<AbilityDefinitionSO, bool> canUseExtraPredicate;
 
     private System.Action<AbilityButtonUI> onSelected;
     private System.Action<AbilityDefinitionSO> onClickedConfirm;
@@ -59,13 +60,15 @@ public class AbilityButtonUI : MonoBehaviour
         AbilityDefinitionSO ability,
         ResourcePool resourcePool,
         System.Action<AbilityButtonUI> onSelectedCallback,
-        System.Action<AbilityDefinitionSO> onClickedConfirmCallback = null
+        System.Action<AbilityDefinitionSO> onClickedConfirmCallback = null,
+        Func<AbilityDefinitionSO, bool> canUseExtraPredicate = null
     )
     {
         this.ability = ability;
         this.resourcePool = resourcePool;
         this.onSelected = onSelectedCallback;
         this.onClickedConfirm = onClickedConfirmCallback;
+        this.canUseExtraPredicate = canUseExtraPredicate;
 
         CacheOriginalsIfNeeded();
 
@@ -120,14 +123,14 @@ public class AbilityButtonUI : MonoBehaviour
     public void SetSelected(bool selected)
     {
         isSelected = selected;
-        bool affordable = IsAffordable();
+        bool usable = IsUsable();
 
         if (nameText != null)
         {
             if (boldNameWhenSelected)
                 nameText.fontStyle = selected ? FontStyles.Bold : FontStyles.Normal;
 
-            if (grayOutWhenUnaffordable && !affordable)
+            if (grayOutWhenUnaffordable && !usable)
                 nameText.color = unaffordableTextColor;
             else if (selected)
                 nameText.color = selectedTextColor;
@@ -137,7 +140,7 @@ public class AbilityButtonUI : MonoBehaviour
 
         if (costText != null)
         {
-            if (grayOutWhenUnaffordable && !affordable)
+            if (grayOutWhenUnaffordable && !usable)
                 costText.color = unaffordableTextColor;
             else
                 costText.color = affordableTextColor;
@@ -145,7 +148,7 @@ public class AbilityButtonUI : MonoBehaviour
 
         if (buttonBackground != null)
         {
-            if (grayOutWhenUnaffordable && !affordable)
+            if (grayOutWhenUnaffordable && !usable)
                 buttonBackground.color = unaffordableBackgroundColor;
             else if (selected && highlightWhenSelected)
                 buttonBackground.color = selectedBackgroundColor;
@@ -154,26 +157,31 @@ public class AbilityButtonUI : MonoBehaviour
         }
 
         if (debugLogs)
-            Debug.Log($"[AbilityButtonUI] SetSelected({selected}) '{name}' affordable={affordable}", this);
+            Debug.Log($"[AbilityButtonUI] SetSelected({selected}) '{name}' usable={usable}", this);
     }
 
     public void RefreshInteractable()
     {
-        bool affordable = IsAffordable();
+        bool usable = IsUsable();
 
         if (button != null)
-            button.interactable = affordable;
+            button.interactable = usable;
 
         SetSelected(isSelected);
     }
 
-    private bool IsAffordable()
+    private bool IsUsable()
     {
         if (ability == null || resourcePool == null) return false;
 
-        // ✅ SAME DATA + SAME RULES as spending:
-        // BattleManager spends: resourcePool.TrySpend(ability.cost) (effective cost currently equals ability.cost)
-        return resourcePool.CanAfford(ability.cost);
+        // Base rule: resource affordability.
+        if (!resourcePool.CanAfford(ability.cost)) return false;
+
+        // Optional extra rule (e.g., once-per-turn, attack-per-turn limits, etc.)
+        if (canUseExtraPredicate != null && !canUseExtraPredicate.Invoke(ability))
+            return false;
+
+        return true;
     }
 
     private string BuildCostString(AbilityDefinitionSO ability)
@@ -200,4 +208,3 @@ public class AbilityButtonUI : MonoBehaviour
 
 
 ////////////////////////////////////////////////////////////
-// PATH: Assets/Scripts/UI/Abilities/AbilityDefSOReader.cs

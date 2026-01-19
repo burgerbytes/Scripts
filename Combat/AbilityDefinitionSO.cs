@@ -1,5 +1,7 @@
 // GUID: cf56299f5b00af345b24e257cb33b22b
 ////////////////////////////////////////////////////////////
+// GUID: cf56299f5b00af345b24e257cb33b22b
+////////////////////////////////////////////////////////////
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -56,7 +58,13 @@ public class AbilityDefinitionSO : ScriptableObject
 
     [Tooltip("If grantsHidden, this ability also clears existing enemy intents by making them miss (handled at resolution).")]
     public bool makesUntargetable = false;
+
+    [Tooltip("If true, this ability can only be used once per player turn per hero. The UI will gray it out after use.")]
+    public bool usableOncePerTurn = false;
 }
+
+
+////////////////////////////////////////////////////////////
 
 
 ////////////////////////////////////////////////////////////

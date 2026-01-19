@@ -23,9 +23,9 @@ public class ReelcraftPanelUI : MonoBehaviour
     [SerializeField] private TMP_Text titleText;
     [SerializeField] private TMP_Text descriptionText;
 
-    [Header("Fighter - Steel Nudge")]
-    [SerializeField] private Button steelNudgeUpButton;
-    [SerializeField] private Button steelNudgeDownButton;
+    [Header("Fighter - Measured Bash")]
+    [SerializeField] private Button MeasuredBashUpButton;
+    [SerializeField] private Button MeasuredBashDownButton;
 
     [Header("Mage - Arcane Transmutation")]
     [SerializeField] private Button transmuteSelectButton;
@@ -113,17 +113,17 @@ public class ReelcraftPanelUI : MonoBehaviour
         // IMPORTANT:
         // Some prefabs may already have persistent OnClick handlers wired in the Inspector.
         // If we add listeners in code without clearing, clicks can fire multiple times.
-        // That can cause "Steel Nudge Down moves by 2" (-1 twice).
-        if (steelNudgeUpButton != null)
+        // That can cause "Measured Bash Down moves by 2" (-1 twice).
+        if (MeasuredBashUpButton != null)
         {
-            steelNudgeUpButton.onClick.RemoveAllListeners();
-            steelNudgeUpButton.onClick.AddListener(() => OnSteelNudge(+1));
+            MeasuredBashUpButton.onClick.RemoveAllListeners();
+            MeasuredBashUpButton.onClick.AddListener(() => OnMeasuredBash(+1));
         }
 
-        if (steelNudgeDownButton != null)
+        if (MeasuredBashDownButton != null)
         {
-            steelNudgeDownButton.onClick.RemoveAllListeners();
-            steelNudgeDownButton.onClick.AddListener(() => OnSteelNudge(-1));
+            MeasuredBashDownButton.onClick.RemoveAllListeners();
+            MeasuredBashDownButton.onClick.AddListener(() => OnMeasuredBash(-1));
         }
 
         // Deprecated buttons (older prefab). Clear listeners anyway so they can't double-fire.
@@ -184,8 +184,8 @@ public class ReelcraftPanelUI : MonoBehaviour
 
     private void DisableAllButtons()
     {
-        if (steelNudgeUpButton != null) steelNudgeUpButton.interactable = false;
-        if (steelNudgeDownButton != null) steelNudgeDownButton.interactable = false;
+        if (MeasuredBashUpButton != null) MeasuredBashUpButton.interactable = false;
+        if (MeasuredBashDownButton != null) MeasuredBashDownButton.interactable = false;
         if (transmuteSelectButton != null) transmuteSelectButton.interactable = false;
         if (transmuteAtkToMagicButton != null) transmuteAtkToMagicButton.interactable = false;
         if (transmuteDefToMagicButton != null) transmuteDefToMagicButton.interactable = false;
@@ -214,7 +214,7 @@ public class ReelcraftPanelUI : MonoBehaviour
             descriptionText.text = BuildDescription(archetype, canUse, used);
 
         // Toggle groups
-        SetGroupVisible(steelNudgeUpButton, steelNudgeDownButton, archetype == ReelcraftController.ReelcraftArchetype.Fighter);
+        SetGroupVisible(MeasuredBashUpButton, MeasuredBashDownButton, archetype == ReelcraftController.ReelcraftArchetype.Fighter);
         if (transmuteSelectButton != null)
             SetGroupVisible(transmuteSelectButton, archetype == ReelcraftController.ReelcraftArchetype.Mage);
 
@@ -223,8 +223,8 @@ public class ReelcraftPanelUI : MonoBehaviour
         SetGroupVisible(twofoldShadowButton, archetype == ReelcraftController.ReelcraftArchetype.Ninja);
 
         // Interactables
-        if (steelNudgeUpButton != null) steelNudgeUpButton.interactable = canUse && archetype == ReelcraftController.ReelcraftArchetype.Fighter;
-        if (steelNudgeDownButton != null) steelNudgeDownButton.interactable = canUse && archetype == ReelcraftController.ReelcraftArchetype.Fighter;
+        if (MeasuredBashUpButton != null) MeasuredBashUpButton.interactable = canUse && archetype == ReelcraftController.ReelcraftArchetype.Fighter;
+        if (MeasuredBashDownButton != null) MeasuredBashDownButton.interactable = canUse && archetype == ReelcraftController.ReelcraftArchetype.Fighter;
 
         if (transmuteSelectButton != null) transmuteSelectButton.interactable = canUse && archetype == ReelcraftController.ReelcraftArchetype.Mage;
 
@@ -253,7 +253,7 @@ public class ReelcraftPanelUI : MonoBehaviour
         switch (archetype)
         {
             case ReelcraftController.ReelcraftArchetype.Fighter:
-                return "Steel Nudge: Nudge your reel up/down by 1 symbol.";
+                return "Measured Bash: Nudge your reel up/down by 1 symbol.";
             case ReelcraftController.ReelcraftArchetype.Mage:
                 return "Arcane Transmutation: Click a glowing icon to permanently transmute it into Magic for this battle (NULL works too).";
             case ReelcraftController.ReelcraftArchetype.Ninja:
@@ -263,13 +263,13 @@ public class ReelcraftPanelUI : MonoBehaviour
         }
     }
 
-    private void OnSteelNudge(int dir)
+    private void OnMeasuredBash(int dir)
     {
         if (reelcraft == null) return;
 
-        bool ok = reelcraft.TrySteelNudge(_partyIndex, dir);
+        bool ok = reelcraft.TryMeasuredBash(_partyIndex, dir);
         if (logFlow)
-            Debug.Log($"[ReelcraftPanel] SteelNudge dir={dir} ok={ok}", this);
+            Debug.Log($"[ReelcraftPanel] MeasuredBash dir={dir} ok={ok}", this);
 
         // Panel will auto-close via OnReelcraftUsed, but keep this safe in case
         // the event isn't wired for some reason.
