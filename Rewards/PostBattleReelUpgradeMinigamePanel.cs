@@ -1,5 +1,3 @@
-// GUID: a7aeeac56029a2e4296e5db5583f0c70
-////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -17,6 +15,9 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
     [Header("UI")]
     [SerializeField] private GameObject root;
     [SerializeField] private Image portraitImage;
+
+    [Header("Scene Refs")]
+    [SerializeField] private BattleManager battleManager;
 
     [Header("Reel")]
     [Tooltip("3D reel column used for the minigame.")]
@@ -51,6 +52,8 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
 
     private void Awake()
     {
+        if (battleManager == null)
+            battleManager = FindFirstObjectByType<BattleManager>();
         if (root == null) root = gameObject;
         if (spinButton != null) spinButton.onClick.AddListener(OnSpinPressed);
         if (nextButton != null) nextButton.onClick.AddListener(OnNextPressed);
@@ -81,6 +84,10 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
 
         if (root != null && !root.activeSelf) root.SetActive(true);
         gameObject.SetActive(true);
+
+        // Hide ally sprites during the reel upgrade minigame; only the relevant hero portrait should be shown.
+        if (battleManager != null)
+            battleManager.SetPartyAvatarsActive(false);
 
         // Hard-hide any other 3D reels in the scene so they don't visually overlap or
         // interfere with midrow detection.
@@ -120,6 +127,10 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
 
         // Disable the reel objects when leaving the minigame
         if (reel3d != null) reel3d.gameObject.SetActive(false);
+
+        // Restore party sprites
+        if (battleManager != null)
+            battleManager.SetPartyAvatarsActive(true);
         if (midrowPlane != null) midrowPlane.SetActive(false);
 
         // Restore other reels
@@ -131,6 +142,9 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
 
     private void HideImmediate()
     {
+        if (battleManager != null)
+            battleManager.SetPartyAvatarsActive(true);
+
         if (nextButton != null) nextButton.gameObject.SetActive(false);
         if (root != null) root.SetActive(false);
         gameObject.SetActive(false);
@@ -315,6 +329,9 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         }
     }
 }
+
+
+////////////////////////////////////////////////////////////
 
 
 ////////////////////////////////////////////////////////////

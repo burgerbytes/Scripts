@@ -1,6 +1,3 @@
-// PATH: Assets/Scripts/Encounters/BattleManager.cs
-// GUID: 30f201f35d336bf4d840162cd6fd1fde
-////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -17,9 +14,6 @@ public class BattleManager : MonoBehaviour
     public static event Action PartyReady;
     public static BattleManager Instance { get; private set; }
 
-    // Startup flow:
-    // BattleManager now defers starting a run until partyMemberPrefabs are populated.
-    // This allows a class-selection UI to decide the party before any heroes are spawned.
     private bool _runStarted;
     private bool _startHasRun;
 
@@ -42,13 +36,10 @@ public class BattleManager : MonoBehaviour
     public struct EnemyIntent
     {
         public IntentType type;
-        // UI-facing classification for intent icons/lines.
-        // Derived from the planned payload (damage/AoE/status) so preview and execution stay consistent.
         public IntentCategory category;
         public Monster enemy;
         public int targetPartyIndex;
 
-        // Chosen attack payload (so intent preview + execution stay consistent, and Undo can restore them).
         public int attackIndex;
         public int damage;
         public bool isAoe;
@@ -77,9 +68,6 @@ public class BattleManager : MonoBehaviour
 
         return hasStatus ? IntentCategory.StatusDebuffOnly : IntentCategory.Normal;
     }
-
-
-    // ================= UNDO SAVE STATES =================
 
     [Serializable]
     private struct ResourcePoolSnapshot
@@ -140,8 +128,6 @@ public class BattleManager : MonoBehaviour
         public ResourcePoolSnapshot resources;
     }
 
-
-    // REQUIRED BY PartyHUDSlot.cs
     public struct PartyMemberSnapshot
     {
         public string Name;
@@ -160,7 +146,6 @@ public class BattleManager : MonoBehaviour
         public bool IsTripleBladeEmpowered;
         public bool IsBleeding;
 
-        // UI-only: preview for pending Block cast (shield not yet applied yet)
         public bool HasBlockPreview;
         public int BlockPreviewAmount;
 
@@ -174,7 +159,6 @@ public class BattleManager : MonoBehaviour
     [Header("Party (Run Instance)")]
     [SerializeField] private Transform[] partySpawnPoints;
     [SerializeField] private GameObject[] partyMemberPrefabs = new GameObject[3];
-    private GameObject[] partyMemberInstances;
     [SerializeField] private Transform partyRoot;
     [SerializeField] private int partySize = 3;
 
@@ -224,7 +208,7 @@ public class BattleManager : MonoBehaviour
     [SerializeField] private PostBattleRewardPanel postBattleRewardPanel;
 
     [Header("Post-Battle Chest / Reward Reels")]
-    [Tooltip("Panel that shows Small/Large chests and a Skip option.")] 
+    [Tooltip("Panel that shows Small/Large chests and a Skip option.")]
     [SerializeField] private PostBattleChestPanel postBattleChestPanel;
 
     [Header("Post-Battle Results")]
@@ -238,13 +222,12 @@ public class BattleManager : MonoBehaviour
     [Tooltip("Optional: tracks in-battle performance for bonus XP awards.")]
     [SerializeField] private BattlePerformanceTracker performanceTracker;
 
-    [Tooltip("Optional: shown after post-battle rewards so the player can reorganize before the next fight.")] 
+    [Tooltip("Optional: shown after post-battle rewards so the player can reorganize before the next fight.")]
     [SerializeField] private PostBattlePrepPanel postBattlePrepPanel;
 
     [Header("External Systems")]
     [SerializeField] private StretchController stretchController;
     [SerializeField] private ScrollingBackground scrollingBackground;
-
 
     [Header("Reels / Spins")]
     [SerializeField] private ReelSpinSystem reelSpinSystem;
@@ -252,16 +235,13 @@ public class BattleManager : MonoBehaviour
     [SerializeField] private bool allowClickToSelectMonsterTarget = true;
     [SerializeField] private bool ignoreClicksOverUI = true;
 
-
     [Header("Undo / Confirm UI")]
     [SerializeField] private Button undoButton;
     [SerializeField] private TMP_Text confirmText;
 
-
     [Header("Monster Info UI")]
     [Tooltip("Optional. If assigned, BattleManager will populate the Monster Info panel when preview-targeting enemies.")]
     [SerializeField] private MonsterInfoController monsterInfoController;
-
 
     [Header("Enemy Lunge (No Animation Clips)")]
     [Tooltip("How far the enemy sprite/visual lunges toward the target during an attack (world units).")]
@@ -274,7 +254,6 @@ public class BattleManager : MonoBehaviour
     [SerializeField] private float enemyLungeBackSeconds = 0.12f;
 
     [Header("Debug")]
-    // Turn this OFF once Block is verified end-to-end.
     [SerializeField] private bool logFlow = true;
     [Tooltip("Logs where the enemy HP bar should decrease after damage is applied.")]
     [SerializeField] private bool debugEnemyHpBarDrop = true;
@@ -296,19 +275,14 @@ public class BattleManager : MonoBehaviour
 
     private readonly List<Monster> _activeMonsters = new List<Monster>();
 
-    // All monsters spawned for the current encounter, including those "killed" (deactivated) so Undo can revive them.
     private readonly List<Monster> _encounterMonsters = new List<Monster>(8);
 
-    // Save states (turn start + each committed ability cast)
     private readonly List<BattleSaveState> _saveStates = new List<BattleSaveState>(16);
 
-    // Party target preview: used for Block-style "click twice to confirm"
     private int _previewPartyTargetIndex = -1;
-    // Confirmed party target for ally-targeted defensive abilities (e.g., Aegis)
     private int _selectedPartyTargetIndex = -1;
     private readonly List<EnemyIntent> _plannedIntents = new List<EnemyIntent>();
 
-    // Enemy party selection (per encounter)
     private EnemyPartyCompositionSO _activeEnemyParty;
     private List<ItemOptionSO> _activeLootOverride;
     private int _enemyPartyPoolIndex;
@@ -328,7 +302,6 @@ public class BattleManager : MonoBehaviour
     private Monster _previewEnemyTarget = null;
 
     private bool _resolving;
-    // Used to sync damage/removal to the exact impact frame of the caster's animation.
     private bool _impactFired;
     private bool _attackFinished;
     private Camera _mainCam;
@@ -340,7 +313,6 @@ public class BattleManager : MonoBehaviour
 
     private bool _postBattleRunning;
 
-    // IMPORTANT: finds inactive objects too (e.g., UI panels disabled by default)
     private static T FindInSceneIncludingInactive<T>() where T : UnityEngine.Object
     {
         var all = Resources.FindObjectsOfTypeAll<T>();
@@ -365,13 +337,8 @@ public class BattleManager : MonoBehaviour
 
     public int PartySize => partySize;
 
-    /// <summary>
-    /// Called by startup UI to set the party member prefabs chosen by the player.
-    /// If Start() already ran and we were waiting on this data, this will immediately begin the run.
-    /// </summary>
     public void SetPartyMemberPrefabs(GameObject[] chosen)
     {
-        // Always normalize to length 3 for safety.
         if (chosen == null) chosen = Array.Empty<GameObject>();
         var normalized = new GameObject[3];
         for (int i = 0; i < 3; i++)
@@ -379,7 +346,6 @@ public class BattleManager : MonoBehaviour
 
         partyMemberPrefabs = normalized;
 
-        // If Start() already ran and we were blocked waiting for selection, kick off now.
         if (_startHasRun && !_runStarted && ArePartyPrefabsReady())
             BeginRunAndBattle();
     }
@@ -394,7 +360,6 @@ public class BattleManager : MonoBehaviour
         Instance = this;
         _mainCam = Camera.main;
 
-        // Prefer inspector refs; if missing, auto-find (INCLUDING INACTIVE)
         if (resourcePool == null) resourcePool = FindInSceneIncludingInactive<ResourcePool>();
         if (stretchController == null) stretchController = FindInSceneIncludingInactive<StretchController>();
         if (postBattleFlow == null) postBattleFlow = FindInSceneIncludingInactive<PostBattleFlowController>();
@@ -405,7 +370,6 @@ public class BattleManager : MonoBehaviour
         if (postBattleReelUpgradeMinigamePanel == null) postBattleReelUpgradeMinigamePanel = FindInSceneIncludingInactive<PostBattleReelUpgradeMinigamePanel>();
         if (performanceTracker == null) performanceTracker = FindInSceneIncludingInactive<BattlePerformanceTracker>();
 
-        // If no tracker exists in-scene, create one on this BattleManager so results panel still works.
         if (performanceTracker == null)
         {
             performanceTracker = GetComponent<BattlePerformanceTracker>();
@@ -413,13 +377,10 @@ public class BattleManager : MonoBehaviour
                 performanceTracker = gameObject.AddComponent<BattlePerformanceTracker>();
         }
 
-
         if (reelSpinSystem == null) reelSpinSystem = FindInSceneIncludingInactive<ReelSpinSystem>();
 
-        // Undo / Confirm UI (optional)
         if (undoButton == null)
         {
-            // Prefer an object named "UndoButton" (can be inactive)
             var allButtons = Resources.FindObjectsOfTypeAll<Button>();
             for (int i = 0; i < allButtons.Length; i++)
             {
@@ -458,10 +419,6 @@ public class BattleManager : MonoBehaviour
         if (confirmText != null)
             confirmText.gameObject.SetActive(false); // disabled by default
 
-        // NOTE: Do NOT StartNewRun() here.
-        // Awake() executes even if this component is disabled, so startup bootstrappers
-        // cannot reliably prevent a run from starting in Awake().
-        // We begin the run in Start() once party prefabs have been provided.
     }
 
     private void Start()
@@ -481,7 +438,6 @@ public class BattleManager : MonoBehaviour
 
     private void BeginRunAndBattle()
     {
-        // Safety: avoid double-start if multiple callers race.
         if (_runStarted) return;
 
         _runStarted = true;
@@ -510,16 +466,13 @@ public class BattleManager : MonoBehaviour
         if (!Input.GetMouseButtonDown(0))
             return;
 
-        // Block clicks through UI if requested.
         if (ignoreClicksOverUI && EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
             return;
 
         Monster clicked = TryGetClickedMonster();
 
-        // Clicked empty space (or something non-monster)
         if (clicked == null)
         {
-            // If we were casting (enemy target), clicking elsewhere cancels the pending cast.
             if (_awaitingEnemyTarget && _previewEnemyTarget != null)
             {
                 if (logFlow) Debug.Log("[Battle][AbilityTarget] Clicked elsewhere -> cancel pending ability.", this);
@@ -529,38 +482,30 @@ public class BattleManager : MonoBehaviour
             }
             else if (_awaitingEnemyTarget)
             {
-                // If we were awaiting a target but had no preview yet, just clear any lingering preview.
                 ClearEnemyTargetPreview();
             }
 
-            // Do not auto-hide Monster Info on empty clicks.
             return;
         }
 
-        // Only respond to active, living encounter monsters
         if (!_activeMonsters.Contains(clicked) || clicked.IsDead)
             return;
 
-        // Always show monster info on click, even when no ability is pending.
         if (monsterInfoController != null)
             monsterInfoController.Show(clicked);
 
-        // If we are currently targeting an enemy for a pending ability, route click into targeting logic.
         if (_awaitingEnemyTarget && allowClickToSelectMonsterTarget)
         {
             SelectEnemyTarget(clicked);
         }
     }
 
-
-    // Called by AnimatorImpactEvents (Animation Events).
     public void NotifyAttackImpact()
     {
         if (logFlow) Debug.Log("[Battle][AnimEvent] AttackImpact received.");
         _impactFired = true;
     }
 
-    // Optional: call via animation event at the end of the attack animation if desired.
     public void NotifyAttackFinished()
     {
         if (logFlow) Debug.Log("[Battle][AnimEvent] AttackFinished received.");
@@ -609,7 +554,6 @@ public class BattleManager : MonoBehaviour
 
             _party.Add(m);
         }
-        // 🔗 Wire reels to party (strip + portrait) from spawned heroes
         if (reelSpinSystem != null)
         {
             var heroes = new List<HeroStats>();
@@ -621,7 +565,6 @@ public class BattleManager : MonoBehaviour
 
             reelSpinSystem.ConfigureFromParty(heroes);
         }
-
 
         _activePartyIndex = GetFirstAlivePartyIndex();
         OnActivePartyMemberChanged?.Invoke(_activePartyIndex);
@@ -666,8 +609,7 @@ public class BattleManager : MonoBehaviour
             HasActedThisRound = m.hasActedThisRound,
             Shield = shield,
             IsBlocking = shield > 0,
-            
-           
+
             IsHidden = hs != null && hs.IsHidden,
             IsStunned = hs != null && hs.IsStunned,
             IsTripleBladeEmpowered = hs != null && hs.IsTripleBladeEmpoweredThisTurn,
@@ -677,16 +619,36 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
         };
     }
 
-
     /// <summary>
-    /// Sum of raw incoming damage from currently planned enemy intents that target this party index.
-    /// Used for HP damage preview segments in PartyHUDSlot.
+    /// Enables/disables the instantiated party avatar GameObjects (the in-world ally sprites).
+    /// Used by post-battle panels that should not show the full party lineup.
     /// </summary>
+    public void SetPartyAvatarsActive(bool active)
+    {
+        if (_party == null) return;
+        for (int i = 0; i < _party.Count; i++)
+        {
+            var pm = _party[i];
+            if (pm != null && pm.avatarGO != null)
+                pm.avatarGO.SetActive(active);
+        }
+    }
+
     public int GetIncomingDamagePreviewForPartyIndex(int index)
     {
         if (!IsValidPartyIndex(index)) return 0;
 
-        int total = 0;
+        var hs = _party[index].stats;
+        if (hs == null || hs.CurrentHp <= 0) return 0;
+
+        // Conceal/Hidden: attacks miss, so don't show a preview.
+        if (hs.IsHidden) return 0;
+
+        // Predict HP loss by simulating how shields + defense will reduce incoming damage.
+        int predictedHpLoss = 0;
+        int remainingShield = Mathf.Max(0, hs.Shield);
+        int defense = Mathf.Max(0, hs.Defense);
+
         for (int i = 0; i < _plannedIntents.Count; i++)
         {
             var intent = _plannedIntents[i];
@@ -694,33 +656,38 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
             bool hitsThisHero = intent.isAoe || intent.targetPartyIndex == index;
             if (!hitsThisHero) continue;
 
-            // Prefer the planned damage value (so preview matches the actual intent that will execute).
-            // Fall back to enemy.GetDamage() for older intents.
-            int dmg = intent.damage > 0 ? intent.damage : intent.enemy.GetDamage();
-            total += Mathf.Max(0, dmg);
+            int raw = intent.damage > 0 ? intent.damage : intent.enemy.GetDamage();
+            raw = Mathf.Max(0, raw);
+            if (raw <= 0) continue;
+
+            // Shield absorbs first (shared across all hits in the preview).
+            int absorbed = Mathf.Min(remainingShield, raw);
+            remainingShield -= absorbed;
+            int afterShield = raw - absorbed;
+
+            // Defense mitigation happens per-hit (matches HeroStats.TakeDamage()).
+            int hpLoss = Mathf.Max(0, afterShield - defense);
+            predictedHpLoss += hpLoss;
         }
 
-        // Include end-of-player-turn status damage (e.g., Bleed) in the preview.
-        // Bleed ticks at end of player turn, starting after the turn it was applied.
-        var hs = _party[index].stats;
-        if (hs != null && hs.CurrentHp > 0)
+        // Add bleed tick preview (applies at start of the player's turn).
+        try
         {
-            try
+            if (hs.IsBleeding)
             {
-                if (hs.IsBleeding)
+                int stacks = hs.BleedStacks;
+                int appliedTurn = hs.BleedAppliedOnPlayerTurn;
+                if (stacks > 0 && appliedTurn != PlayerTurnNumber)
                 {
-                    int stacks = hs.BleedStacks;
-                    int appliedTurn = hs.BleedAppliedOnPlayerTurn;
-                    if (stacks > 0 && appliedTurn != PlayerTurnNumber)
-                        total += stacks;
+                    int raw = stacks;
+                    int hpLoss = Mathf.Max(0, raw - defense);
+                    predictedHpLoss += hpLoss;
                 }
             }
-            catch
-            {
-                // If HeroStats doesn't expose these members, silently ignore.
-            }
         }
-        return total;
+        catch { }
+
+        return Mathf.Max(0, predictedHpLoss);
     }
 
     public void SetActivePartyMember(int index)
@@ -733,10 +700,6 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
         NotifyPartyChanged();
     }
 
-    /// <summary>
-    /// When an ability is pending and requires a party target (e.g. Block), this handles clicks on a PartyHUD slot.
-    /// Returns true if the click was consumed by targeting logic (so PartyHUD should NOT open menus).
-    /// </summary>
     public bool TryHandlePartySlotClickForPendingAbility(int partyIndex)
     {
         if (logFlow)
@@ -750,10 +713,8 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
 
         bool selfOnly = _pendingAbility.targetType == AbilityTargetType.Self;
 
-        // Self-targeted shield (Block): only the caster can be selected.
         if (selfOnly && partyIndex != _pendingActorIndex)
         {
-            // If we've already selected a target (preview), clicking anything else cancels.
             if (_previewPartyTargetIndex == _pendingActorIndex)
             {
                 if (logFlow) Debug.Log("[Battle][AbilityTarget] Clicked different party slot -> cancel pending ability.", this);
@@ -763,16 +724,11 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
                 CancelPendingAbility();
                 NotifyPartyChanged();
             }
-            // Consume the click so PartyHUD doesn't open other menus while casting.
             return true;
         }
 
-        // Two-step confirm:
-        // 1) First click on target -> show shield preview + confirm text
-        // 2) Second click on SAME target -> commit ability
         if (_previewPartyTargetIndex != partyIndex)
         {
-            // If we were already previewing a different party target, clicking a different one cancels (matches enemy targeting behavior).
             if (_previewPartyTargetIndex != -1 && _previewPartyTargetIndex != partyIndex)
             {
                 if (logFlow) Debug.Log("[Battle][AbilityTarget] Clicked different party target -> cancel pending ability.", this);
@@ -816,7 +772,6 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
 
         ResourceCost cost = GetEffectiveCost(actor.stats, ability);
 
-        // Per-turn attack limit gate (e.g., Triple Blade / All-In effects)
         if (ability != null && ability.baseDamage > 0 && actor.stats != null && !actor.stats.CanCommitDamageAttackThisTurn())
         {
             if (logFlow) Debug.Log($"[Battle][Ability] Blocked: {actor.name} has reached their attack limit for this turn.", this);
@@ -837,7 +792,6 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
         if (AbilityCastState.Instance != null)
             AbilityCastState.Instance.BeginCast(hero, ability);
 
-        // Reset animation-sync flags for this cast.
         _impactFired = false;
         _attackFinished = false;
 
@@ -852,7 +806,6 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
         }
         else if ((ability.targetType == AbilityTargetType.Self || ability.targetType == AbilityTargetType.Ally) && ability.shieldAmount > 0)
         {
-            // Shield-style cast (Block/Aegis): preview on a party member, then require a second click to commit.
             _awaitingEnemyTarget = false;
             _awaitingPartyTarget = true;
             ClearEnemyTargetPreview();
@@ -885,9 +838,6 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
         if (target == null) return;
         if (target.IsDead) return;
 
-        // Two-step targeting:
-        // 1) First click -> set PREVIEW target (shows damage preview)
-        // 2) Second click on the SAME target -> CONFIRM and resolve ability
         if (_previewEnemyTarget != target)
         {
             _previewEnemyTarget = target;
@@ -899,11 +849,9 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
             return;
         }
 
-        // Confirm on second click
         _selectedEnemyTarget = target;
         _awaitingEnemyTarget = false;
 
-        // Clear any yellow damage preview segment now that the ability is being cast.
         ClearEnemyTargetPreview();
 
         HideConfirmText();
@@ -919,8 +867,6 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
     {
         if (_resolving) return;
 
-        // Per-battle turn counter (used by status timing like Bleed).
-        // Turn 1 begins when we enter the first PlayerPhase.
         PlayerTurnNumber = 0;
 
         if (_startBattleRoutine != null)
@@ -929,49 +875,30 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
         _startBattleRoutine = StartCoroutine(StartBattleRoutine());
     }
 
-    /// <summary>
-    /// Queue a specific enemy party to be used for the NEXT battle only.
-    /// If null is passed, clears the queued override.
-    /// </summary>
     public void QueueNextEnemyParty(EnemyPartyCompositionSO party)
     {
         _nextEnemyPartyOverride = party;
     }
 
-    /// <summary>
-    /// Ends the player's turn immediately and begins the enemy phase.
-    /// Intended to be called by the End Turn button.
-    /// </summary>
-    /// 
     public void EndTurn()
     {
-        // Only allow during player phase and when not already mid-resolution/enemy turn.
         if (!IsPlayerPhase) return;
         if (_resolving) return;
         if (_enemyTurnRoutine != null) return;
 
-        // Clear resources at end of player turn
         if (resourcePool != null)
             resourcePool.ClearAll();
 
-        // Bleeding ticks at the END of the player's turn (starting after the turn it was applied).
         TickBleedingAtEndOfPlayerTurn();
 
-        // If bleed killed the party, stop here (don't start the enemy phase).
         if (_state == BattleState.BattleEnd)
             return;
-        
-        // If there are no enemies, nothing to do.
+
         if (_activeMonsters == null || _activeMonsters.Count == 0) return;
 
         _enemyTurnRoutine = StartCoroutine(EnemyPhaseRoutine());
     }
 
-    /// <summary>
-    /// Bleed ticks at the END of the player's turn, starting AFTER the turn it was applied.
-    /// This calls into HeroStats if it provides a tick method; otherwise falls back to a simple
-    /// damage+decrement behavior.
-    /// </summary>
     private void TickBleedingAtEndOfPlayerTurn()
     {
         if (_party == null) return;
@@ -984,12 +911,10 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
             var hs = pm != null ? pm.stats : null;
             if (hs == null || pm.IsDead) continue;
 
-            // Determine stacks
             int stacks = 0;
             try { stacks = hs.BleedStacks; } catch { stacks = 0; }
             if (stacks <= 0) continue;
 
-            // Skip the same player turn that bleed was applied.
             int appliedTurn = -999;
             try
             {
@@ -1008,7 +933,6 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
             if (appliedTurn == PlayerTurnNumber)
                 continue;
 
-            // Prefer an explicit end-of-turn tick method if present.
             int dealt = 0;
             try
             {
@@ -1019,7 +943,6 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
                 }
                 else
                 {
-                    // Fallback to existing start-tick method (we're just changing *when* we call it).
                     var mi2 = hs.GetType().GetMethod("TickBleedingAtTurnStart", flags, null, Type.EmptyTypes, null);
                     if (mi2 != null && mi2.ReturnType == typeof(int))
                         dealt = (int)mi2.Invoke(hs, null);
@@ -1033,7 +956,6 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
                 SpawnDamageNumber(pm.avatarGO.transform.position, dealt);
         }
 
-        // If bleed killed the party, end battle now.
         if (IsPartyDefeated())
         {
             Debug.Log("[BattleManager] Party defeated (bleed tick).", this);
@@ -1043,30 +965,20 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
         NotifyPartyChanged();
     }
 
-
     private IEnumerator EnemyPhaseRoutine()
     {
-        // Enter enemy phase.
         SetState(BattleState.EnemyPhase);
 
-        // Make sure no pending target selection / casts linger.
         CancelPendingAbility();
 
-        // NOTE: Bleeding now ticks only at the start of the Player Phase (for both heroes and monsters).
-        // Do NOT tick monster bleeding here.
-
-        // If intents were never planned (or were cleared), plan them now.
         if (_plannedIntents.Count == 0) PlanEnemyIntents();
 
-        // Copy, so if visuals subscribe and mutate we still have a stable execution list.
         var intentsToExecute = new List<EnemyIntent>(_plannedIntents);
 
-        // Clear visuals immediately after we commit to executing them.
         _plannedIntents.Clear();
         OnEnemyIntentsPlanned?.Invoke(new List<EnemyIntent>(_plannedIntents));
         NotifyPartyChanged();
 
-        // Execute each intent.
         for (int i = 0; i < intentsToExecute.Count; i++)
         {
             var intent = intentsToExecute[i];
@@ -1074,27 +986,21 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
 
             int targetIdx = intent.targetPartyIndex;
 
-            // If target is invalid/dead, retarget to a living hero.
             if (!IsValidPartyIndex(targetIdx) || _party[targetIdx].IsDead)
                 targetIdx = GetRandomLivingTargetIndex();
 
             if (!IsValidPartyIndex(targetIdx)) break;
-
 
             HeroStats targetStats = _party[targetIdx].stats;
             GameObject targetGO = _party[targetIdx].avatarGO;
 
             Transform targetTf = targetGO != null ? targetGO.transform : (targetStats != null ? targetStats.transform : null);
 
-            // Lunge/translate attack (no animation clips required). Damage is applied at the lunge peak.
             yield return EnemyLungeAttack(intent.enemy, targetTf, () =>
             {
                 int raw = intent.damage;
                 if (raw <= 0 && intent.enemy != null) raw = intent.enemy.GetDamage();
 
-                // Conceal / Hidden logic:
-                // - Single-target attacks miss hidden heroes entirely.
-                // - AoE attacks hit all heroes (including hidden) and break conceal.
                 if (intent.type == IntentType.AoEAttack)
                 {
                     for (int pi = 0; pi < PartyCount; pi++)
@@ -1104,30 +1010,35 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
                         if (hs == null || pm.IsDead) continue;
 
                         if (logFlow) Debug.Log($"[Battle][EnemyAtk][AoE] Applying incoming damage. attacker={(intent.enemy != null ? intent.enemy.name : "<null>")} targetIdx={pi} raw={raw} targetShieldBefore={hs.Shield}", this);
-                        int dealt = hs.ApplyIncomingDamage(raw);
+
+                        int hpBefore = hs.CurrentHp;
+                        int shieldBefore = hs.Shield;
+
+                        int hpDealt = hs.ApplyIncomingDamage(raw);
+
+                        // Show total damage applied (shield removed + HP lost), not just HP lost.
+                        int shieldLost = Mathf.Max(0, shieldBefore - hs.Shield);
+                        int hpLost = Mathf.Max(0, hpBefore - hs.CurrentHp);
+                        int totalDamageShown = shieldLost + hpLost;
 
                         if (performanceTracker != null)
-                            performanceTracker.RecordDamageTaken(hs, dealt);
+                            performanceTracker.RecordDamageTaken(hs, hpDealt);
 
-
-                        // Optional: stun targets hit by this enemy's default attack.
                         if (intent.stunsTarget)
                             hs.StunForNextPlayerPhases(intent.stunPlayerPhases);
 
                         if (intent.appliesBleed && intent.bleedStacks > 0)
                             ApplyBleedStacksToHero(hs, intent.bleedStacks);
-                        // AoE breaks Conceal/Hidden.
                         if (hs.IsHidden) hs.SetHidden(false);
 
                         if (pm.avatarGO != null)
-                            SpawnDamageNumber(pm.avatarGO.transform.position, dealt);
+                            SpawnDamageNumber(pm.avatarGO.transform.position, totalDamageShown);
                     }
 
                     ApplyPartyHiddenVisuals();
                     return;
                 }
 
-                // Single-target attack
                 if (targetStats == null) return;
 
                 if (targetStats.IsHidden)
@@ -1136,14 +1047,20 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
                     return;
                 }
 
-                // Apply damage (HeroStats handles shield+HP).
                 if (logFlow) Debug.Log($"[Battle][EnemyAtk] Applying incoming damage. attacker={(intent.enemy != null ? intent.enemy.name : "<null>")} targetIdx={targetIdx} raw={raw} targetShieldBefore={targetStats.Shield}", this);
+
+                int hpBeforeSingle = targetStats.CurrentHp;
+                int shieldBeforeSingle = targetStats.Shield;
+
                 int dealtSingle = targetStats.ApplyIncomingDamage(raw);
+
+                int shieldLostSingle = Mathf.Max(0, shieldBeforeSingle - targetStats.Shield);
+                int hpLostSingle = Mathf.Max(0, hpBeforeSingle - targetStats.CurrentHp);
+                int totalDamageShownSingle = shieldLostSingle + hpLostSingle;
 
                 if (performanceTracker != null)
                     performanceTracker.RecordDamageTaken(targetStats, dealtSingle);
 
-                // Optional: stun the target hit by this enemy's default attack.
                 if (intent.stunsTarget)
                     targetStats.StunForNextPlayerPhases(intent.stunPlayerPhases);
 
@@ -1152,11 +1069,10 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
                 if (logFlow) Debug.Log($"[Battle][EnemyAtk] Damage result. dealtToHp={dealtSingle} targetShieldAfter={targetStats.Shield}", this);
 
                 if (targetGO != null)
-                    SpawnDamageNumber(targetGO.transform.position, dealtSingle);
+                    SpawnDamageNumber(targetGO.transform.position, totalDamageShownSingle);
             });
 NotifyPartyChanged();
 
-            // If all heroes are dead, end battle for now (you can wire a defeat flow later). (you can wire a defeat flow later).
             if (IsPartyDefeated())
             {
                 Debug.Log("[BattleManager] Party defeated (enemy phase).", this);
@@ -1166,18 +1082,15 @@ NotifyPartyChanged();
             }
         }
 
-        // Back to player phase: reset round flags and re-plan intents for the next enemy phase preview.
         ResetPartyRoundFlags();
         PlanEnemyIntents();
 
         SetState(BattleState.PlayerPhase);
 
-        // Next player turn begins now.
         PlayerTurnNumber++;
 
         BeginPlayerTurnSaveState();
 
-        // New player turn: reset reel spins.
         if (reelSpinSystem != null)
             reelSpinSystem.BeginTurn();
 
@@ -1203,11 +1116,9 @@ NotifyPartyChanged();
     {
         if (enemy == null) return null;
 
-        // Prefer a SpriteRenderer child (most 2D enemies).
         var sr = enemy.GetComponentInChildren<SpriteRenderer>(true);
         if (sr != null) return sr.transform;
 
-        // Fallback: any child transform (so we don't move a shared root if that's undesirable).
         if (enemy.transform.childCount > 0) return enemy.transform.GetChild(0);
 
         return enemy.transform;
@@ -1236,17 +1147,12 @@ NotifyPartyChanged();
 
     private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, Action applyDamage)
     {
-        // Translation-based attack (no animation clips required):
-        // 1) Lunge toward target
-        // 2) Apply damage at peak
-        // 3) Return to start
 
         if (enemy == null)
             yield break;
 
         Transform visual = GetEnemyVisualTransform(enemy);
 
-        // If we can't find a visual transform, just apply damage immediately.
         if (visual == null)
         {
             applyDamage?.Invoke();
@@ -1255,7 +1161,6 @@ NotifyPartyChanged();
 
         Vector3 startPos = visual.position;
 
-        // If no target, just do a small "nudge" forward (or none), still apply damage.
         Vector3 dir = Vector3.right;
         if (target != null)
         {
@@ -1266,7 +1171,6 @@ NotifyPartyChanged();
 
         Vector3 peakPos = startPos + dir * enemyLungeDistance;
 
-        // Forward
         float t = 0f;
         float forward = Mathf.Max(0.0001f, enemyLungeForwardSeconds);
         while (t < forward)
@@ -1277,16 +1181,13 @@ NotifyPartyChanged();
             yield return null;
         }
 
-        // Peak (impact)
         visual.position = peakPos;
         applyDamage?.Invoke();
 
-        // Hold
         float hold = Mathf.Max(0f, enemyLungeHoldSeconds);
         if (hold > 0f)
             yield return new WaitForSeconds(hold);
 
-        // Back
         t = 0f;
         float back = Mathf.Max(0.0001f, enemyLungeBackSeconds);
         while (t < back)
@@ -1300,16 +1201,25 @@ NotifyPartyChanged();
         visual.position = startPos;
     }
 
-
     private IEnumerator StartBattleRoutine()
     {
         CleanupExistingEncounter();
         SetState(BattleState.BattleStart);
 
         ResetPartyRoundFlags();
+
+        // Ensure any per-battle-only statuses (e.g., Conceal/Hidden) are cleared before a new encounter begins.
+        if (_party != null)
+        {
+            for (int i = 0; i < _party.Count; i++)
+            {
+                var hs = _party[i] != null ? _party[i].stats : null;
+                if (hs != null) hs.ClearStartOfBattleStatuses();
+            }
+        }
+        ApplyPartyHiddenVisuals();
         SpawnEncounterMonsters();
 
-        // Performance tracking for post-battle XP bonuses.
         if (performanceTracker != null)
         {
             var heroes = new List<HeroStats>(_party != null ? _party.Count : 0);
@@ -1369,12 +1279,10 @@ NotifyPartyChanged();
 
         SetState(BattleState.PlayerPhase);
 
-        // Turn 1 begins now.
         PlayerTurnNumber++;
 
         BeginPlayerTurnSaveState();
 
-        // New player turn: reset reel spins.
         if (reelSpinSystem != null)
             reelSpinSystem.BeginTurn();
 
@@ -1396,8 +1304,6 @@ NotifyPartyChanged();
             yield break;
         }
 
-        // Capture references up-front so end-of-battle cleanup (or other flows)
-        // can't null out _pendingAbility mid-coroutine.
         AbilityDefinitionSO ability = _pendingAbility;
         if (logFlow)
             Debug.Log($"[Battle][Resolve] Confirmed/casting ability: name={ability.name} abilityName={ability.abilityName} targetType={ability.targetType} shieldAmount={ability.shieldAmount} baseDamage={ability.baseDamage}", this);
@@ -1411,14 +1317,8 @@ NotifyPartyChanged();
             yield break;
         }
 
-        // Track ability usage for post-battle bonus XP rules.
         if (performanceTracker != null && ability != null)
             performanceTracker.RecordAbilityUse(actorStats, ability);
-
-        // Track ability usage for bonus XP rules.
-        if (performanceTracker != null)
-            performanceTracker.RecordAbilityUse(actorStats, ability);
-
         Monster enemyTarget = _selectedEnemyTarget;
         if (ability.targetType == AbilityTargetType.Enemy)
         {
@@ -1430,7 +1330,6 @@ NotifyPartyChanged();
             }
         }
 
-        // Ally-targeted shield abilities (e.g., Aegis) require a valid party target.
         if (ability.targetType == AbilityTargetType.Ally && ability.shieldAmount > 0)
         {
             if (!IsValidPartyIndex(_selectedPartyTargetIndex) || _party[_selectedPartyTargetIndex] == null || _party[_selectedPartyTargetIndex].IsDead)
@@ -1441,12 +1340,9 @@ NotifyPartyChanged();
             }
         }
 
-        // Snapshot BEFORE we spend resources / apply effects so Undo restores the pre-cast state.
         PushSaveStateSnapshot();
 
         ResourceCost cost = GetEffectiveCost(actorStats, ability);
-        //int actorPoolId = actorStats.ResourcePool.GetInstanceID();
-        int id = RuntimeHelpers.GetHashCode(resourcePool);
         if (resourcePool == null || !resourcePool.TrySpend(cost))
         {
             if (logFlow) Debug.Log($"[Battle][Resolve] Cancel: insufficient resources or missing resourcePool. cost={cost}", this);
@@ -1455,33 +1351,25 @@ NotifyPartyChanged();
         }
 
         if (logFlow) Debug.Log($"[Battle][Resolve] Resources spent. cost={cost}. Proceeding to apply ability effects.", this);
-        // From this point, the cast is committed (resources spent). Block other actions.
         _resolving = true;
-
-        // Trigger caster attack animation for the pending ability.
-        // Some abilities may use impact-sync (Animation Event) and others may not.
 
         Animator anim = actor.animator;
         if (anim == null && actor.avatarGO != null)
             anim = actor.avatarGO.GetComponentInChildren<Animator>(true);
 
-        // Reset flags for this cast (only matters if we choose to wait for impact).
         _impactFired = false;
         _attackFinished = false;
-        // Decide behavior by ability name
         bool useImpactSync = false;
         string stateToPlay = null;
 
         if (anim != null)
         {
-            // Per-character profile (Option B)
             var profile = anim.GetComponentInParent<CasterAnimationProfile>();
 
             switch (ability.name)
             {
                 case "Slash":
                     useImpactSync = true;
-                    // Allow per-character override/mapping if profile exists
                     stateToPlay = profile != null ? profile.GetAttackStateForAbility("Slash") : null;
                     if (string.IsNullOrWhiteSpace(stateToPlay))
                         stateToPlay = "fighter_basic_attack"; // fallback
@@ -1502,31 +1390,26 @@ NotifyPartyChanged();
                     break;
 
                 case "Conceal":
-                    // Conceal has no damage and no animation for now.
                     useImpactSync = false;
                     stateToPlay = null;
                     if (logFlow) Debug.Log("[Battle][Resolve] Conceal: no animation and no impact sync.", this);
                     break;
 
                 case "Block":
-                    // Block has no damage and no animation for now.
                     useImpactSync = false;
                     stateToPlay = null;
                     if (logFlow) Debug.Log("[Battle][Resolve] Block: no animation and no impact sync.", this);
                     break;
 
                 case "Aegis":
-                    // Aegis behaves like Block: no damage and no animation for now.
                     useImpactSync = false;
                     stateToPlay = null;
                     if (logFlow) Debug.Log("[Battle][Resolve] Aegis: no animation and no impact sync.", this);
                     break;
 
                 default:
-                    // Default: still play *something* (or skip animation if you prefer)
                     useImpactSync = false; // default to immediate apply unless you want all abilities synced
                     stateToPlay = profile != null ? profile.GetAttackStateForAbility(ability.name) : null;
-                    // If profile doesn't have an entry, you can fall back to a generic cast/attack
                     if (string.IsNullOrWhiteSpace(stateToPlay))
                         stateToPlay = "fighter_basic_attack"; // safe default until you add more states
                     break;
@@ -1547,16 +1430,12 @@ NotifyPartyChanged();
             if (logFlow) Debug.Log("[Battle][Resolve] No animator found on actor; skipping animation.", this);
         }
 
-
         if (ability.targetType == AbilityTargetType.Enemy && enemyTarget != null)
         {
-            // If this ability uses impact-sync and the caster has an animator playing the attack,
-            // wait for the impact frame event before applying damage.
             if (useImpactSync && anim != null)
             {
                 if (logFlow) Debug.Log("[Battle][Resolve] Waiting for AttackImpact animation event...", this);
 
-                // Give the animator one frame to enter the state.
                 yield return null;
 
                 float elapsed = 0f;
@@ -1573,13 +1452,10 @@ NotifyPartyChanged();
             int totalBaseDamage = Mathf.Max(0, actorStats.Attack) + Mathf.Max(0, ability.baseDamage);
 
             int dealt = enemyTarget.TakeDamageFromAbility(
-                // Ability damage = hero base Attack + authored ability bonus.
                 abilityBaseDamage: totalBaseDamage,
-                // Attack already includes the hero's multipliers (including turn buffs), so don't multiply again here.
                 classAttackModifier: 1f,
                 element: ability.element,
                 abilityTags: ability.tags);
-
 
             if (debugEnemyHpBarDrop && enemyTarget != null)
             {
@@ -1594,7 +1470,6 @@ NotifyPartyChanged();
                 {
                     Debug.Log($"[Battle][HpBarDrop] Found hpBar={hpBar.name} barInstance={hpBar.GetInstanceID()} barBoundMonster={(hpBar != null ? (hpBar.GetComponentInParent<Monster>() != null ? hpBar.GetComponentInParent<Monster>().GetInstanceID().ToString() : "none") : "none")}", this);
 
-                    // Dump the bar's current visual state so we can see whether it's a fillAmount/scale/width style bar.
                     hpBar.ForceDebugDumpVisual("BattleManager BEFORE ClearPreview/Refresh");
                     hpBar.ClearPreview();
 
@@ -1610,30 +1485,22 @@ NotifyPartyChanged();
             SpawnDamageNumber(enemyTarget.transform.position, dealt);
             actorStats.ApplyOnHitEffectsTo(enemyTarget);
 
-
-            // Mark that this hero has committed a damaging attack this turn (for per-turn limits).
             if (totalBaseDamage > 0)
                 actorStats.RegisterDamageAttackCommitted();
 
             if (enemyTarget.IsDead)
             {
                 int xpAward = (enemyTarget != null) ? enemyTarget.XpReward : 5;
-                // IMPORTANT: Defer XP application until the post-battle results panel
-                // so we can animate XP bars from the pre-battle state.
                 if (performanceTracker != null)
                     performanceTracker.RecordBaseXpGained(actorStats, xpAward);
                 else
                     actorStats.GainXP(xpAward);
                 RemoveMonster(enemyTarget);
-                // Enemy intents are locked once planned at the start of the turn.
-                // Do not re-plan here, or surviving enemies' targets will change mid-turn.
             }
         }
 
-
         if (ability.shieldAmount > 0 && (ability.targetType == AbilityTargetType.Self || ability.targetType == AbilityTargetType.Ally))
         {
-            // Defensive shield abilities: Block (Self) and Aegis (Ally)
             HeroStats targetStats = actorStats;
             string targetName = actorStats.name;
 
@@ -1654,11 +1521,6 @@ NotifyPartyChanged();
             }
         }
 
-        
-        // ===== Conceal (Ninja) =====
-        // Conceal makes the caster untargetable by single-target enemy attacks until:
-        // - they are hit by an AoE attack, OR
-        // - they use an ability (except Backstab that kills the target).
         bool wasHiddenBeforeCast = actorStats.IsHidden;
 
         if (ability.name == "Conceal")
@@ -1669,7 +1531,6 @@ NotifyPartyChanged();
         {
             bool keepHidden = false;
 
-            // Special case: Backstab does NOT break Conceal if it kills the enemy.
             if (ability.name == "Backstab" && ability.targetType == AbilityTargetType.Enemy && enemyTarget != null && enemyTarget.IsDead)
                 keepHidden = true;
 
@@ -1689,7 +1550,6 @@ NotifyPartyChanged();
         CancelPendingAbility();
         NotifyPartyChanged();
 
-        // Ability successfully cast -> Undo becomes available for this turn.
         if (_saveStates != null && _saveStates.Count > 1)
             SetUndoButtonEnabled(true);
 
@@ -1701,11 +1561,8 @@ NotifyPartyChanged();
         return ability.cost;
     }
 
-    // ================= TARGET PREVIEW =================
-
     private void SetEnemyTargetPreview(Monster target)
     {
-        // Clear any previous preview
         if (_previewEnemyTarget != null && _previewEnemyTarget != target)
         {
             var oldBar = _previewEnemyTarget.GetComponentInChildren<MonsterHpBar>(true);
@@ -1725,9 +1582,7 @@ NotifyPartyChanged();
         int totalBaseDamage = Mathf.Max(0, actor.stats.Attack) + Mathf.Max(0, _pendingAbility.baseDamage);
 
         int predictedDamage = target.CalculateDamageFromAbility(
-            // Ability damage = hero base Attack + authored ability bonus.
             abilityBaseDamage: totalBaseDamage,
-            // Attack already includes the hero's multipliers (including turn buffs), so don't multiply again here.
             classAttackModifier: 1f,
             element: _pendingAbility.element,
             abilityTags: _pendingAbility.tags);
@@ -1748,8 +1603,6 @@ NotifyPartyChanged();
         }
         _previewEnemyTarget = null;
     }
-
-
 
     private void CancelPendingAbility()
     {
@@ -1786,7 +1639,6 @@ NotifyPartyChanged();
             int targetIdx = GetRandomLivingTargetIndex();
             if (targetIdx < 0) continue;
 
-            // Choose an attack from the monster's authored attack list.
             ChooseMonsterAttackForIntent(m,
                 out int attackIndex,
                 out int damage,
@@ -1838,7 +1690,6 @@ NotifyPartyChanged();
 
         if (m == null) return;
 
-        // Reflection keeps this resilient to small data model changes.
         const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
         object attacksObj = null;
@@ -1848,13 +1699,11 @@ NotifyPartyChanged();
         if (fiAttacks != null)
             attacksObj = fiAttacks.GetValue(m);
 
-        // Support arrays (MonsterAttack[]) primarily.
         System.Array attacksArray = attacksObj as System.Array;
         int count = attacksArray != null ? attacksArray.Length : 0;
 
         if (count <= 0)
         {
-            // Fallback to default attack.
             try { damage = m.GetDamage(); } catch { damage = 0; }
 
             try
@@ -1919,7 +1768,6 @@ NotifyPartyChanged();
         const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         var t = hs.GetType();
 
-        // Prefer an explicit method if your HeroStats provides one.
         var miAdd = t.GetMethod("AddBleedStacks", flags, null, new[] { typeof(int) }, null);
         if (miAdd != null)
         {
@@ -1933,7 +1781,6 @@ NotifyPartyChanged();
             int current = 0;
             try
             {
-                // Property/field common names
                 var pi = t.GetProperty("BleedStacks", flags);
                 if (pi != null && pi.PropertyType == typeof(int)) current = (int)pi.GetValue(hs, null);
                 else
@@ -1948,7 +1795,6 @@ NotifyPartyChanged();
             return;
         }
 
-        // Last resort: write directly to a field/property.
         try
         {
             var pi = t.GetProperty("BleedStacks", flags);
@@ -1975,8 +1821,6 @@ NotifyPartyChanged();
 
     private void ResetPartyRoundFlags()
     {
-        // Monsters tick bleed at the start of the Player Phase so their visuals reflect the post-tick state
-        // when the player regains control.
         if (_activeMonsters != null && _activeMonsters.Count > 0)
         {
             for (int mi = 0; mi < _activeMonsters.Count; mi++)
@@ -1989,7 +1833,6 @@ NotifyPartyChanged();
                 {
                     SpawnDamageNumber(m.transform.position, bleedDamage);
 
-                    // If the bleed tick killed the monster, play death effects now.
                     if (m.IsDead)
                         m.PlayDeathEffects();
                 }
@@ -2001,18 +1844,15 @@ NotifyPartyChanged();
             HeroStats hs = _party[i].stats;
             if (hs != null)
             {
-                // Stun/phase statuses consume at the start of the player phase.
                 hs.StartPlayerPhaseStatuses();
             }
 
-            // If stunned at the start of player phase, treat as already acted so the UI/input blocks actions.
             _party[i].hasActedThisRound = (hs != null && hs.IsStunned);
         }
 
         CancelPendingAbility();
         NotifyPartyChanged();
 
-        // Ability successfully cast -> Undo becomes available for this turn.
         if (_saveStates != null && _saveStates.Count > 1)
             SetUndoButtonEnabled(true);
 
@@ -2042,7 +1882,6 @@ NotifyPartyChanged();
 
         int maxSlots = (monsterSpawnPoints != null && monsterSpawnPoints.Length > 0) ? monsterSpawnPoints.Length : 1;
 
-        // --- Choose active enemy party (optional) ---
         EnemyPartyCompositionSO chosen = null;
 
         if (_nextEnemyPartyOverride != null)
@@ -2072,13 +1911,11 @@ NotifyPartyChanged();
 
         _activeEnemyParty = chosen;
 
-        // Cache loot override for this encounter (optional)
         if (_activeEnemyParty != null && _activeEnemyParty.lootTable != null && _activeEnemyParty.lootTable.Count > 0)
             _activeLootOverride = _activeEnemyParty.lootTable;
         else
             _activeLootOverride = null;
 
-        // If we have a chosen party with enemies, spawn exactly those.
         if (_activeEnemyParty != null && _activeEnemyParty.enemies != null && _activeEnemyParty.enemies.Count > 0)
         {
             int spawnCount = Mathf.Clamp(_activeEnemyParty.enemies.Count, 1, maxSlots);
@@ -2106,7 +1943,6 @@ NotifyPartyChanged();
             return;
         }
 
-        // --- Fallback: your original random spawn behavior ---
         if (monsterPrefabs == null || monsterPrefabs.Length == 0)
             return;
 
@@ -2131,13 +1967,6 @@ NotifyPartyChanged();
         }
     }
 
-
-
-    /// <summary>
-    /// Enemy intents should not change mid-turn once created.
-    /// If an enemy dies, we remove only that enemy's intent(s) (and any null/dead references)
-    /// without re-planning or changing the other intents.
-    /// </summary>
     private void RemoveEnemyIntentsForMonster(Monster dead)
     {
         if (dead == null) return;
@@ -2164,32 +1993,24 @@ NotifyPartyChanged();
     private void RemoveMonster(Monster m)
     {
         if (m == null) return;
-        
-        // If this monster is currently being inspected, hide the Monster Info panel.
+
         if (monsterInfoController != null)
             monsterInfoController.HideIfShowing(m);
 
-
-        // Intents are locked for the turn. If this enemy had a planned intent, remove only its intent(s)
-        // without changing the remaining enemies' intents.
         RemoveEnemyIntentsForMonster(m);
 
         _activeMonsters.Remove(m);
 
-        // Do NOT destroy monsters: we keep them for Undo revives.
         if (m.gameObject != null)
             m.gameObject.SetActive(false);
 
-        // If all enemies are dead, trigger the post-battle reward loop.
         if (_activeMonsters.Count == 0)
         {
-            //  Clear resources between battles (immediate)
             if (resourcePool != null)
                 resourcePool.ClearAll();
             StartCoroutine(HandleEncounterVictoryRoutine());
         }
     }
-
 
     private IEnumerator HandleEncounterVictoryRoutine()
     {
@@ -2205,17 +2026,25 @@ NotifyPartyChanged();
 
         SetState(BattleState.BattleEnd);
 
-        // Ensure no pending actions linger while the reward panel is open.
+        // Clear per-battle-only statuses so they don't persist into post-battle panels or the next encounter.
+        if (_party != null)
+        {
+            for (int i = 0; i < _party.Count; i++)
+            {
+                var hs = _party[i] != null ? _party[i].stats : null;
+                if (hs != null) hs.ClearStartOfBattleStatuses();
+            }
+        }
+        ApplyPartyHiddenVisuals();
+
         CancelPendingAbility();
 
         if (stretchController != null)
             stretchController.SetEncounterActive(false);
 
-        // Unpause world visuals between fights so scroll segments (and the walk loop) can show.
         if (scrollingBackground != null)
             scrollingBackground.SetPaused(false);
 
-        // Award victory gold (from the active enemy party composition, if any).
         HeroStats goldOwner = null;
         if (_party != null && _party.Count > 0)
             goldOwner = _party[0]?.stats;
@@ -2223,11 +2052,8 @@ NotifyPartyChanged();
         if (goldOwner != null && _activeEnemyParty != null && _activeEnemyParty.goldReward > 0)
             goldOwner.AddGold(_activeEnemyParty.goldReward);
 
-        // Show a quick post-battle summary (gold gained + XP gained and bonus XP awards).
         if (postBattleResultsPanel != null && performanceTracker != null)
         {
-            // The Results panel GameObject is typically disabled at scene start.
-            // Calling methods on a disabled panel won't show anything, so ensure it's enabled.
             if (!postBattleResultsPanel.gameObject.activeSelf)
                 postBattleResultsPanel.gameObject.SetActive(true);
 
@@ -2243,8 +2069,6 @@ NotifyPartyChanged();
             bool resultsDone = false;
             postBattleResultsPanel.Show(goldGained, summaries, () =>
             {
-                // Apply all XP (base + bonus) once the player continues.
-                // Ensure level-ups are allowed so reel-upgrade minigames can be queued immediately.
                 if (heroes != null)
                 {
                     for (int hi = 0; hi < heroes.Count; hi++)
@@ -2260,10 +2084,8 @@ NotifyPartyChanged();
             postBattleResultsPanel.Hide();
         }
 
-        // Reel Upgrade Minigame (if any heroes leveled up)
         if (postBattleReelUpgradeMinigamePanel != null && _party != null)
         {
-            // Ensure panel object can display (it is often disabled at scene start).
             if (!postBattleReelUpgradeMinigamePanel.gameObject.activeSelf)
                 postBattleReelUpgradeMinigamePanel.gameObject.SetActive(true);
 
@@ -2282,19 +2104,13 @@ NotifyPartyChanged();
             }
         }
 
-        // Use encounter-specific loot if present; else fall back to global pool.
         List<ItemOptionSO> pool =
             (_activeLootOverride != null && _activeLootOverride.Count > 0)
                 ? _activeLootOverride
                 : (postBattleFlow != null ? postBattleFlow.GetItemOptionPool() : null);
 
-        // ✅ NEW POST-BATTLE FLOW:
-        // - Swap reels into Reward Mode (pay gold to spin; 3-in-a-row key payouts)
-        // - Offer Small/Large chests (spend keys to open)
-        // - Then show the Prep panel (Inventory / Continue)
         if (enablePostBattleRewards && postBattleChestPanel != null && pool != null && pool.Count > 0)
         {
-            // 1) Reward reels (optional per enemy party)
             if (reelSpinSystem != null && _activeEnemyParty != null && _activeEnemyParty.rewardReelConfig != null)
                 reelSpinSystem.EnterRewardMode(_activeEnemyParty.rewardReelConfig, goldOwner);
 
@@ -2309,7 +2125,6 @@ NotifyPartyChanged();
                 largeCount,
                 pool,
                 inventory,
-                // Reuse the existing item reward panel for the "choose item" step
                 (postBattleRewardPanel != null ? postBattleRewardPanel : startRewardPanel),
                 () => done = true
             );
@@ -2318,10 +2133,8 @@ NotifyPartyChanged();
 
             postBattleChestPanel.Hide();
 
-            // Restore combat reels
             if (reelSpinSystem != null)
             {
-                // Rebuild from current party so portraits/strips return
                 var partyStats = new List<HeroStats>(_party != null ? _party.Count : 0);
                 if (_party != null)
                     for (int i = 0; i < _party.Count; i++)
@@ -2332,7 +2145,6 @@ NotifyPartyChanged();
         }
         else
         {
-            // Fallback: original single "choose one" reward behavior
             if (enablePostBattleRewards)
             {
                 PostBattleRewardPanel panel = postBattleRewardPanel != null ? postBattleRewardPanel : startRewardPanel;
@@ -2366,12 +2178,10 @@ NotifyPartyChanged();
             }
         }
 
-        // Prep / inventory reorg panel (optional)
         if (postBattlePrepPanel != null)
         {
             bool cont = false;
 
-            // Ensure the panel object itself is active (Show() only toggles its internal root).
             if (!postBattlePrepPanel.gameObject.activeSelf)
                 postBattlePrepPanel.gameObject.SetActive(true);
 
@@ -2387,10 +2197,8 @@ NotifyPartyChanged();
 
             yield return new WaitUntil(() => cont);
 
-            // Hide it once continue is pressed so it won't overlap the next encounter UI.
             postBattlePrepPanel.Hide();
         }
-// Start the next encounter.
         yield return null;
 
         _postBattleRunning = false;
@@ -2488,7 +2296,6 @@ NotifyPartyChanged();
     [Header("Conceal / Hidden Visuals")]
     [SerializeField] private Color hiddenTint = new Color(0.65f, 0.65f, 0.65f, 1f);
 
-
     [Header("Status Icons (optional)")]
     [SerializeField] private Sprite statusIconHiddenSprite;
     [SerializeField] private Sprite statusIconStunnedSprite;
@@ -2507,17 +2314,14 @@ NotifyPartyChanged();
             var hs = pm.stats;
             bool hidden = hs != null && hs.IsHidden;
 
-            // Tint the in-world sprite (prefab) gray when hidden.
             var sr = pm.avatarGO.GetComponentInChildren<SpriteRenderer>(true);
             if (sr != null)
                 sr.color = hidden ? hiddenTint : Color.white;
 
-            // Status icon above unit (Hidden / Stunned / Triple Blade Empowered).
             StatusEffectIconController statusIcon = null;
 
             Transform iconTf = null;
 
-            // Prefer: under HeroStats root (common structure)
             if (hs != null)
             {
                 iconTf = hs.transform.Find("_StatusIcon");
@@ -2525,7 +2329,6 @@ NotifyPartyChanged();
                     iconTf = hs.transform.Find("__StatusIcon");
             }
 
-            // Fallback: search anywhere under avatarGO
             if (iconTf == null)
             {
                 var all = pm.avatarGO.GetComponentsInChildren<Transform>(true);
@@ -2537,6 +2340,16 @@ NotifyPartyChanged();
                         break;
                     }
                 }
+            }
+
+            // If the ally prefab doesn't include a status icon anchor, create one at runtime.
+            if (iconTf == null)
+            {
+                var go = new GameObject("_StatusIcon");
+                go.transform.SetParent(pm.avatarGO.transform, false);
+                iconTf = go.transform;
+                iconTf.localPosition = new Vector3(0f, 1.2f, 0f);
+                iconTf.localScale = Vector3.one;
             }
 
             if (iconTf != null)
@@ -2562,7 +2375,6 @@ NotifyPartyChanged();
                     bleeding: (hs != null && hs.IsBleeding)
                 );
 
-                // Bleed stacks overlay (only shown when Bleeding icon is active).
                 statusIcon.SetBleedStacks(hs != null ? hs.BleedStacks : 0);
             }
         }
@@ -2577,14 +2389,12 @@ NotifyPartyChanged();
             var m = _activeMonsters[i];
             if (m == null) continue;
 
-            // Find or create a child named "_StatusIcon" under the monster.
             Transform iconTf = m.transform.Find("_StatusIcon");
             if (iconTf == null)
             {
                 var go = new GameObject("_StatusIcon");
                 go.transform.SetParent(m.transform, false);
                 iconTf = go.transform;
-                // Default offset above the monster.
                 iconTf.localPosition = new Vector3(0f, 1.2f, 0f);
                 iconTf.localScale = Vector3.one;
             }
@@ -2619,7 +2429,6 @@ NotifyPartyChanged();
 
         Vector3 spawnPos = worldPos + damageNumberWorldOffset + jitter;
 
-        // Preferred: use an authored prefab (lets you use TMPUGUI, fancy anims, etc.)
         if (damageNumberPrefab != null)
         {
             DamageNumber dn = Instantiate(damageNumberPrefab);
@@ -2628,7 +2437,6 @@ NotifyPartyChanged();
             return;
         }
 
-        // Fallback: create a simple world-space TextMeshPro number at runtime.
         if (!enableRuntimeDamageNumbers)
             return;
 
@@ -2672,10 +2480,6 @@ NotifyPartyChanged();
             }
         }
 
-        
-
-        // Fallback: try to directly set a TMP_Text on the prefab (common in this project)
-        // so authored DamageNumber prefabs that use an internal TMP_Text field still work.
         TMP_Text tmp = dn.GetComponent<TMP_Text>();
         if (tmp == null) tmp = dn.GetComponentInChildren<TMP_Text>(true);
         if (tmp != null)
@@ -2731,9 +2535,6 @@ NotifyPartyChanged();
         return skip;
     }
 
-
-    // ================= UNDO / SAVE STATE HELPERS =================
-
     private void BeginPlayerTurnSaveState()
     {
         _saveStates.Clear();
@@ -2749,7 +2550,6 @@ NotifyPartyChanged();
     {
         var s = new BattleSaveState();
 
-        // Heroes
         for (int i = 0; i < PartyCount; i++)
         {
             var pm = _party[i];
@@ -2768,7 +2568,6 @@ NotifyPartyChanged();
             });
         }
 
-        // Resources
         if (resourcePool != null)
         {
             s.resources = new ResourcePoolSnapshot
@@ -2780,7 +2579,6 @@ NotifyPartyChanged();
             };
         }
 
-        // Monsters (include inactive so Undo can revive)
         for (int i = 0; i < _encounterMonsters.Count; i++)
         {
             var m = _encounterMonsters[i];
@@ -2796,7 +2594,6 @@ NotifyPartyChanged();
                 rotation = m.transform.rotation
             });
         }
-        // Enemy intents (locked for the turn)
         s.intents.Clear();
         for (int i = 0; i < _plannedIntents.Count; i++)
         {
@@ -2818,8 +2615,6 @@ NotifyPartyChanged();
             });
         }
 
-
-
         _saveStates.Add(s);
     }
 
@@ -2827,17 +2622,14 @@ NotifyPartyChanged();
     {
         if (s == null) return;
 
-        // Clear pending cast and previews
         ClearEnemyTargetPreview();
         _previewPartyTargetIndex = -1;
         HideConfirmText();
         CancelPendingAbility();
 
-        // Restore resources
         if (resourcePool != null)
             resourcePool.SetAmounts(s.resources.attack, s.resources.defense, s.resources.magic, s.resources.wild);
 
-        // Restore heroes
         for (int i = 0; i < s.heroes.Count; i++)
         {
             var h = s.heroes[i];
@@ -2851,8 +2643,6 @@ NotifyPartyChanged();
             pm.hasActedThisRound = h.hasActedThisRound;
         }
 
-        // Restore monsters
-        // Build a lookup by instance id
         var map = new Dictionary<int, Monster>(_encounterMonsters.Count);
         for (int i = 0; i < _encounterMonsters.Count; i++)
         {
@@ -2869,7 +2659,6 @@ NotifyPartyChanged();
             var ms = s.monsters[i];
             if (!map.TryGetValue(ms.instanceId, out var m) || m == null) continue;
 
-            // Restore transform (helps visuals feel consistent)
             m.transform.position = ms.position;
             m.transform.rotation = ms.rotation;
 
@@ -2883,7 +2672,6 @@ NotifyPartyChanged();
             }
             else
             {
-                // Keep dead/inactive monsters hidden
                 m.SetCurrentHp(ms.hp);
                 m.SetBleedStacks(ms.bleedStacks);
                 if (m.IsDead || !ms.isActive)
@@ -2891,7 +2679,6 @@ NotifyPartyChanged();
             }
         }
 
-        // Restore enemy intents as they were when this snapshot was taken.
         _plannedIntents.Clear();
         if (s.intents != null)
         {
@@ -2955,28 +2742,15 @@ NotifyPartyChanged();
             return;
         }
 
-        // Remove the most recent snapshot and restore the new last snapshot.
         _saveStates.RemoveAt(_saveStates.Count - 1);
 
         BattleSaveState s = _saveStates[_saveStates.Count - 1];
         ApplySaveStateSnapshot(s);
 
-        // Disable undo if we're back to turn start baseline.
         if (_saveStates.Count <= 1)
             SetUndoButtonEnabled(false);
-    }
-    public GameObject GetPartyMemberInstance(int index)
-    {
-        if (partyMemberInstances == null) return null;
-        if (index < 0 || index >= partyMemberInstances.Length) return null;
-        return partyMemberInstances[index];
     }
 }
 
 
 ////////////////////////////////////////////////////////////
-
-
-////////////////////////////////////////////////////////////
-
-

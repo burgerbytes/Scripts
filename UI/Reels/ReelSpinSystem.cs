@@ -1,5 +1,3 @@
-// GUID: 1b9947b6d65d049459a446a098bd7cb3
-////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -102,6 +100,14 @@ public class ReelSpinSystem : MonoBehaviour
     public event Action<int> OnSpinsRemainingChanged;
 
     /// <summary>
+    /// True while the player is in the "reel phase" of their turn (spinning / choosing when to cash out).
+    /// Used by UI systems to hide ability/status panels during reel interaction.
+    /// </summary>
+    public bool InReelPhase { get; private set; }
+
+    public event Action<bool> OnReelPhaseChanged;
+
+    /// <summary>
     /// Fired when a non-reward-mode spin lands. Provides the landed symbols and a computed summary.
     /// </summary>
     public event Action<SpinLandedInfo> OnSpinLanded;
@@ -191,10 +197,19 @@ public class ReelSpinSystem : MonoBehaviour
         spinsRemaining = spinsPerTurn;
         OnSpinsRemainingChanged?.Invoke(spinsRemaining);
 
+        SetReelPhase(true);
+
         // New turn = open shutters (reveal reels) and re-enable 3D reels.
         Set3DReelsActive(true);
         if (shutterController != null)
             shutterController.OpenShutters();
+    }
+
+    private void SetReelPhase(bool value)
+    {
+        if (InReelPhase == value) return;
+        InReelPhase = value;
+        OnReelPhaseChanged?.Invoke(InReelPhase);
     }
 
     /// <summary>
@@ -434,10 +449,20 @@ public class ReelSpinSystem : MonoBehaviour
         pendingA = pendingD = pendingM = pendingW = 0;
         if (syms == null) return;
 
-        foreach (var s in syms)
+        // Track mapped symbols for 3-of-a-kind style bonuses.
+        // IMPORTANT: bonus logic must be based on the actual landed symbols, not on summed totals,
+        // otherwise combos like NULL + WLD + WLD2 can incorrectly look like "3 wild".
+        var mappedTypes = new List<ResourceType>(syms.Count);
+        var mappedAmounts = new List<int>(syms.Count);
+
+        for (int i = 0; i < syms.Count; i++)
         {
+            var s = syms[i];
             if (s != null && TryMapSymbol(s, out ResourceType rt, out int amt))
             {
+                mappedTypes.Add(rt);
+                mappedAmounts.Add(Mathf.Max(0, amt));
+
                 switch (rt)
                 {
                     case ResourceType.Attack: pendingA += amt; break;
@@ -445,6 +470,45 @@ public class ReelSpinSystem : MonoBehaviour
                     case ResourceType.Magic: pendingM += amt; break;
                     case ResourceType.Wild: pendingW += amt; break;
                 }
+            }
+        }
+
+        // --- Bonus rules ---
+        // 1) Only consider a bonus if ALL 3 reels landed on mapped (non-null) symbols.
+        // 2) If all three are the same type -> +bonusAmount of that type.
+        // 3) If exactly 2 are the same non-wild type and the third is Wild -> +bonusAmount of the matching type.
+        //    Example: ATK, ATK, WLD => +2 ATK +1 WLD, plus bonus +1 ATK => +3 ATK +1 WLD
+        //    (Wild is still paid out as Wild; it just enables the match bonus.)
+        if (mappedTypes.Count == 3)
+        {
+            int wildCount = 0;
+            int atkCount = 0;
+            int defCount = 0;
+            int magCount = 0;
+
+            int maxAtkAmt = 0, maxDefAmt = 0, maxMagAmt = 0, maxWildAmt = 0;
+            for (int i = 0; i < 3; i++)
+            {
+                switch (mappedTypes[i])
+                {
+                    case ResourceType.Attack: atkCount++; maxAtkAmt = Mathf.Max(maxAtkAmt, mappedAmounts[i]); break;
+                    case ResourceType.Defend: defCount++; maxDefAmt = Mathf.Max(maxDefAmt, mappedAmounts[i]); break;
+                    case ResourceType.Magic: magCount++; maxMagAmt = Mathf.Max(maxMagAmt, mappedAmounts[i]); break;
+                    case ResourceType.Wild: wildCount++; maxWildAmt = Mathf.Max(maxWildAmt, mappedAmounts[i]); break;
+                }
+            }
+
+            // All three same type
+            if (atkCount == 3) pendingA += Mathf.Max(1, maxAtkAmt);
+            else if (defCount == 3) pendingD += Mathf.Max(1, maxDefAmt);
+            else if (magCount == 3) pendingM += Mathf.Max(1, maxMagAmt);
+            else if (wildCount == 3) pendingW += Mathf.Max(1, maxWildAmt);
+            else if (wildCount == 1)
+            {
+                // Two-of-a-kind + Wild
+                if (atkCount == 2) pendingA += Mathf.Max(1, maxAtkAmt);
+                else if (defCount == 2) pendingD += Mathf.Max(1, maxDefAmt);
+                else if (magCount == 2) pendingM += Mathf.Max(1, maxMagAmt);
             }
         }
     }
@@ -670,6 +734,8 @@ public class ReelSpinSystem : MonoBehaviour
         // In reward mode, payouts happen immediately on stop; nothing to collect.
         if (_rewardModeActive) return;
 
+        SetReelPhase(false);
+
         CollectPendingPayout();
 
         // After cashout, close shutters and disable reels/buttons so the "post-spin" space can be used.
@@ -705,4 +771,6 @@ public class ReelSpinSystem : MonoBehaviour
         pendingA = pendingD = pendingM = pendingW = 0;
     }
 }
+////////////////////////////////////////////////////////////
+
 ////////////////////////////////////////////////////////////

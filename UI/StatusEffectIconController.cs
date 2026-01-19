@@ -16,7 +16,7 @@ using TMPro;
 public class StatusEffectIconController : MonoBehaviour
 {
     [Header("Layout")]
-    [SerializeField] private Vector3 localOffset = new Vector3(0f, 1.25f, 0f);
+    [SerializeField] private Vector3 localOffset = new Vector3(0f, 0.15f, 0f);
 
     [Tooltip("If true, icon size is controlled by desiredWorldScale and will auto-compensate for parent scaling.")]
     [SerializeField] private bool useWorldScale = true;

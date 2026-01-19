@@ -198,6 +198,9 @@ public class EnemyIntentVisualizer : MonoBehaviour
             GameObject iconGo = new GameObject($"IntentIcon_{intent.enemy.name}");
             iconGo.transform.SetParent(uiRoot, false);
 
+            // Make sure intent icons render above other UI (e.g., HP bars) within the same canvas.
+            iconGo.transform.SetAsLastSibling();
+
             iconImg = iconGo.AddComponent<Image>();
             iconImg.sprite = GetIconForIntent(intent);
             iconImg.preserveAspect = true;
@@ -522,3 +525,6 @@ public class EnemyIntentVisualizer : MonoBehaviour
         }
     }
 }
+
+
+////////////////////////////////////////////////////////////

@@ -1,5 +1,3 @@
-// GUID: 5a8a06222baaa2b4883d4bb71239e8a6
-////////////////////////////////////////////////////////////
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -9,6 +7,10 @@ public class PartyHUD : MonoBehaviour
     [SerializeField] private BattleManager battleManager;
     [SerializeField] private AbilityMenuUI abilityMenu;
     [SerializeField] private HeroStatsPanelUI statsPanel;
+
+    [Header("Reel Phase")]
+    [SerializeField] private ReelSpinSystem reelSpinSystem;
+    [SerializeField] private bool hideMenusDuringReelPhase = true;
 
     [Header("Slots")]
     [SerializeField] private PartyHUDSlot[] slots;
@@ -25,7 +27,7 @@ public class PartyHUD : MonoBehaviour
     private int _selectedIndex = -1;
     private bool _panelVisible = false;
     private bool _hasShownStatsOnce = false;
-
+    private bool _menusWereHiddenForReelPhase = false;
     private void Awake()
     {
         if (battleManager == null)
@@ -36,6 +38,9 @@ public class PartyHUD : MonoBehaviour
 
         if (statsPanel == null)
             statsPanel = FindFirstObjectByType<HeroStatsPanelUI>();
+
+        if (reelSpinSystem == null)
+            reelSpinSystem = FindFirstObjectByType<ReelSpinSystem>();
 
         if (slots == null || slots.Length == 0)
             slots = GetComponentsInChildren<PartyHUDSlot>(true);
@@ -68,6 +73,9 @@ public class PartyHUD : MonoBehaviour
             battleManager.OnBattleStateChanged += OnBattleStateChanged;
         }
 
+        if (reelSpinSystem != null)
+            reelSpinSystem.OnReelPhaseChanged += HandleReelPhaseChanged;
+
         // Class selection -> battle scene transition can re-enable objects; keep stats hidden until user clicks.
         if (statsPanel != null && showStatsOnlyAfterPickAllyClick && !_hasShownStatsOnce)
             statsPanel.Hide();
@@ -83,6 +91,80 @@ public class PartyHUD : MonoBehaviour
             battleManager.OnActivePartyMemberChanged -= OnActivePartyMemberChanged;
             battleManager.OnBattleStateChanged -= OnBattleStateChanged;
         }
+
+        if (reelSpinSystem != null)
+            reelSpinSystem.OnReelPhaseChanged -= HandleReelPhaseChanged;
+    }
+
+    private void HandleReelPhaseChanged(bool inReelPhase)
+    {
+        if (!hideMenusDuringReelPhase) return;
+
+        if (inReelPhase)
+        {
+            // Hide menus while the player is interacting with the reels.
+            if (abilityMenu != null) abilityMenu.Close();
+            if (statsPanel != null) statsPanel.Hide();
+            _menusWereHiddenForReelPhase = true;
+            return;
+        }
+
+        // Reel phase ended -> restore if the player had a hero selected.
+        if (!_menusWereHiddenForReelPhase) return;
+        _menusWereHiddenForReelPhase = false;
+
+        // Only re-open if the user had previously opened these panels.
+        if (_selectedIndex >= 0 && battleManager != null)
+        {
+            var snap = battleManager.GetPartyMemberSnapshot(_selectedIndex);
+            if (!snap.IsDead)
+            {
+                // Stats panel: respect "show after click" behavior.
+				if (statsPanel != null && (!showStatsOnlyAfterPickAllyClick || _hasShownStatsOnce))
+				{
+					// Keep this consistent with the rest of PartyHUD: Stats panel shows using the HeroStats reference.
+					HeroStats hero = battleManager.GetHeroAtPartyIndex(_selectedIndex);
+					if (hero != null)
+						statsPanel.ShowForHero(hero);
+				}
+
+                // Ability menu: only re-open if it was visible before.
+                if (abilityMenu != null && _panelVisible)
+                    OpenAbilityMenuForSelectedHero();
+            }
+        }
+
+        RefreshAllSlots();
+    }
+
+    private void OpenAbilityMenuForSelectedHero()
+    {
+        if (battleManager == null || abilityMenu == null) return;
+        if (_selectedIndex < 0) return;
+
+		var heroStats = battleManager.GetHeroAtPartyIndex(_selectedIndex);
+        if (heroStats == null) return;
+
+        // Abilities are defined on the hero's active class definition (not on HeroStats).
+        // Prefer Advanced class if chosen, otherwise fall back to Base.
+        ClassDefinitionSO classDef = (heroStats.AdvancedClassDef != null) ? heroStats.AdvancedClassDef : heroStats.BaseClassDef;
+
+        List<AbilityDefinitionSO> abilities = new List<AbilityDefinitionSO>();
+        if (classDef != null)
+        {
+            if (classDef.abilities != null && classDef.abilities.Count > 0)
+            {
+                abilities.AddRange(classDef.abilities);
+            }
+            else
+            {
+                // Legacy 2-slot abilities.
+                if (classDef.ability1 != null) abilities.Add(classDef.ability1);
+                if (classDef.ability2 != null) abilities.Add(classDef.ability2);
+            }
+        }
+
+        abilityMenu.OpenForHero(heroStats, abilities);
     }
 
     private void OnBattleStateChanged(BattleManager.BattleState _)
@@ -256,3 +338,5 @@ public class PartyHUD : MonoBehaviour
 
 
 }
+
+////////////////////////////////////////////////////////////

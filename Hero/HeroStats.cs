@@ -1,7 +1,3 @@
-// GUID: a3e2dd32a76bf594ba876a56162b79f2
-////////////////////////////////////////////////////////////
-// GUID: a3e2dd32a76bf594ba876a56162b79f2
-////////////////////////////////////////////////////////////
 using System;
 using UnityEngine;
 
@@ -9,6 +5,7 @@ public class HeroStats : MonoBehaviour
 {
     [Header("Progression")]
     [SerializeField] private int level = 1;
+    [SerializeField] private int maxLevel = 5;
     [SerializeField] private int xp = 0;
     [SerializeField] private int xpToNextLevel = 10;
 
@@ -478,6 +475,14 @@ public class HeroStats : MonoBehaviour
 
         while (xp >= xpToNextLevel)
         {
+            // Max level reached: stop leveling and clamp XP just below the threshold
+            // to avoid infinite loops / post-battle softlocks.
+            if (level >= maxLevel)
+            {
+                xp = Mathf.Min(xp, Mathf.Max(0, xpToNextLevel - 1));
+                break;
+            }
+
             xp -= xpToNextLevel;
 
             if (allowLevelUps) LevelUp();
@@ -498,9 +503,11 @@ public class HeroStats : MonoBehaviour
         if (pendingLevelUps <= 0) return false;
 
         pendingLevelUps -= 1;
-        LevelUp();
+        // If we've already hit the cap, consume the pending level up to prevent post-battle loops.
+        if (level < maxLevel)
+            LevelUp();
         NotifyChanged();
-        return true;
+        return level < maxLevel;
     }
 
 
@@ -572,6 +579,7 @@ public class HeroStats : MonoBehaviour
 
     private void LevelUp()
     {
+        if (level >= maxLevel) return;
         level += 1;
 
         // Stat growth is defined by the hero's active class (Advanced if present, else Base).
@@ -594,7 +602,8 @@ public class HeroStats : MonoBehaviour
         xpToNextLevel = Mathf.RoundToInt(xpToNextLevel * 1.25f) + 5;
 
         // Queue a reel upgrade to be resolved via the Reel Upgrade Minigame.
-        if (upgradeReelOnLevelUp && reelUpgradeRules != null && reelStrip != null)
+        // Don't queue upgrades past the max level.
+        if (level <= maxLevel && upgradeReelOnLevelUp && reelUpgradeRules != null && reelStrip != null)
             pendingReelUpgrades += 1;
     }
 
@@ -920,6 +929,9 @@ public class HeroStats : MonoBehaviour
 
 ////////////////////////////////////////////////////////////
 
+
+
+////////////////////////////////////////////////////////////
 
 
 ////////////////////////////////////////////////////////////

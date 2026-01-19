@@ -1,0 +1,4 @@
+bugs
+- damage numbers show hp lost, not damage done
+- status and ability menus should be hidden during reel phase
+- intent icon is obscured by hp bars of larger enemy sprites

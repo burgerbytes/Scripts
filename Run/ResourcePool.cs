@@ -57,12 +57,6 @@ public class ResourcePool : MonoBehaviour
 
     public void Add(long addAttack, long addDefense, long addMagic, long addWild)
     {
-        // Three-of-a-kind bonus: if a resource payout is exactly 3, grant +1 extra.
-        if (addAttack == 3) addAttack += 1;
-        if (addDefense == 3) addDefense += 1;
-        if (addMagic == 3) addMagic += 1;
-        if (addWild == 3) addWild += 1;
-
         if (addAttack > 0)
         {
             attack += addAttack;
@@ -178,3 +172,6 @@ public class ResourcePool : MonoBehaviour
 }
 
 
+
+
+////////////////////////////////////////////////////////////
