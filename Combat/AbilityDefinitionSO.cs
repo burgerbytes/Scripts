@@ -1,3 +1,5 @@
+// GUID: cf56299f5b00af345b24e257cb33b22b
+////////////////////////////////////////////////////////////
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -34,6 +36,10 @@ public class AbilityDefinitionSO : ScriptableObject
     public int shieldAmount = 0;
     public ElementType element = ElementType.Physical;
 
+    [Header("Healing")]
+    [Tooltip("Flat HP restored to the target (clamped to Max HP).")]
+    public int healAmount = 0;
+
     [Header("Tags")]
     [Tooltip("Optional tags that can add special rules and synergies.")]
     public List<AbilityTag> tags = new List<AbilityTag>();
@@ -51,3 +57,6 @@ public class AbilityDefinitionSO : ScriptableObject
     [Tooltip("If grantsHidden, this ability also clears existing enemy intents by making them miss (handled at resolution).")]
     public bool makesUntargetable = false;
 }
+
+
+////////////////////////////////////////////////////////////

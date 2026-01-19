@@ -1,3 +1,5 @@
+// GUID: 30f201f35d336bf4d840162cd6fd1fde
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -779,7 +781,7 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
         }
 
         if (logFlow)
-            Debug.Log($"[Battle][Ability] Pending set. actorIndex={actorIndex} ability={ability.abilityName} targetType={ability.targetType} shieldAmount={ability.shieldAmount} baseDamage={ability.baseDamage} cost={cost}");
+            Debug.Log($"[Battle][Ability] Pending set. actorIndex={actorIndex} ability={ability.abilityName} targetType={ability.targetType} shieldAmount={ability.shieldAmount} healAmount={ability.healAmount} baseDamage={ability.baseDamage} cost={cost}");
 
         _pendingActorIndex = actorIndex;
         _pendingAbility = ability;
@@ -804,7 +806,7 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
             _previewEnemyTarget = null;
             if (logFlow) Debug.Log($"[Battle][AbilityTarget] Awaiting ENEMY target for {ability.abilityName}");
         }
-        else if ((ability.targetType == AbilityTargetType.Self || ability.targetType == AbilityTargetType.Ally) && ability.shieldAmount > 0)
+        else if ((ability.targetType == AbilityTargetType.Self || ability.targetType == AbilityTargetType.Ally) && (ability.shieldAmount > 0 || ability.healAmount > 0))
         {
             _awaitingEnemyTarget = false;
             _awaitingPartyTarget = true;
@@ -814,7 +816,7 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
             if (logFlow)
             {
                 string mode = (ability.targetType == AbilityTargetType.Self) ? "SELF" : "ALLY";
-                Debug.Log($"[Battle][AbilityTarget] Awaiting {mode} confirm for {ability.abilityName} (shield preview should flash)");
+                Debug.Log($"[Battle][AbilityTarget] Awaiting {mode} confirm for {ability.abilityName} (ally/self ability)");
             }
         }
         else
@@ -1518,6 +1520,38 @@ NotifyPartyChanged();
                 if (logFlow) Debug.Log($"[Battle][Shield] Applying shield. amount={ability.shieldAmount} target={targetName} shieldBefore={targetStats.Shield}", this);
                 targetStats.AddShield(ability.shieldAmount);
                 if (logFlow) Debug.Log($"[Battle][Shield] Shield applied. target={targetName} shieldAfter={targetStats.Shield}", this);
+            }
+        }
+
+        if (ability.healAmount > 0 && (ability.targetType == AbilityTargetType.Self || ability.targetType == AbilityTargetType.Ally))
+        {
+            HeroStats targetStats = actorStats;
+            GameObject targetGO = actor != null ? actor.avatarGO : null;
+            string targetName = actorStats != null ? actorStats.name : "<null>";
+
+            if (ability.targetType == AbilityTargetType.Ally)
+            {
+                if (IsValidPartyIndex(_selectedPartyTargetIndex) && _party[_selectedPartyTargetIndex] != null)
+                {
+                    targetStats = _party[_selectedPartyTargetIndex].stats;
+                    targetGO = _party[_selectedPartyTargetIndex].avatarGO;
+                    targetName = _party[_selectedPartyTargetIndex].name;
+                }
+            }
+
+            if (targetStats != null)
+            {
+                int before = targetStats.CurrentHp;
+                targetStats.Heal(ability.healAmount);
+                int healed = Mathf.Max(0, targetStats.CurrentHp - before);
+
+                if (logFlow) Debug.Log($"[Battle][Heal] Applied. amount={ability.healAmount} healed={healed} target={targetName} hpNow={targetStats.CurrentHp}/{targetStats.MaxHp}", this);
+
+                if (healed > 0)
+                {
+                    Vector3 pos = (targetGO != null) ? targetGO.transform.position : (targetStats != null ? targetStats.transform.position : Vector3.zero);
+                    SpawnHealNumber(pos, healed);
+                }
             }
         }
 
@@ -2454,6 +2488,47 @@ NotifyPartyChanged();
         runtime.Initialize(Camera.main, runtimeDamageNumberLifetime, runtimeDamageNumberRiseDistance);
     }
 
+    private void SpawnHealNumber(Vector3 worldPos, int amount)
+    {
+        if (amount <= 0) return;
+
+        Vector3 jitter = new Vector3(
+            UnityEngine.Random.Range(-damageNumberRandomJitter.x, damageNumberRandomJitter.x),
+            UnityEngine.Random.Range(-damageNumberRandomJitter.y, damageNumberRandomJitter.y),
+            UnityEngine.Random.Range(-damageNumberRandomJitter.z, damageNumberRandomJitter.z)
+        );
+
+        Vector3 spawnPos = worldPos + damageNumberWorldOffset + jitter;
+        string txt = $"+{amount}";
+
+        if (damageNumberPrefab != null)
+        {
+            DamageNumber dn = Instantiate(damageNumberPrefab);
+            dn.transform.position = spawnPos;
+
+            // Best-effort: set the value via existing init methods then override the displayed text.
+            TrySetDamageNumberValue(dn, amount);
+            TrySetDamageNumberTextAndColor(dn, txt, Color.green);
+            return;
+        }
+
+        if (!enableRuntimeDamageNumbers)
+            return;
+
+        var go = new GameObject($"HealNumber_{amount}");
+        go.transform.position = spawnPos;
+
+        var tmp = go.AddComponent<TextMeshPro>();
+        tmp.text = txt;
+        tmp.fontSize = runtimeDamageNumberFontSize;
+        tmp.alignment = TextAlignmentOptions.Center;
+        tmp.enableWordWrapping = false;
+        tmp.color = Color.green;
+
+        var runtime = go.AddComponent<RuntimeDamageNumber>();
+        runtime.Initialize(Camera.main, runtimeDamageNumberLifetime, runtimeDamageNumberRiseDistance);
+    }
+
     private static void TrySetDamageNumberValue(DamageNumber dn, int amount)
     {
         if (dn == null) return;
@@ -2489,6 +2564,41 @@ NotifyPartyChanged();
         }
 
         dn.gameObject.SendMessage("SetValue", amount, SendMessageOptions.DontRequireReceiver);
+    }
+
+    private static void TrySetDamageNumberTextAndColor(DamageNumber dn, string textValue, Color color)
+    {
+        if (dn == null) return;
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+        try
+        {
+            // Most common: private TMP_Text text;
+            var f = dn.GetType().GetField("text", flags);
+            if (f != null)
+            {
+                var tmp = f.GetValue(dn) as TMP_Text;
+                if (tmp != null)
+                {
+                    tmp.text = textValue;
+                    tmp.color = color;
+                    return;
+                }
+            }
+
+            // Fallback: search any TMP_Text on the object.
+            var any = dn.GetComponent<TMP_Text>();
+            if (any == null) any = dn.GetComponentInChildren<TMP_Text>(true);
+            if (any != null)
+            {
+                any.text = textValue;
+                any.color = color;
+            }
+        }
+        catch
+        {
+            // best-effort only
+        }
     }
 
     private int GetPartyIndexForHero(HeroStats hero)
@@ -2751,6 +2861,9 @@ NotifyPartyChanged();
             SetUndoButtonEnabled(false);
     }
 }
+
+
+////////////////////////////////////////////////////////////
 
 
 ////////////////////////////////////////////////////////////
