@@ -2,6 +2,16 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 
+/// <summary>
+/// UI for per-hero Reelcraft abilities.
+///
+/// Expected wiring (minimal):
+/// - Put this panel under a Canvas (it can be disabled by default).
+/// - Assign titleText, descriptionText (optional).
+/// - Assign buttons relevant to the abilities you want visible.
+///
+/// This script does not spawn UI - it's a simple controller you can hook to prefab buttons.
+/// </summary>
 public class ReelcraftPanelUI : MonoBehaviour
 {
     [Header("Refs")]
@@ -100,23 +110,52 @@ public class ReelcraftPanelUI : MonoBehaviour
 
     private void WireButtons()
     {
+        // IMPORTANT:
+        // Some prefabs may already have persistent OnClick handlers wired in the Inspector.
+        // If we add listeners in code without clearing, clicks can fire multiple times.
+        // That can cause "Steel Nudge Down moves by 2" (-1 twice).
         if (steelNudgeUpButton != null)
+        {
+            steelNudgeUpButton.onClick.RemoveAllListeners();
             steelNudgeUpButton.onClick.AddListener(() => OnSteelNudge(+1));
-        if (steelNudgeDownButton != null)
-            steelNudgeDownButton.onClick.AddListener(() => OnSteelNudge(-1));
+        }
 
+        if (steelNudgeDownButton != null)
+        {
+            steelNudgeDownButton.onClick.RemoveAllListeners();
+            steelNudgeDownButton.onClick.AddListener(() => OnSteelNudge(-1));
+        }
+
+        // Deprecated buttons (older prefab). Clear listeners anyway so they can't double-fire.
         if (transmuteAtkToMagicButton != null)
+        {
+            transmuteAtkToMagicButton.onClick.RemoveAllListeners();
             transmuteAtkToMagicButton.onClick.AddListener(() => OnTransmuteDeprecated(ReelSpinSystem.ResourceType.Attack));
+        }
+
         if (transmuteDefToMagicButton != null)
+        {
+            transmuteDefToMagicButton.onClick.RemoveAllListeners();
             transmuteDefToMagicButton.onClick.AddListener(() => OnTransmuteDeprecated(ReelSpinSystem.ResourceType.Defend));
+        }
+
         if (transmuteWildToMagicButton != null)
+        {
+            transmuteWildToMagicButton.onClick.RemoveAllListeners();
             transmuteWildToMagicButton.onClick.AddListener(() => OnTransmuteDeprecated(ReelSpinSystem.ResourceType.Wild));
+        }
 
         if (transmuteSelectButton != null)
+        {
+            transmuteSelectButton.onClick.RemoveAllListeners();
             transmuteSelectButton.onClick.AddListener(OnTransmuteSelect);
+        }
 
         if (twofoldShadowButton != null)
+        {
+            twofoldShadowButton.onClick.RemoveAllListeners();
             twofoldShadowButton.onClick.AddListener(OnTwofoldShadow);
+        }
     }
 
     public void ShowForHero(int partyIndex)
@@ -252,17 +291,15 @@ public class ReelcraftPanelUI : MonoBehaviour
         if (logFlow)
             Debug.Log($"[ReelcraftPanel] TransmuteSelect ok={ok}", this);
 
-        // Keep panel open so player can click an icon.
-        Refresh();
-    }
-
-    // Deprecated: old behavior converted pending resources. Kept only so existing prefabs don't NRE.
-    private void OnTransmuteDeprecated(ReelSpinSystem.ResourceType from)
-    {
-        if (logFlow)
-            Debug.LogWarning($"[ReelcraftPanel] Deprecated transmute button pressed (from={from}). Please wire transmuteSelectButton instead.", this);
-
-        Refresh();
+        if (ok)
+        {
+            // Keep panel open while selecting; buttons will disable/close on OnReelcraftUsed.
+            DisableAllButtons();
+        }
+        else
+        {
+            Refresh();
+        }
     }
 
     private void OnTwofoldShadow()
@@ -283,10 +320,23 @@ public class ReelcraftPanelUI : MonoBehaviour
         Refresh();
     }
 
+    private void OnTransmuteDeprecated(ReelSpinSystem.ResourceType from)
+    {
+        // Deprecated path (older prefab). We leave it here for safety, but it should be hidden by Refresh().
+        if (reelcraft == null) return;
+        if (logFlow)
+            Debug.LogWarning("[ReelcraftPanel] Deprecated Transmute button clicked. Use the single Transmute button.", this);
+    }
+
     private static void SetGroupVisible(Button a, Button b, bool visible)
     {
         if (a != null) a.gameObject.SetActive(visible);
         if (b != null) b.gameObject.SetActive(visible);
+    }
+
+    private static void SetGroupVisible(Button a, bool visible)
+    {
+        if (a != null) a.gameObject.SetActive(visible);
     }
 
     private static void SetGroupVisible(Button a, Button b, Button c, bool visible)
@@ -294,10 +344,5 @@ public class ReelcraftPanelUI : MonoBehaviour
         if (a != null) a.gameObject.SetActive(visible);
         if (b != null) b.gameObject.SetActive(visible);
         if (c != null) c.gameObject.SetActive(visible);
-    }
-
-    private static void SetGroupVisible(Button a, bool visible)
-    {
-        if (a != null) a.gameObject.SetActive(visible);
     }
 }

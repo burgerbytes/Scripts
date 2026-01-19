@@ -31,6 +31,7 @@ public class PartyHUD : MonoBehaviour
     private bool _panelVisible = false;
     private bool _hasShownStatsOnce = false;
     private bool _menusWereHiddenForReelPhase = false;
+
     private void Awake()
     {
         if (battleManager == null)
@@ -42,14 +43,11 @@ public class PartyHUD : MonoBehaviour
         if (statsPanel == null)
             statsPanel = FindFirstObjectByType<HeroStatsPanelUI>();
 
-        if (reelcraftPanel == null)
-            reelcraftPanel = FindFirstObjectByType<ReelcraftPanelUI>();
-
         if (reelSpinSystem == null)
             reelSpinSystem = FindFirstObjectByType<ReelSpinSystem>();
 
-        if (reelcraftPanel == null)
-            reelcraftPanel = FindFirstObjectByType<ReelcraftPanelUI>(FindObjectsInactive.Include);
+        // IMPORTANT: Reelcraft panel may start inactive, so we must find it including inactive objects.
+        EnsureReelcraftPanelRef();
 
         if (slots == null || slots.Length == 0)
             slots = GetComponentsInChildren<PartyHUDSlot>(true);
@@ -105,6 +103,43 @@ public class PartyHUD : MonoBehaviour
             reelSpinSystem.OnReelPhaseChanged -= HandleReelPhaseChanged;
     }
 
+    private void EnsureReelcraftPanelRef()
+    {
+        if (reelcraftPanel != null) return;
+
+        // Unity can’t find inactive objects with the default FindFirstObjectByType<T>().
+        // This prevents the “first click only wakes it up” issue.
+        reelcraftPanel = FindFirstObjectByType<ReelcraftPanelUI>(FindObjectsInactive.Include);
+
+        if (debugLogs)
+            Debug.Log($"[PartyHUD] EnsureReelcraftPanelRef: found={(reelcraftPanel != null)}", this);
+    }
+
+    private void ForceShowReelcraftPanelNow()
+    {
+        if (reelcraftPanel == null) return;
+
+        GameObject go = reelcraftPanel.gameObject;
+
+        if (!go.activeSelf)
+            go.SetActive(true);
+
+        // Make sure it is on top of other panels
+        go.transform.SetAsLastSibling();
+
+        // If you’re using CanvasGroup, make it visible and clickable immediately.
+        var cg = go.GetComponent<CanvasGroup>();
+        if (cg != null)
+        {
+            cg.alpha = 1f;
+            cg.interactable = true;
+            cg.blocksRaycasts = true;
+        }
+
+        // Forces layout + canvas rebuild this frame so it appears on the first click.
+        Canvas.ForceUpdateCanvases();
+    }
+
     private void HandleReelPhaseChanged(bool inReelPhase)
     {
         if (!hideMenusDuringReelPhase) return;
@@ -134,13 +169,13 @@ public class PartyHUD : MonoBehaviour
             if (!snap.IsDead)
             {
                 // Stats panel: respect "show after click" behavior.
-				if (statsPanel != null && (!showStatsOnlyAfterPickAllyClick || _hasShownStatsOnce))
-				{
-					// Keep this consistent with the rest of PartyHUD: Stats panel shows using the HeroStats reference.
-					HeroStats hero = battleManager.GetHeroAtPartyIndex(_selectedIndex);
-					if (hero != null)
-						statsPanel.ShowForHero(hero);
-				}
+                if (statsPanel != null && (!showStatsOnlyAfterPickAllyClick || _hasShownStatsOnce))
+                {
+                    // Keep this consistent with the rest of PartyHUD: Stats panel shows using the HeroStats reference.
+                    HeroStats hero = battleManager.GetHeroAtPartyIndex(_selectedIndex);
+                    if (hero != null)
+                        statsPanel.ShowForHero(hero);
+                }
 
                 // Ability menu: only re-open if it was visible before.
                 if (abilityMenu != null && _panelVisible)
@@ -156,7 +191,7 @@ public class PartyHUD : MonoBehaviour
         if (battleManager == null || abilityMenu == null) return;
         if (_selectedIndex < 0) return;
 
-		var heroStats = battleManager.GetHeroAtPartyIndex(_selectedIndex);
+        var heroStats = battleManager.GetHeroAtPartyIndex(_selectedIndex);
         if (heroStats == null) return;
 
         // Abilities are defined on the hero's active class definition (not on HeroStats).
@@ -259,6 +294,8 @@ public class PartyHUD : MonoBehaviour
         // During reel phase, clicking a portrait should ONLY open Reelcraft.
         if (reelSpinSystem != null && reelSpinSystem.InReelPhase)
         {
+            EnsureReelcraftPanelRef();
+
             battleManager.SetActivePartyMember(index);
             _selectedIndex = index;
             _panelVisible = false;
@@ -269,6 +306,11 @@ public class PartyHUD : MonoBehaviour
             if (reelcraftPanel != null)
             {
                 reelcraftPanel.ShowForHero(index);
+                ForceShowReelcraftPanelNow();
+            }
+            else
+            {
+                Debug.LogWarning("[PartyHUD] Reel phase click, but ReelcraftPanelUI was not found (even including inactive).");
             }
 
             // Highlight selection, but do not show the normal action panel.
@@ -382,10 +424,4 @@ public class PartyHUD : MonoBehaviour
 
         return null;
     }
-
-
 }
-
-////////////////////////////////////////////////////////////
-
-
