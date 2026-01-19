@@ -8,6 +8,9 @@ public class PartyHUD : MonoBehaviour
     [SerializeField] private AbilityMenuUI abilityMenu;
     [SerializeField] private HeroStatsPanelUI statsPanel;
 
+    [Header("Reelcraft")]
+    [SerializeField] private ReelcraftPanelUI reelcraftPanel;
+
     [Header("Reel Phase")]
     [SerializeField] private ReelSpinSystem reelSpinSystem;
     [SerializeField] private bool hideMenusDuringReelPhase = true;
@@ -39,8 +42,14 @@ public class PartyHUD : MonoBehaviour
         if (statsPanel == null)
             statsPanel = FindFirstObjectByType<HeroStatsPanelUI>();
 
+        if (reelcraftPanel == null)
+            reelcraftPanel = FindFirstObjectByType<ReelcraftPanelUI>();
+
         if (reelSpinSystem == null)
             reelSpinSystem = FindFirstObjectByType<ReelSpinSystem>();
+
+        if (reelcraftPanel == null)
+            reelcraftPanel = FindFirstObjectByType<ReelcraftPanelUI>(FindObjectsInactive.Include);
 
         if (slots == null || slots.Length == 0)
             slots = GetComponentsInChildren<PartyHUDSlot>(true);
@@ -105,9 +114,14 @@ public class PartyHUD : MonoBehaviour
             // Hide menus while the player is interacting with the reels.
             if (abilityMenu != null) abilityMenu.Close();
             if (statsPanel != null) statsPanel.Hide();
+            if (reelcraftPanel != null) reelcraftPanel.Hide();
             _menusWereHiddenForReelPhase = true;
             return;
         }
+
+        // Reel phase ended.
+        if (reelcraftPanel != null)
+            reelcraftPanel.Hide();
 
         // Reel phase ended -> restore if the player had a hero selected.
         if (!_menusWereHiddenForReelPhase) return;
@@ -229,9 +243,9 @@ public class PartyHUD : MonoBehaviour
         if (debugLogs)
             Debug.Log($"[PartyHUD] OnSlotClicked(index={index})", this);
 
-        if (battleManager == null || abilityMenu == null)
+        if (battleManager == null)
         {
-            Debug.LogWarning("[PartyHUD] Missing BattleManager or AbilityMenuUI reference.");
+            Debug.LogWarning("[PartyHUD] Missing BattleManager reference.");
             return;
         }
 
@@ -241,6 +255,36 @@ public class PartyHUD : MonoBehaviour
             RefreshAllSlots();
             return;
         }
+
+        // During reel phase, clicking a portrait should ONLY open Reelcraft.
+        if (reelSpinSystem != null && reelSpinSystem.InReelPhase)
+        {
+            battleManager.SetActivePartyMember(index);
+            _selectedIndex = index;
+            _panelVisible = false;
+
+            if (abilityMenu != null) abilityMenu.Close();
+            if (statsPanel != null) statsPanel.Hide();
+
+            if (reelcraftPanel != null)
+            {
+                reelcraftPanel.ShowForHero(index);
+            }
+
+            // Highlight selection, but do not show the normal action panel.
+            for (int i = 0; i < slots.Length; i++)
+            {
+                if (slots[i] == null) continue;
+                slots[i].SetSelected(i == _selectedIndex);
+                slots[i].SetActionPanelVisible(false);
+            }
+
+            RefreshAllSlots();
+            return;
+        }
+
+        // Not in reel phase -> ensure Reelcraft panel is hidden.
+        if (reelcraftPanel != null) reelcraftPanel.Hide();
 
         battleManager.SetActivePartyMember(index);
 
@@ -277,16 +321,19 @@ public class PartyHUD : MonoBehaviour
 
         List<AbilityDefinitionSO> abilities = BuildAbilityListFromClassDef(classDef);
 
-        if (debugLogs)
+        if (abilityMenu != null)
         {
-            Debug.Log(
-                $"[PartyHUD] Opening ability menu for '{hero.name}'. " +
-                $"classDef={(classDef ? classDef.className : "NULL")}, " +
-                $"abilitiesCount={abilities.Count}",
-                this);
-        }
+            if (debugLogs)
+            {
+                Debug.Log(
+                    $"[PartyHUD] Opening ability menu for '{hero.name}'. " +
+                    $"classDef={(classDef ? classDef.className : "NULL")}, " +
+                    $"abilitiesCount={abilities.Count}",
+                    this);
+            }
 
-        abilityMenu.OpenForHero(hero, abilities);
+            abilityMenu.OpenForHero(hero, abilities);
+        }
 
         RefreshAllSlots();
     }
@@ -340,3 +387,5 @@ public class PartyHUD : MonoBehaviour
 }
 
 ////////////////////////////////////////////////////////////
+
+

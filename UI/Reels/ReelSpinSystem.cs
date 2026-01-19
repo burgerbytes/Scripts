@@ -112,6 +112,18 @@ public class ReelSpinSystem : MonoBehaviour
     /// </summary>
     public event Action<SpinLandedInfo> OnSpinLanded;
 
+    /// <summary>
+    /// Fired when the current landed symbols for the ongoing reel phase are updated
+    /// (initial spin land, or Reelcraft modifications like nudges/transmutations).
+    /// </summary>
+    public event Action<SpinLandedInfo> OnCurrentLandedChanged;
+
+    /// <summary>
+    /// Fired whenever the pending payout totals change.
+    /// Useful for UI that previews what will be collected on cashout.
+    /// </summary>
+    public event Action<int, int, int, int> OnPendingPayoutChanged;
+
     [Serializable]
     public struct SpinLandedInfo
     {
@@ -127,6 +139,15 @@ public class ReelSpinSystem : MonoBehaviour
 
     public int SpinsRemaining => spinsRemaining;
 
+    /// <summary>
+    /// True if we have a full 3-symbol landed set that Reelcraft can modify.
+    /// (This is set after a spin lands and cleared on cashout / begin turn.)
+    /// </summary>
+    public bool HasCurrentLandedSymbols => _currentLandedSymbols != null && _currentLandedSymbols.Count >= 3;
+
+    /// <summary>Read-only view of the most recent landed symbols for this reel phase.</summary>
+    public IReadOnlyList<ReelSymbolSO> CurrentLandedSymbols => _currentLandedSymbols;
+
     // State
     private bool spinning;
     private int spinsRemaining;
@@ -136,6 +157,17 @@ public class ReelSpinSystem : MonoBehaviour
     private int pendingD;
     private int pendingM;
     private int pendingW;
+
+    // Reelcraft integration: keep track of the last landed symbols so we can nudge/transform without re-spinning.
+    private List<ReelSymbolSO> _currentLandedSymbols;
+
+    public void GetPendingPayout(out int a, out int d, out int m, out int w)
+    {
+        a = pendingA;
+        d = pendingD;
+        m = pendingM;
+        w = pendingW;
+    }
 
     // Map cache (type + amount)
     private struct SymbolMapValue
@@ -196,6 +228,10 @@ public class ReelSpinSystem : MonoBehaviour
     {
         spinsRemaining = spinsPerTurn;
         OnSpinsRemainingChanged?.Invoke(spinsRemaining);
+
+        // New reel phase -> clear any previous landed state.
+        _currentLandedSymbols = null;
+        OnCurrentLandedChanged?.Invoke(default);
 
         SetReelPhase(true);
 
@@ -511,6 +547,111 @@ public class ReelSpinSystem : MonoBehaviour
                 else if (magCount == 2) pendingM += Mathf.Max(1, maxMagAmt);
             }
         }
+
+        OnPendingPayoutChanged?.Invoke(pendingA, pendingD, pendingM, pendingW);
+    }
+
+    /// <summary>
+    /// Attempts to nudge a specific reel up/down one step while stopped.
+    /// Updates the current landed symbols and recalculates the pending payout.
+    /// </summary>
+    public bool TryNudgeReel(int reelIndex, int deltaSteps)
+    {
+        if (!InReelPhase) return false;
+        if (spinning) return false;
+        if (!HasCurrentLandedSymbols) return false;
+
+        if (reels == null || reelIndex < 0 || reelIndex >= reels.Count)
+            return false;
+
+        var entry = reels[reelIndex];
+        if (entry == null || entry.reel3d == null)
+            return false;
+
+        if (!entry.reel3d.TryNudgeSteps(deltaSteps))
+            return false;
+
+        // Re-read the symbol at midrow for that reel.
+        int qi;
+        ReelSymbolSO sym = entry.reel3d.GetMidrowSymbolByIntersection(midrowPlane, out qi);
+        if (sym == null)
+            return false;
+
+        // Ensure list size >= 3
+        while (_currentLandedSymbols.Count < 3)
+            _currentLandedSymbols.Add(null);
+
+        _currentLandedSymbols[reelIndex] = sym;
+        SetPendingFromSymbols(_currentLandedSymbols);
+
+        SpinLandedInfo info = BuildSpinLandedInfo(_currentLandedSymbols);
+        OnCurrentLandedChanged?.Invoke(info);
+        return true;
+    }
+
+    /// <summary>
+    /// Converts ALL pending payout of one resource type into another.
+    /// Intended for Arcane Transmutation.
+    /// </summary>
+    public bool TryConvertPending(ResourceType from, ResourceType to)
+    {
+        if (!InReelPhase) return false;
+        if (spinning) return false;
+
+        if (from == to) return false;
+
+        int amount = 0;
+        switch (from)
+        {
+            case ResourceType.Attack: amount = pendingA; pendingA = 0; break;
+            case ResourceType.Defend: amount = pendingD; pendingD = 0; break;
+            case ResourceType.Magic: amount = pendingM; pendingM = 0; break;
+            case ResourceType.Wild: amount = pendingW; pendingW = 0; break;
+        }
+
+        if (amount <= 0) return false;
+
+        switch (to)
+        {
+            case ResourceType.Attack: pendingA += amount; break;
+            case ResourceType.Defend: pendingD += amount; break;
+            case ResourceType.Magic: pendingM += amount; break;
+            case ResourceType.Wild: pendingW += amount; break;
+        }
+
+        OnPendingPayoutChanged?.Invoke(pendingA, pendingD, pendingM, pendingW);
+        return true;
+    }
+
+    /// <summary>
+    /// Doubles (or generally multiplies) the contribution of a specific reel's currently landed symbol.
+    /// Intended for Twofold Shadow.
+    /// </summary>
+    public bool TryMultiplyReelContribution(int reelIndex, int multiplier)
+    {
+        if (!InReelPhase) return false;
+        if (spinning) return false;
+        if (!HasCurrentLandedSymbols) return false;
+        if (multiplier <= 1) return false;
+        if (reelIndex < 0 || reelIndex >= _currentLandedSymbols.Count) return false;
+
+        var sym = _currentLandedSymbols[reelIndex];
+        if (sym == null) return false;
+
+        if (!TryMapSymbol(sym, out ResourceType rt, out int amt))
+            return false;
+
+        int extra = amt * (multiplier - 1);
+        switch (rt)
+        {
+            case ResourceType.Attack: pendingA += extra; break;
+            case ResourceType.Defend: pendingD += extra; break;
+            case ResourceType.Magic: pendingM += extra; break;
+            case ResourceType.Wild: pendingW += extra; break;
+        }
+
+        OnPendingPayoutChanged?.Invoke(pendingA, pendingD, pendingM, pendingW);
+        return true;
     }
 
     private void EvaluateRewardPayout(List<ReelSymbolSO> landed)
@@ -661,6 +802,10 @@ public class ReelSpinSystem : MonoBehaviour
             SpinLandedInfo info = BuildSpinLandedInfo(landed);
             OnSpinLanded?.Invoke(info);
 
+            // Cache current landed symbols so Reelcraft can operate during this reel phase.
+            _currentLandedSymbols = new List<ReelSymbolSO>(landed);
+            OnCurrentLandedChanged?.Invoke(info);
+
             SetPendingFromSymbols(landed);
 
             spinsRemaining = Mathf.Max(0, spinsRemaining - 1);
@@ -769,8 +914,14 @@ public class ReelSpinSystem : MonoBehaviour
             resourcePool.Add(pendingA, pendingD, pendingM, pendingW);
 
         pendingA = pendingD = pendingM = pendingW = 0;
+
+        // After payout, clear current landed symbols so Reelcraft can't modify a settled spin.
+        _currentLandedSymbols = null;
+        OnPendingPayoutChanged?.Invoke(pendingA, pendingD, pendingM, pendingW);
     }
 }
 ////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////
+
+

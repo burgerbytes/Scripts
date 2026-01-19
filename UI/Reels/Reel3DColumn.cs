@@ -82,6 +82,28 @@ public class Reel3DColumn : MonoBehaviour
     public ReelStripSO Strip => strip;
     public int QuadCount => quadCount;
 
+    /// <summary>
+    /// Nudges the reel by an integer number of steps while stopped.
+    /// Used by Reelcraft abilities (e.g., Steel Nudge).
+    /// </summary>
+    public bool TryNudgeSteps(int deltaSteps)
+    {
+        EnsureBuilt();
+
+        if (IsSpinning)
+            return false;
+
+        if (quadCount <= 0)
+            return false;
+
+        if (deltaSteps == 0)
+            return true;
+
+        _currentStep = Mod(_currentStep + deltaSteps, quadCount);
+        SetPrimaryAxisAngle(_currentStep * StepDeg);
+        return true;
+    }
+
     public float MinSpinDurationSeconds
     {
         get => minSpinDurationSeconds;
@@ -540,3 +562,5 @@ public class Reel3DColumn : MonoBehaviour
         if (qp.back != null) qp.back.SetSymbol(newSymbol);
     }
 }
+
+
