@@ -143,10 +143,13 @@ public class ReelSpinSystem : MonoBehaviour
     /// True if we have a full 3-symbol landed set that Reelcraft can modify.
     /// (This is set after a spin lands and cleared on cashout / begin turn.)
     /// </summary>
-    public bool HasCurrentLandedSymbols => _currentLandedSymbols != null && _currentLandedSymbols.Count >= 3;
+    public bool HasCurrentLandedSymbols => _currentLandedSymbols != null && _currentLandedSymbols.Count >= 3
+                                          && (_currentLandedMultipliers == null || _currentLandedMultipliers.Count >= 3);
 
     /// <summary>Read-only view of the most recent landed symbols for this reel phase.</summary>
     public IReadOnlyList<ReelSymbolSO> CurrentLandedSymbols => _currentLandedSymbols;
+
+    // (duplicate event declaration removed)
 
     // State
     private bool spinning;
@@ -160,6 +163,7 @@ public class ReelSpinSystem : MonoBehaviour
 
     // Reelcraft integration: keep track of the last landed symbols so we can nudge/transform without re-spinning.
     private List<ReelSymbolSO> _currentLandedSymbols;
+    private List<int> _currentLandedMultipliers;
 
     public void GetPendingPayout(out int a, out int d, out int m, out int w)
     {
@@ -231,6 +235,7 @@ public class ReelSpinSystem : MonoBehaviour
 
         // New reel phase -> clear any previous landed state.
         _currentLandedSymbols = null;
+        _currentLandedMultipliers = null;
         OnCurrentLandedChanged?.Invoke(default);
 
         SetReelPhase(true);
@@ -421,6 +426,23 @@ public class ReelSpinSystem : MonoBehaviour
         return false;
     }
 
+    // --- Public helpers for ReelcraftController ---
+    public bool TryMapSymbolPublic(ReelSymbolSO sym, out ResourceType rt, out int amount)
+    {
+        return TryMapSymbol(sym, out rt, out amount);
+    }
+
+    public ReelSymbolSO GetDefaultMagicSymbol()
+    {
+        if (symbolToResourceMap == null) return null;
+        foreach (var e in symbolToResourceMap)
+        {
+            if (e != null && e.symbol != null && e.resourceType == ResourceType.Magic)
+                return e.symbol;
+        }
+        return null;
+    }
+
     private List<ReelEntry> GetFirstThree3DReels()
     {
         var list = new List<ReelEntry>(3);
@@ -432,6 +454,32 @@ public class ReelSpinSystem : MonoBehaviour
             list.Add(r);
         }
         return list;
+    }
+
+    // --- Public accessors for ReelcraftController ---
+    public GameObject MidrowPlane => midrowPlane;
+
+    public ReelEntry GetReelEntryAt(int index)
+    {
+        if (reels == null) return null;
+        if (index < 0 || index >= reels.Count) return null;
+        return reels[index];
+    }
+
+    public List<ReelEntry> GetFirstThree3DReelsPublic()
+    {
+        return GetFirstThree3DReels();
+    }
+
+    public int FindReelIndexForColumn(Reel3DColumn column)
+    {
+        if (column == null || reels == null) return -1;
+        for (int i = 0; i < reels.Count; i++)
+        {
+            if (reels[i]?.reel3d == column)
+                return i;
+        }
+        return -1;
     }
 
     private bool All3DReelsFinished(List<ReelEntry> three)
@@ -480,72 +528,72 @@ public class ReelSpinSystem : MonoBehaviour
         return info;
     }
 
-    private void SetPendingFromSymbols(List<ReelSymbolSO> syms)
+    private void SetPendingFromSymbols(List<ReelSymbolSO> syms, List<int> multipliers = null)
     {
         pendingA = pendingD = pendingM = pendingW = 0;
         if (syms == null) return;
 
-        // Track mapped symbols for 3-of-a-kind style bonuses.
-        // IMPORTANT: bonus logic must be based on the actual landed symbols, not on summed totals,
-        // otherwise combos like NULL + WLD + WLD2 can incorrectly look like "3 wild".
-        var mappedTypes = new List<ResourceType>(syms.Count);
-        var mappedAmounts = new List<int>(syms.Count);
+        // Track mapped symbol contributions for match bonuses.
+        // IMPORTANT: bonus logic must be based on *symbol contributions*, not on summed totals.
+        var contribTypes = new List<ResourceType>(syms.Count);
+        var contribAmounts = new List<int>(syms.Count);
 
         for (int i = 0; i < syms.Count; i++)
         {
             var s = syms[i];
+            int mult = (multipliers != null && i < multipliers.Count) ? Mathf.Max(1, multipliers[i]) : 1;
+
             if (s != null && TryMapSymbol(s, out ResourceType rt, out int amt))
             {
-                mappedTypes.Add(rt);
-                mappedAmounts.Add(Mathf.Max(0, amt));
+                int single = Mathf.Max(0, amt);
 
+                // Base payout: amount * multiplier.
+                int totalAmt = single * mult;
                 switch (rt)
                 {
-                    case ResourceType.Attack: pendingA += amt; break;
-                    case ResourceType.Defend: pendingD += amt; break;
-                    case ResourceType.Magic: pendingM += amt; break;
-                    case ResourceType.Wild: pendingW += amt; break;
+                    case ResourceType.Attack: pendingA += totalAmt; break;
+                    case ResourceType.Defend: pendingD += totalAmt; break;
+                    case ResourceType.Magic: pendingM += totalAmt; break;
+                    case ResourceType.Wild: pendingW += totalAmt; break;
+                }
+
+                // Contribution list: one entry per "count" (so a doubled quad counts as 2).
+                for (int k = 0; k < mult; k++)
+                {
+                    contribTypes.Add(rt);
+                    contribAmounts.Add(single);
                 }
             }
         }
 
-        // --- Bonus rules ---
-        // 1) Only consider a bonus if ALL 3 reels landed on mapped (non-null) symbols.
-        // 2) If all three are the same type -> +bonusAmount of that type.
-        // 3) If exactly 2 are the same non-wild type and the third is Wild -> +bonusAmount of the matching type.
-        //    Example: ATK, ATK, WLD => +2 ATK +1 WLD, plus bonus +1 ATK => +3 ATK +1 WLD
-        //    (Wild is still paid out as Wild; it just enables the match bonus.)
-        if (mappedTypes.Count == 3)
+        // --- Bonus rules (generalized) ---
+        // We look for any type that reaches 3+ contributions.
+        // Wild can act as a joker to complete a 3-of-a-kind with a non-wild type.
+        int wildCount = 0, atkCount = 0, defCount = 0, magCount = 0;
+        int maxAtkAmt = 0, maxDefAmt = 0, maxMagAmt = 0, maxWildAmt = 0;
+
+        for (int i = 0; i < contribTypes.Count; i++)
         {
-            int wildCount = 0;
-            int atkCount = 0;
-            int defCount = 0;
-            int magCount = 0;
-
-            int maxAtkAmt = 0, maxDefAmt = 0, maxMagAmt = 0, maxWildAmt = 0;
-            for (int i = 0; i < 3; i++)
+            switch (contribTypes[i])
             {
-                switch (mappedTypes[i])
-                {
-                    case ResourceType.Attack: atkCount++; maxAtkAmt = Mathf.Max(maxAtkAmt, mappedAmounts[i]); break;
-                    case ResourceType.Defend: defCount++; maxDefAmt = Mathf.Max(maxDefAmt, mappedAmounts[i]); break;
-                    case ResourceType.Magic: magCount++; maxMagAmt = Mathf.Max(maxMagAmt, mappedAmounts[i]); break;
-                    case ResourceType.Wild: wildCount++; maxWildAmt = Mathf.Max(maxWildAmt, mappedAmounts[i]); break;
-                }
+                case ResourceType.Attack: atkCount++; maxAtkAmt = Mathf.Max(maxAtkAmt, contribAmounts[i]); break;
+                case ResourceType.Defend: defCount++; maxDefAmt = Mathf.Max(maxDefAmt, contribAmounts[i]); break;
+                case ResourceType.Magic: magCount++; maxMagAmt = Mathf.Max(maxMagAmt, contribAmounts[i]); break;
+                case ResourceType.Wild: wildCount++; maxWildAmt = Mathf.Max(maxWildAmt, contribAmounts[i]); break;
             }
+        }
 
-            // All three same type
-            if (atkCount == 3) pendingA += Mathf.Max(1, maxAtkAmt);
-            else if (defCount == 3) pendingD += Mathf.Max(1, maxDefAmt);
-            else if (magCount == 3) pendingM += Mathf.Max(1, maxMagAmt);
-            else if (wildCount == 3) pendingW += Mathf.Max(1, maxWildAmt);
-            else if (wildCount == 1)
-            {
-                // Two-of-a-kind + Wild
-                if (atkCount == 2) pendingA += Mathf.Max(1, maxAtkAmt);
-                else if (defCount == 2) pendingD += Mathf.Max(1, maxDefAmt);
-                else if (magCount == 2) pendingM += Mathf.Max(1, maxMagAmt);
-            }
+        // Pure 3+ of a kind
+        if (atkCount >= 3) pendingA += Mathf.Max(1, maxAtkAmt);
+        else if (defCount >= 3) pendingD += Mathf.Max(1, maxDefAmt);
+        else if (magCount >= 3) pendingM += Mathf.Max(1, maxMagAmt);
+        else if (wildCount >= 3) pendingW += Mathf.Max(1, maxWildAmt);
+        else if (wildCount > 0)
+        {
+            // Joker completion: (two or more of a kind) + wild => 3 total
+            if (atkCount + wildCount >= 3 && atkCount >= 2) pendingA += Mathf.Max(1, maxAtkAmt);
+            else if (defCount + wildCount >= 3 && defCount >= 2) pendingD += Mathf.Max(1, maxDefAmt);
+            else if (magCount + wildCount >= 3 && magCount >= 2) pendingM += Mathf.Max(1, maxMagAmt);
         }
 
         OnPendingPayoutChanged?.Invoke(pendingA, pendingD, pendingM, pendingW);
@@ -573,7 +621,8 @@ public class ReelSpinSystem : MonoBehaviour
 
         // Re-read the symbol at midrow for that reel.
         int qi;
-        ReelSymbolSO sym = entry.reel3d.GetMidrowSymbolByIntersection(midrowPlane, out qi);
+        int mult;
+        ReelSymbolSO sym = entry.reel3d.GetMidrowSymbolAndMultiplier(midrowPlane, out qi, out mult);
         if (sym == null)
             return false;
 
@@ -582,7 +631,11 @@ public class ReelSpinSystem : MonoBehaviour
             _currentLandedSymbols.Add(null);
 
         _currentLandedSymbols[reelIndex] = sym;
-        SetPendingFromSymbols(_currentLandedSymbols);
+        if (_currentLandedMultipliers == null) _currentLandedMultipliers = new List<int> { 1, 1, 1 };
+        while (_currentLandedMultipliers.Count < 3) _currentLandedMultipliers.Add(1);
+        _currentLandedMultipliers[reelIndex] = Mathf.Max(1, mult);
+
+        SetPendingFromSymbols(_currentLandedSymbols, _currentLandedMultipliers);
 
         SpinLandedInfo info = BuildSpinLandedInfo(_currentLandedSymbols);
         OnCurrentLandedChanged?.Invoke(info);
@@ -771,14 +824,17 @@ public class ReelSpinSystem : MonoBehaviour
             yield return null;
 
         var landed = new List<ReelSymbolSO>(3);
+        var multipliers = new List<int>(3);
         var parts = new List<string>(3);
 
         for (int i = 0; i < three.Count; i++)
         {
             var entry = three[i];
             int qi;
-            ReelSymbolSO sym = entry.reel3d.GetMidrowSymbolByIntersection(midrowPlane, out qi);
+            int mult;
+            ReelSymbolSO sym = entry.reel3d.GetMidrowSymbolAndMultiplier(midrowPlane, out qi, out mult);
             landed.Add(sym);
+            multipliers.Add(Mathf.Max(1, mult));
 
             string id = !string.IsNullOrEmpty(entry.reelId) ? entry.reelId : $"slot{i}";
             string name = sym != null ? sym.name : "<null>";
@@ -804,9 +860,10 @@ public class ReelSpinSystem : MonoBehaviour
 
             // Cache current landed symbols so Reelcraft can operate during this reel phase.
             _currentLandedSymbols = new List<ReelSymbolSO>(landed);
+            _currentLandedMultipliers = new List<int>(multipliers);
             OnCurrentLandedChanged?.Invoke(info);
 
-            SetPendingFromSymbols(landed);
+            SetPendingFromSymbols(landed, multipliers);
 
             spinsRemaining = Mathf.Max(0, spinsRemaining - 1);
             OnSpinsRemainingChanged?.Invoke(spinsRemaining);
@@ -917,6 +974,7 @@ public class ReelSpinSystem : MonoBehaviour
 
         // After payout, clear current landed symbols so Reelcraft can't modify a settled spin.
         _currentLandedSymbols = null;
+        _currentLandedMultipliers = null;
         OnPendingPayoutChanged?.Invoke(pendingA, pendingD, pendingM, pendingW);
     }
 }

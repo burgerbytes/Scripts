@@ -2,7 +2,6 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 
-
 public class ReelcraftPanelUI : MonoBehaviour
 {
     [Header("Refs")]
@@ -19,6 +18,9 @@ public class ReelcraftPanelUI : MonoBehaviour
     [SerializeField] private Button steelNudgeDownButton;
 
     [Header("Mage - Arcane Transmutation")]
+    [SerializeField] private Button transmuteSelectButton;
+
+    // Back-compat (older prefab): if these are wired, we hide/ignore them.
     [SerializeField] private Button transmuteAtkToMagicButton;
     [SerializeField] private Button transmuteDefToMagicButton;
     [SerializeField] private Button transmuteWildToMagicButton;
@@ -87,11 +89,14 @@ public class ReelcraftPanelUI : MonoBehaviour
             steelNudgeDownButton.onClick.AddListener(() => OnSteelNudge(-1));
 
         if (transmuteAtkToMagicButton != null)
-            transmuteAtkToMagicButton.onClick.AddListener(() => OnTransmute(ReelSpinSystem.ResourceType.Attack));
+            transmuteAtkToMagicButton.onClick.AddListener(() => OnTransmuteDeprecated(ReelSpinSystem.ResourceType.Attack));
         if (transmuteDefToMagicButton != null)
-            transmuteDefToMagicButton.onClick.AddListener(() => OnTransmute(ReelSpinSystem.ResourceType.Defend));
+            transmuteDefToMagicButton.onClick.AddListener(() => OnTransmuteDeprecated(ReelSpinSystem.ResourceType.Defend));
         if (transmuteWildToMagicButton != null)
-            transmuteWildToMagicButton.onClick.AddListener(() => OnTransmute(ReelSpinSystem.ResourceType.Wild));
+            transmuteWildToMagicButton.onClick.AddListener(() => OnTransmuteDeprecated(ReelSpinSystem.ResourceType.Wild));
+
+        if (transmuteSelectButton != null)
+            transmuteSelectButton.onClick.AddListener(OnTransmuteSelect);
 
         if (twofoldShadowButton != null)
             twofoldShadowButton.onClick.AddListener(OnTwofoldShadow);
@@ -143,16 +148,18 @@ public class ReelcraftPanelUI : MonoBehaviour
 
         // Toggle groups
         SetGroupVisible(steelNudgeUpButton, steelNudgeDownButton, archetype == ReelcraftController.ReelcraftArchetype.Fighter);
-        SetGroupVisible(transmuteAtkToMagicButton, transmuteDefToMagicButton, transmuteWildToMagicButton, archetype == ReelcraftController.ReelcraftArchetype.Mage);
+        if (transmuteSelectButton != null)
+            SetGroupVisible(transmuteSelectButton, archetype == ReelcraftController.ReelcraftArchetype.Mage);
+
+        // Hide deprecated 3-button UI if present (avoid confusion)
+        SetGroupVisible(transmuteAtkToMagicButton, transmuteDefToMagicButton, transmuteWildToMagicButton, false);
         SetGroupVisible(twofoldShadowButton, archetype == ReelcraftController.ReelcraftArchetype.Ninja);
 
         // Interactables
         if (steelNudgeUpButton != null) steelNudgeUpButton.interactable = canUse && archetype == ReelcraftController.ReelcraftArchetype.Fighter;
         if (steelNudgeDownButton != null) steelNudgeDownButton.interactable = canUse && archetype == ReelcraftController.ReelcraftArchetype.Fighter;
 
-        if (transmuteAtkToMagicButton != null) transmuteAtkToMagicButton.interactable = canUse && archetype == ReelcraftController.ReelcraftArchetype.Mage && HasPending(ReelSpinSystem.ResourceType.Attack);
-        if (transmuteDefToMagicButton != null) transmuteDefToMagicButton.interactable = canUse && archetype == ReelcraftController.ReelcraftArchetype.Mage && HasPending(ReelSpinSystem.ResourceType.Defend);
-        if (transmuteWildToMagicButton != null) transmuteWildToMagicButton.interactable = canUse && archetype == ReelcraftController.ReelcraftArchetype.Mage && HasPending(ReelSpinSystem.ResourceType.Wild);
+        if (transmuteSelectButton != null) transmuteSelectButton.interactable = canUse && archetype == ReelcraftController.ReelcraftArchetype.Mage;
 
         if (twofoldShadowButton != null) twofoldShadowButton.interactable = canUse && archetype == ReelcraftController.ReelcraftArchetype.Ninja;
     }
@@ -181,7 +188,7 @@ public class ReelcraftPanelUI : MonoBehaviour
             case ReelcraftController.ReelcraftArchetype.Fighter:
                 return "Steel Nudge: Nudge your reel up/down by 1 symbol.";
             case ReelcraftController.ReelcraftArchetype.Mage:
-                return "Arcane Transmutation: Convert one pending resource type into Magic.";
+                return "Arcane Transmutation: Click a glowing icon to permanently transmute it into Magic for this battle (NULL works too).";
             case ReelcraftController.ReelcraftArchetype.Ninja:
                 return "Twofold Shadow: Double the resources from your reel's landed symbol.";
             default:
@@ -200,13 +207,23 @@ public class ReelcraftPanelUI : MonoBehaviour
         Refresh();
     }
 
-    private void OnTransmute(ReelSpinSystem.ResourceType from)
+    private void OnTransmuteSelect()
     {
         if (reelcraft == null) return;
 
-        bool ok = reelcraft.TryArcaneTransmutation(_partyIndex, from);
+        bool ok = reelcraft.BeginArcaneTransmutationSelect(_partyIndex);
         if (logFlow)
-            Debug.Log($"[ReelcraftPanel] Transmute from={from} ok={ok}", this);
+            Debug.Log($"[ReelcraftPanel] TransmuteSelect ok={ok}", this);
+
+        // Keep panel open so player can click an icon.
+        Refresh();
+    }
+
+    // Deprecated: old behavior converted pending resources. Kept only so existing prefabs don't NRE.
+    private void OnTransmuteDeprecated(ReelSpinSystem.ResourceType from)
+    {
+        if (logFlow)
+            Debug.LogWarning($"[ReelcraftPanel] Deprecated transmute button pressed (from={from}). Please wire transmuteSelectButton instead.", this);
 
         Refresh();
     }

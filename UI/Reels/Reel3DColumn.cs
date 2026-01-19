@@ -71,6 +71,25 @@ public class Reel3DColumn : MonoBehaviour
 
     private readonly List<QuadPair> _quads = new();
     private readonly List<ReelSymbolSO> _fixedSymbolOnQuad = new();
+    private readonly List<ReelSymbolSO> _currentSymbolOnQuad = new();
+
+    // Reelcraft: temporary per-battle overrides.
+    private readonly Dictionary<int, ReelSymbolSO> _tempTransmuteOriginalOnQuad = new();
+    private readonly HashSet<int> _doubledQuads = new();
+
+    // Visual helpers (ninja shadow + mage glow)
+    private readonly Dictionary<int, MeshRenderer> _shadowRenderers = new();
+
+    [Header("Reelcraft: Twofold Shadow")]
+    [Tooltip("Local-space offset for the shadow overlay quad (relative to the front quad transform).")]
+    [SerializeField] private Vector3 twofoldShadowLocalOffset = new Vector3(0.085f, -0.06f, -0.001f);
+
+    [Tooltip("How much to shake the selected icon (local units).")]
+    [SerializeField] private float reelcraftIconShakeMagnitude = 0.02f;
+
+    [Tooltip("How long to shake the selected icon (seconds).")]
+    [SerializeField] private float reelcraftIconShakeDuration = 0.12f;
+    private readonly HashSet<int> _glowingQuads = new();
 
     private Coroutine _routine;
 
@@ -102,6 +121,162 @@ public class Reel3DColumn : MonoBehaviour
         _currentStep = Mod(_currentStep + deltaSteps, quadCount);
         SetPrimaryAxisAngle(_currentStep * StepDeg);
         return true;
+    }
+
+    /// <summary>
+    /// Shakes the whole reel object a bit (same style as the reel-upgrade minigame),
+    /// then returns it to its original pose.
+    /// </summary>
+    public IEnumerator ShakeRoutine(float duration = 0.12f, float magnitude = 6f)
+    {
+        Vector3 basePos = transform.localPosition;
+        float st = 0f;
+        while (st < Mathf.Max(0.0001f, duration))
+        {
+            st += Time.deltaTime;
+            float x = UnityEngine.Random.Range(-magnitude, magnitude);
+            float y = UnityEngine.Random.Range(-magnitude, magnitude);
+            transform.localPosition = basePos + new Vector3(x, y, 0f) * 0.01f;
+            yield return null;
+        }
+        transform.localPosition = basePos;
+    }
+
+    /// <summary>
+    /// Small local-position shake on a specific icon quad (used for Reelcraft visual feedback).
+    /// </summary>
+    public IEnumerator ShakeIconRoutine(int quadIndex)
+    {
+        EnsureBuilt();
+        if (quadIndex < 0 || quadIndex >= _quads.Count) yield break;
+
+        Transform t = _quads[quadIndex].frontT;
+        if (t == null) yield break;
+
+        float dur = Mathf.Max(0.01f, reelcraftIconShakeDuration);
+        float mag = Mathf.Max(0f, reelcraftIconShakeMagnitude);
+
+        Vector3 start = t.localPosition;
+        float elapsed = 0f;
+        while (elapsed < dur)
+        {
+            elapsed += Time.deltaTime;
+            // quick jitter, decaying
+            float k = 1f - Mathf.Clamp01(elapsed / dur);
+            Vector2 r = UnityEngine.Random.insideUnitCircle * (mag * k);
+            t.localPosition = start + new Vector3(r.x, r.y, 0f);
+            yield return null;
+        }
+
+        t.localPosition = start;
+    }
+
+    public int GetMultiplierForQuad(int quadIndex)
+    {
+        return _doubledQuads.Contains(quadIndex) ? 2 : 1;
+    }
+
+    public ReelSymbolSO GetSymbolOnQuad(int quadIndex)
+    {
+        EnsureBuilt();
+        if (quadIndex < 0 || quadIndex >= _currentSymbolOnQuad.Count) return null;
+        return _currentSymbolOnQuad[quadIndex];
+    }
+
+    public bool SetQuadTemporarilyTransmutedTo(ReelSymbolSO newSymbol, int quadIndex)
+    {
+        EnsureBuilt();
+        if (newSymbol == null) return false;
+        if (quadIndex < 0 || quadIndex >= _currentSymbolOnQuad.Count) return false;
+
+        if (!_tempTransmuteOriginalOnQuad.ContainsKey(quadIndex))
+            _tempTransmuteOriginalOnQuad[quadIndex] = _currentSymbolOnQuad[quadIndex];
+
+        _currentSymbolOnQuad[quadIndex] = newSymbol;
+        ApplySymbolToQuad(quadIndex, newSymbol);
+        return true;
+    }
+
+    public void RestoreAllTemporaryTransmutes()
+    {
+        EnsureBuilt();
+        foreach (var kv in _tempTransmuteOriginalOnQuad)
+        {
+            int qi = kv.Key;
+            ReelSymbolSO original = kv.Value;
+            if (qi >= 0 && qi < _currentSymbolOnQuad.Count)
+            {
+                _currentSymbolOnQuad[qi] = original;
+                ApplySymbolToQuad(qi, original);
+            }
+        }
+        _tempTransmuteOriginalOnQuad.Clear();
+
+        ClearAllGlow();
+    }
+
+    public bool MarkQuadDoubled(int quadIndex, bool enableShadowVisual)
+    {
+        EnsureBuilt();
+        if (quadIndex < 0 || quadIndex >= _currentSymbolOnQuad.Count) return false;
+
+        _doubledQuads.Add(quadIndex);
+        if (enableShadowVisual)
+            EnsureShadowForQuad(quadIndex);
+        return true;
+    }
+
+    public void ClearAllDoubles()
+    {
+        _doubledQuads.Clear();
+        foreach (var kv in _shadowRenderers)
+        {
+            if (kv.Value != null)
+                Destroy(kv.Value.gameObject);
+        }
+        _shadowRenderers.Clear();
+    }
+
+    public void SetGlowForTransmutableQuads(Func<ReelSymbolSO, bool> canTransmute)
+    {
+        EnsureBuilt();
+        ClearAllGlow();
+        if (canTransmute == null) return;
+
+        for (int i = 0; i < _quads.Count; i++)
+        {
+            ReelSymbolSO sym = (i >= 0 && i < _currentSymbolOnQuad.Count) ? _currentSymbolOnQuad[i] : null;
+            if (!canTransmute(sym))
+                continue;
+
+            SetQuadGlow(i, true);
+        }
+    }
+
+    /// <summary>
+    /// Highlights ONLY the current midrow icon (the one intersecting midrowPlane) if it is transmutable.
+    /// This matches the Reelcraft UX where only midrow results are clickable.
+    /// </summary>
+    public void SetGlowForTransmutableMidrow(GameObject midrowPlane, Func<ReelSymbolSO, bool> canTransmute)
+    {
+        EnsureBuilt();
+        ClearAllGlow();
+        if (midrowPlane == null || canTransmute == null) return;
+
+        int qi;
+        ReelSymbolSO sym = GetMidrowSymbolByIntersection(midrowPlane, out qi);
+        if (qi < 0) return;
+        if (!canTransmute(sym)) return;
+
+        SetQuadGlow(qi, true);
+    }
+
+    public void ClearAllGlow()
+    {
+        EnsureBuilt();
+        foreach (int qi in _glowingQuads)
+            SetQuadGlow(qi, false);
+        _glowingQuads.Clear();
     }
 
     public float MinSpinDurationSeconds
@@ -156,6 +331,7 @@ public class Reel3DColumn : MonoBehaviour
 
         _quads.Clear();
         _fixedSymbolOnQuad.Clear();
+        _currentSymbolOnQuad.Clear();
 
         float usedRadius = radius;
         if (autoRadiusFromCylinder)
@@ -220,9 +396,23 @@ public class Reel3DColumn : MonoBehaviour
             frontGO.transform.localRotation = faceOut;
             frontGO.transform.localScale = quadScale;
 
+            // Required render components for Reel3DSymbolQuad
+            if (frontGO.GetComponent<MeshFilter>() == null) frontGO.AddComponent<MeshFilter>();
+            if (frontGO.GetComponent<MeshRenderer>() == null) frontGO.AddComponent<MeshRenderer>();
+
             var frontQuad = frontGO.AddComponent<Reel3DSymbolQuad>();
             var frontMr = frontGO.GetComponent<MeshRenderer>();
             if (iconMaterial != null) frontMr.sharedMaterial = iconMaterial;
+
+            // Reelcraft selection: add a collider + click target so we can raycast quads.
+            // (Safe: small/cheap collider per quad.)
+            var bc = frontGO.AddComponent<BoxCollider>();
+            bc.size = new Vector3(1f, 1f, 0.05f);
+            bc.center = new Vector3(0f, 0f, 0.02f);
+
+            var clickTarget = frontGO.AddComponent<Reel3DQuadClickTarget>();
+            clickTarget.Column = this;
+            clickTarget.QuadIndex = i;
 
             Reel3DSymbolQuad backQuad = null;
 
@@ -233,6 +423,10 @@ public class Reel3DColumn : MonoBehaviour
                 backGO.transform.localPosition = (center + offset) - outward * doubleSidedSeparation;
                 backGO.transform.localRotation = faceOut * Quaternion.Euler(0f, 180f, 0f);
                 backGO.transform.localScale = quadScale;
+
+                // Required render components for Reel3DSymbolQuad
+                if (backGO.GetComponent<MeshFilter>() == null) backGO.AddComponent<MeshFilter>();
+                if (backGO.GetComponent<MeshRenderer>() == null) backGO.AddComponent<MeshRenderer>();
 
                 backQuad = backGO.AddComponent<Reel3DSymbolQuad>();
                 var backMr = backGO.GetComponent<MeshRenderer>();
@@ -248,6 +442,7 @@ public class Reel3DColumn : MonoBehaviour
             });
 
             _fixedSymbolOnQuad.Add(null);
+            _currentSymbolOnQuad.Add(null);
         }
 
         AssignFixedSymbolsFromStrip();
@@ -260,6 +455,7 @@ public class Reel3DColumn : MonoBehaviour
             for (int i = 0; i < _quads.Count; i++)
             {
                 _fixedSymbolOnQuad[i] = null;
+                _currentSymbolOnQuad[i] = null;
                 _quads[i].front?.Clear();
                 _quads[i].back?.Clear();
             }
@@ -271,10 +467,33 @@ public class Reel3DColumn : MonoBehaviour
         {
             ReelSymbolSO sym = strip.symbols[Mod(qi, n)];
             _fixedSymbolOnQuad[qi] = sym;
+            _currentSymbolOnQuad[qi] = sym;
 
-            _quads[qi].front.SetSymbol(sym);
-            if (_quads[qi].back != null)
-                _quads[qi].back.SetSymbol(sym);
+            ApplySymbolToQuad(qi, sym);
+        }
+    }
+
+    private void ApplySymbolToQuad(int quadIndex, ReelSymbolSO sym)
+    {
+        if (quadIndex < 0 || quadIndex >= _quads.Count) return;
+
+        _quads[quadIndex].front.SetSymbol(sym);
+        if (_quads[quadIndex].back != null)
+            _quads[quadIndex].back.SetSymbol(sym);
+
+        // If this quad is "doubled" (ninja), keep the shadow sprite in sync.
+        if (_doubledQuads.Contains(quadIndex) && _shadowRenderers.TryGetValue(quadIndex, out var mr) && mr != null)
+        {
+            var quad = mr.GetComponent<Reel3DSymbolQuad>();
+            if (quad != null)
+                quad.SetSymbol(sym);
+
+            // Dark tint (best-effort across shaders)
+            var mpb = new MaterialPropertyBlock();
+            mr.GetPropertyBlock(mpb);
+            mpb.SetColor("_Color", new Color(0f, 0f, 0f, 0.6f));
+            mpb.SetColor("_BaseColor", new Color(0f, 0f, 0f, 0.6f));
+            mr.SetPropertyBlock(mpb);
         }
     }
 
@@ -391,10 +610,92 @@ public class Reel3DColumn : MonoBehaviour
             return null;
 
         quadIndex = FindIntersectingQuadIndex(planeBounds);
-        if (quadIndex < 0 || quadIndex >= _fixedSymbolOnQuad.Count)
+        if (quadIndex < 0 || quadIndex >= _currentSymbolOnQuad.Count)
             return null;
 
-        return _fixedSymbolOnQuad[quadIndex];
+        return _currentSymbolOnQuad[quadIndex];
+    }
+
+    public ReelSymbolSO GetMidrowSymbolAndMultiplier(GameObject midrowPlane, out int quadIndex, out int multiplier)
+    {
+        ReelSymbolSO s = GetMidrowSymbolByIntersection(midrowPlane, out quadIndex);
+        multiplier = (quadIndex >= 0) ? GetMultiplierForQuad(quadIndex) : 1;
+        return s;
+    }
+
+    private void EnsureShadowForQuad(int quadIndex)
+    {
+        if (_shadowRenderers.ContainsKey(quadIndex)) return;
+        if (quadIndex < 0 || quadIndex >= _quads.Count) return;
+
+        // Attach to the front quad transform so it stays aligned to the icon.
+        var baseFront = _quads[quadIndex].frontT;
+        if (baseFront == null) return;
+
+        // Clone the existing front quad so we inherit mesh/material/shader setup (avoids pink missing-material squares).
+        GameObject shadowGO = Instantiate(baseFront.gameObject, baseFront);
+        shadowGO.name = "Shadow";
+
+        // Remove click/physics from the shadow clone.
+        var col = shadowGO.GetComponent<Collider>();
+        if (col != null) Destroy(col);
+        var ct = shadowGO.GetComponent<Reel3DQuadClickTarget>();
+        if (ct != null) Destroy(ct);
+
+        shadowGO.transform.localRotation = Quaternion.identity;
+        shadowGO.transform.localScale = Vector3.one;
+        shadowGO.transform.localPosition = twofoldShadowLocalOffset;
+
+        var quad = shadowGO.GetComponent<Reel3DSymbolQuad>();
+        if (quad == null) quad = shadowGO.AddComponent<Reel3DSymbolQuad>();
+
+        var mr = shadowGO.GetComponent<MeshRenderer>();
+        if (mr == null) mr = shadowGO.AddComponent<MeshRenderer>();
+        _shadowRenderers[quadIndex] = mr;
+
+        // Ensure we inherit the same materials as the base front quad (some SetSymbol implementations overwrite materials).
+        var baseMr = baseFront.GetComponent<MeshRenderer>();
+        if (baseMr != null)
+            mr.sharedMaterials = baseMr.sharedMaterials;
+
+        // Initialize to current symbol.
+        ReelSymbolSO sym = (quadIndex < _currentSymbolOnQuad.Count) ? _currentSymbolOnQuad[quadIndex] : null;
+        quad.SetSymbol(sym);
+
+        // Dark tint
+        var mpb = new MaterialPropertyBlock();
+        mr.GetPropertyBlock(mpb);
+        mpb.SetColor("_Color", new Color(0f, 0f, 0f, 0.6f));
+        mpb.SetColor("_BaseColor", new Color(0f, 0f, 0f, 0.6f));
+        mr.SetPropertyBlock(mpb);
+    }
+
+    private void SetQuadGlow(int quadIndex, bool on)
+    {
+        if (quadIndex < 0 || quadIndex >= _quads.Count) return;
+        var mr = _quads[quadIndex].frontMr;
+        if (mr == null) return;
+
+        var mpb = new MaterialPropertyBlock();
+        mr.GetPropertyBlock(mpb);
+
+        // "Soft glow" that works even without emission: tint the icon brighter + a bit bluish.
+        // (We also set emission best-effort in case the shader supports it.)
+        if (on)
+        {
+            mpb.SetColor("_Color", new Color(0.65f, 0.85f, 1f, 1f));
+            mpb.SetColor("_BaseColor", new Color(0.65f, 0.85f, 1f, 1f));
+            mpb.SetColor("_EmissionColor", new Color(0.08f, 0.25f, 0.5f, 1f));
+            _glowingQuads.Add(quadIndex);
+        }
+        else
+        {
+            mpb.SetColor("_Color", Color.white);
+            mpb.SetColor("_BaseColor", Color.white);
+            mpb.SetColor("_EmissionColor", Color.black);
+        }
+
+        mr.SetPropertyBlock(mpb);
     }
 
     private int FindIntersectingQuadIndex(Bounds planeBounds)

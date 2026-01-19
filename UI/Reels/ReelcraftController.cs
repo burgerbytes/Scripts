@@ -6,8 +6,8 @@ using UnityEngine;
 ///
 /// Current starter Reelcrafts:
 /// - Fighter: Steel Nudge (nudge their own reel up/down 1 step)
-/// - Mage: Arcane Transmutation (convert one pending resource type into Magic for this reel phase)
-/// - Ninja: Twofold Shadow (double contribution of their own reel's landed symbol for this reel phase)
+/// - Mage: Arcane Transmutation (pick a symbol icon on any reel to permanently transmute to Magic for this battle)
+/// - Ninja: Twofold Shadow (pick the ninja's currently landed icon and make it count as 2 for this battle)
 /// </summary>
 public class ReelcraftController : MonoBehaviour
 {
@@ -22,6 +22,15 @@ public class ReelcraftController : MonoBehaviour
 
     private bool[] _usedThisBattle;
     private int _cachedPartyCount;
+
+    // Mage transmute selection state
+    private bool _transmuteSelecting;
+    private int _transmutePartyIndex = -1;
+    private ReelSymbolSO _magicSymbol;
+
+    [Header("Input")]
+    [Tooltip("Optional: camera used for reelcraft click selection. If null, uses Camera.main, then any camera found in scene.")]
+    [SerializeField] private Camera selectionCamera;
 
     private void Awake()
     {
@@ -48,7 +57,127 @@ public class ReelcraftController : MonoBehaviour
     {
         // Reset once-per-battle uses whenever a new battle starts.
         if (state == BattleManager.BattleState.BattleStart)
+        {
             ResetForBattle();
+            ClearAllReelcraftBattleOverrides();
+        }
+
+        if (state == BattleManager.BattleState.BattleEnd)
+        {
+            // Revert all temporary reel edits (transmutes + doubles) at battle end.
+            ClearAllReelcraftBattleOverrides();
+        }
+    }
+
+    private void Update()
+    {
+        if (!_transmuteSelecting) return;
+        if (reelSpinSystem == null) return;
+        if (!reelSpinSystem.InReelPhase) { CancelTransmuteSelection(); return; }
+
+        // Mouse click selection. IMPORTANT:
+        // We *do not* early-return when over UI, because many UI setups have large RaycastTargets
+        // that would otherwise block clicks on the 3D reels behind them.
+        // Instead: try a physics raycast first; only if we hit nothing do we honor "pointer over UI".
+        if (!Input.GetMouseButtonDown(0)) return;
+
+        Camera cam = selectionCamera;
+        if (cam == null) cam = Camera.main;
+        if (cam == null) cam = FindFirstObjectByType<Camera>();
+        if (cam == null) return;
+
+        Ray ray = cam.ScreenPointToRay(Input.mousePosition);
+        bool hitSomething = Physics.Raycast(ray, out RaycastHit hit, 200f);
+        if (!hitSomething)
+        {
+            if (UnityEngine.EventSystems.EventSystem.current != null && UnityEngine.EventSystems.EventSystem.current.IsPointerOverGameObject())
+                return;
+            return;
+        }
+
+        var target = hit.collider != null ? hit.collider.GetComponentInParent<Reel3DQuadClickTarget>() : null;
+        if (target == null || target.Column == null) return;
+
+        var column = target.Column;
+        int qi = target.QuadIndex;
+
+        // Only allow clicking the currently-landed (midrow) symbol on each reel.
+        if (reelSpinSystem != null && reelSpinSystem.MidrowPlane != null)
+        {
+            int midQi;
+            column.GetMidrowSymbolByIntersection(reelSpinSystem.MidrowPlane, out midQi);
+            if (midQi >= 0 && qi != midQi)
+                return;
+        }
+
+        ReelSymbolSO currentSym = column.GetSymbolOnQuad(qi);
+
+        if (!CanTransmuteSymbol(currentSym))
+            return;
+
+        // Apply: shake the reel, then swap that quad to magic.
+        StartCoroutine(ApplyTransmuteRoutine(column, qi));
+    }
+
+    private bool CanTransmuteSymbol(ReelSymbolSO sym)
+    {
+        // Allow NULL -> MAGIC
+        if (sym == null) return true;
+        if (reelSpinSystem == null) return false;
+
+        if (reelSpinSystem.TryMapSymbolPublic(sym, out ReelSpinSystem.ResourceType rt, out _))
+        {
+            // Allow ATK/DEF/WILD/NULL, but not MAGIC -> MAGIC
+            return rt != ReelSpinSystem.ResourceType.Magic;
+        }
+
+        // Unmapped symbols are treated like NULL (also transmutable)
+        return true;
+    }
+
+    private System.Collections.IEnumerator ApplyTransmuteRoutine(Reel3DColumn column, int quadIndex)
+    {
+        // Prevent double-click spam
+        _transmuteSelecting = false;
+        ShowTransmuteGlow(false);
+
+        if (column != null)
+            yield return column.ShakeRoutine(0.12f, 6f);
+
+        if (_magicSymbol == null && reelSpinSystem != null)
+            _magicSymbol = reelSpinSystem.GetDefaultMagicSymbol();
+
+        if (_magicSymbol == null || column == null)
+        {
+            if (logFlow) Debug.LogWarning("[Reelcraft] Transmute failed: missing magic symbol or column.", this);
+            yield break;
+        }
+
+        bool ok = column.SetQuadTemporarilyTransmutedTo(_magicSymbol, quadIndex);
+        if (!ok)
+        {
+            if (logFlow) Debug.LogWarning($"[Reelcraft] Transmute failed. quadIndex={quadIndex}", this);
+            yield break;
+        }
+
+        // Recompute pending based on current landed symbols/multipliers.
+        // (deltaSteps=0 -> no movement, just re-read + recalc)
+        int idx = reelSpinSystem.FindReelIndexForColumn(column);
+        if (idx >= 0) reelSpinSystem.TryNudgeReel(idx, 0);
+        else
+        {
+            // Fallback: refresh first three
+            reelSpinSystem.TryNudgeReel(0, 0);
+            reelSpinSystem.TryNudgeReel(1, 0);
+            reelSpinSystem.TryNudgeReel(2, 0);
+        }
+
+        MarkUsed(_transmutePartyIndex);
+
+        if (logFlow)
+            Debug.Log($"[Reelcraft] Arcane Transmutation used. partyIndex={_transmutePartyIndex} quadIndex={quadIndex}", this);
+
+        _transmutePartyIndex = -1;
     }
 
     public void ResetForBattle()
@@ -115,26 +244,49 @@ public class ReelcraftController : MonoBehaviour
         if (!CanUse(partyIndex)) return false;
         if (reelSpinSystem == null) return false;
 
-        bool ok = reelSpinSystem.TryNudgeReel(partyIndex, deltaSteps);
-        if (!ok) return false;
-
+        // Mark as used immediately so UI disables right away.
+        // If the routine fails for any reason, we don't refund the use.
         MarkUsed(partyIndex);
-        if (logFlow)
-            Debug.Log($"[Reelcraft] Steel Nudge used. partyIndex={partyIndex} deltaSteps={deltaSteps}", this);
+
+        StartCoroutine(SteelNudgeRoutine(partyIndex, deltaSteps));
         return true;
     }
 
-    public bool TryArcaneTransmutation(int partyIndex, ReelSpinSystem.ResourceType fromType)
+    private System.Collections.IEnumerator SteelNudgeRoutine(int partyIndex, int deltaSteps)
+    {
+        var entry = (reelSpinSystem != null) ? reelSpinSystem.GetReelEntryAt(partyIndex) : null;
+        if (entry == null || entry.reel3d == null)
+            yield break;
+
+        yield return entry.reel3d.ShakeRoutine(0.12f, 6f);
+
+        bool ok = reelSpinSystem.TryNudgeReel(partyIndex, deltaSteps);
+        if (!ok) yield break;
+        if (logFlow)
+            Debug.Log($"[Reelcraft] Steel Nudge used. partyIndex={partyIndex} deltaSteps={deltaSteps}", this);
+    }
+
+    /// <summary>
+    /// Mage: start transmute selection (one click on a glowing icon to transmute it).
+    /// </summary>
+    public bool BeginArcaneTransmutationSelect(int partyIndex)
     {
         if (!CanUse(partyIndex)) return false;
         if (reelSpinSystem == null) return false;
 
-        bool ok = reelSpinSystem.TryConvertPending(fromType, ReelSpinSystem.ResourceType.Magic);
-        if (!ok) return false;
+        _magicSymbol = reelSpinSystem.GetDefaultMagicSymbol();
+        if (_magicSymbol == null)
+        {
+            if (logFlow) Debug.LogWarning("[Reelcraft] No MAGIC symbol found in symbolToResourceMap.", this);
+            return false;
+        }
 
-        MarkUsed(partyIndex);
+        _transmuteSelecting = true;
+        _transmutePartyIndex = partyIndex;
+        ShowTransmuteGlow(true);
+
         if (logFlow)
-            Debug.Log($"[Reelcraft] Arcane Transmutation used. partyIndex={partyIndex} from={fromType} -> Magic", this);
+            Debug.Log($"[Reelcraft] Arcane Transmutation selecting... partyIndex={partyIndex}", this);
         return true;
     }
 
@@ -143,12 +295,71 @@ public class ReelcraftController : MonoBehaviour
         if (!CanUse(partyIndex)) return false;
         if (reelSpinSystem == null) return false;
 
-        bool ok = reelSpinSystem.TryMultiplyReelContribution(partyIndex, multiplier: 2);
-        if (!ok) return false;
+        var entry = reelSpinSystem.GetReelEntryAt(partyIndex);
+        if (entry == null || entry.reel3d == null)
+            return false;
 
+        int qi;
+        ReelSymbolSO sym = entry.reel3d.GetMidrowSymbolByIntersection(reelSpinSystem.MidrowPlane, out qi);
+        if (qi < 0)
+            return false;
+
+        // Mark used immediately so UI disables right away.
         MarkUsed(partyIndex);
-        if (logFlow)
-            Debug.Log($"[Reelcraft] Twofold Shadow used. partyIndex={partyIndex}", this);
+
+        StartCoroutine(TwofoldShadowRoutine(partyIndex, entry.reel3d, qi, sym));
         return true;
+    }
+
+    private System.Collections.IEnumerator TwofoldShadowRoutine(int partyIndex, Reel3DColumn column, int quadIndex, ReelSymbolSO sym)
+    {
+        if (column == null) yield break;
+
+        // Shake the selected icon (matches the "upgrade" feedback feel, but scoped to the icon)
+        yield return column.ShakeIconRoutine(quadIndex);
+
+        bool ok = column.MarkQuadDoubled(quadIndex, enableShadowVisual: true);
+        if (!ok) yield break;
+
+        // Force refresh / recalculation
+        if (reelSpinSystem != null)
+            reelSpinSystem.TryNudgeReel(partyIndex, 0);
+
+        if (logFlow)
+            Debug.Log($"[Reelcraft] Twofold Shadow used. partyIndex={partyIndex} quadIndex={quadIndex} sym={(sym != null ? sym.name : "<null>")}", this);
+    }
+
+    private void CancelTransmuteSelection()
+    {
+        if (!_transmuteSelecting) return;
+        _transmuteSelecting = false;
+        _transmutePartyIndex = -1;
+        ShowTransmuteGlow(false);
+    }
+
+    private void ShowTransmuteGlow(bool on)
+    {
+        if (reelSpinSystem == null) return;
+        var three = reelSpinSystem.GetFirstThree3DReelsPublic();
+        foreach (var e in three)
+        {
+            if (e?.reel3d == null) continue;
+            if (on) e.reel3d.SetGlowForTransmutableMidrow(reelSpinSystem.MidrowPlane, CanTransmuteSymbol);
+            else e.reel3d.ClearAllGlow();
+        }
+    }
+
+    private void ClearAllReelcraftBattleOverrides()
+    {
+        CancelTransmuteSelection();
+
+        if (reelSpinSystem == null) return;
+        var three = reelSpinSystem.GetFirstThree3DReelsPublic();
+        foreach (var e in three)
+        {
+            if (e?.reel3d == null) continue;
+            e.reel3d.RestoreAllTemporaryTransmutes();
+            e.reel3d.ClearAllDoubles();
+        }
     }
 }
