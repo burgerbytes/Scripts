@@ -276,6 +276,8 @@ public class BattleManager : MonoBehaviour
     [Header("Debug")]
     // Turn this OFF once Block is verified end-to-end.
     [SerializeField] private bool logFlow = true;
+    [Tooltip("Logs where the enemy HP bar should decrease after damage is applied.")]
+    [SerializeField] private bool debugEnemyHpBarDrop = true;
 
     public event Action<BattleState> OnBattleStateChanged;
     public event Action<int> OnActivePartyMemberChanged;
@@ -1578,6 +1580,30 @@ NotifyPartyChanged();
                 element: ability.element,
                 abilityTags: ability.tags);
 
+
+            if (debugEnemyHpBarDrop && enemyTarget != null)
+            {
+                Debug.Log($"[Battle][HpBarDrop] After TakeDamageFromAbility target={enemyTarget.name} dealt={dealt} hpNow={enemyTarget.CurrentHp}/{enemyTarget.MaxHp} instance={enemyTarget.GetInstanceID()}", this);
+
+                var hpBar = enemyTarget.GetComponentInChildren<MonsterHpBar>(true);
+                if (hpBar == null)
+                {
+                    Debug.LogWarning($"[Battle][HpBarDrop] No MonsterHpBar found under target={enemyTarget.name} instance={enemyTarget.GetInstanceID()}", this);
+                }
+                else
+                {
+                    Debug.Log($"[Battle][HpBarDrop] Found hpBar={hpBar.name} barInstance={hpBar.GetInstanceID()} barBoundMonster={(hpBar != null ? (hpBar.GetComponentInParent<Monster>() != null ? hpBar.GetComponentInParent<Monster>().GetInstanceID().ToString() : "none") : "none")}", this);
+
+                    // Dump the bar's current visual state so we can see whether it's a fillAmount/scale/width style bar.
+                    hpBar.ForceDebugDumpVisual("BattleManager BEFORE ClearPreview/Refresh");
+                    hpBar.ClearPreview();
+
+                    hpBar.ForceDebugDumpVisual("BattleManager AFTER ClearPreview");
+                    hpBar.RefreshNow("BattleManager post-damage");
+
+                    hpBar.ForceDebugDumpVisual("BattleManager AFTER RefreshNow");
+                }
+            }
             if (performanceTracker != null)
                 performanceTracker.RecordDamageDealt(actorStats, dealt);
 

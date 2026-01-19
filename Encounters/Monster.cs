@@ -140,6 +140,10 @@ public class Monster : MonoBehaviour
     [SerializeField] private int _currentHp = 10;
 
 
+
+    [Header("Debug")]
+    [SerializeField] private bool debugDamageLogs = false;
+
     [Header("Status: Bleeding")]
     [SerializeField] private int _bleedStacks = 0;
 
@@ -376,6 +380,9 @@ public class Monster : MonoBehaviour
 
         int before = _currentHp;
         _currentHp = Mathf.Max(0, _currentHp - amount);
+
+        if (debugDamageLogs)
+            Debug.Log($"[Monster] ApplyRawDamage END monster={name} hpAfter={_currentHp}/{maxHp} amount={amount} instance={GetInstanceID()}", this);
         OnHpChanged?.Invoke(_currentHp, maxHp);
 
         return Mathf.Max(0, before - _currentHp);

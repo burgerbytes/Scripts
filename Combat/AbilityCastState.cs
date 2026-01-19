@@ -34,7 +34,6 @@ public class AbilityCastState : MonoBehaviour
 
     public void ClearCast()
     {
-        Debug.Log("[AbilityCastState] ClearCast", this);
         CurrentCaster = null;
         CurrentAbility = null;
     }

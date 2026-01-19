@@ -19,6 +19,13 @@ public class MonsterHpBar : MonoBehaviour
     [Tooltip("Color used for the damage preview segment.")]
     [SerializeField] private Color previewColor = new Color(1f, 0.92f, 0.1f, 1f);
 
+    [Header("Debug")]
+    [SerializeField] private bool debugHpBarLogs = false;
+
+    private float _baseFillWidth = -1f;
+    private Vector3 _baseFillScale = Vector3.one;
+    private Vector2 _baseFillAnchoredPos = Vector2.zero;
+    private bool _baseFillCached = false;
     private int _lastHp = -1;
     private int _lastMaxHp = -1;
 
@@ -29,16 +36,19 @@ public class MonsterHpBar : MonoBehaviour
     private float _fullWidth = 0f;
     private Vector3 _baseScale = Vector3.one;
 
+    // IMPORTANT: we update ALL plausible "fill" candidates (in case we auto-bound the wrong Image).
+    private Image[] _fillCandidates;
+
     private void Reset()
     {
         monster = GetComponentInParent<Monster>();
-        AutoFindFillImage();
+        AutoFindFillImages();
     }
 
     private void Awake()
     {
         if (monster == null) monster = GetComponentInParent<Monster>();
-        AutoFindFillImage();
+        AutoFindFillImages();
 
         CacheFillMode();
 
@@ -53,6 +63,8 @@ public class MonsterHpBar : MonoBehaviour
 
     private void OnEnable()
     {
+        TryAutoBind();
+
         if (monster != null)
             monster.OnHpChanged += HandleHpChanged;
 
@@ -68,11 +80,25 @@ public class MonsterHpBar : MonoBehaviour
             monster.OnHpChanged -= HandleHpChanged;
     }
 
-    private void AutoFindFillImage()
+    private void TryAutoBind()
     {
-        if (fillImage != null) return;
+        if (monster == null)
+            monster = GetComponentInParent<Monster>();
 
+        if (fillImage == null || _fillCandidates == null || _fillCandidates.Length == 0)
+            AutoFindFillImages();
+    }
+
+    private void AutoFindFillImages()
+    {
+        // Collect candidates first.
         var images = GetComponentsInChildren<Image>(true);
+        _fillCandidates = images;
+
+        if (fillImage != null)
+            return;
+
+        // Prefer an Image explicitly named "Fill".
         for (int i = 0; i < images.Length; i++)
         {
             var img = images[i];
@@ -84,12 +110,24 @@ public class MonsterHpBar : MonoBehaviour
             }
         }
 
-        // fallback: first Filled Image
+        // Next: first Filled Image.
         for (int i = 0; i < images.Length; i++)
         {
             var img = images[i];
             if (img == null) continue;
             if (img.type == Image.Type.Filled)
+            {
+                fillImage = img;
+                return;
+            }
+        }
+
+        // Last resort: any Image whose name contains "fill".
+        for (int i = 0; i < images.Length; i++)
+        {
+            var img = images[i];
+            if (img == null) continue;
+            if (img.name.ToLowerInvariant().Contains("fill"))
             {
                 fillImage = img;
                 return;
@@ -143,7 +181,40 @@ public class MonsterHpBar : MonoBehaviour
         hpDamagePreviewRect.anchoredPosition = new Vector2(0f, src.anchoredPosition.y);
         hpDamagePreviewRect.sizeDelta = new Vector2(0f, src.sizeDelta.y);
         hpDamagePreviewRect.localRotation = src.localRotation;
-        hpDamagePreviewRect.localScale = src.localScale;
+        // IMPORTANT: do NOT copy the fill's runtime scale. The fill may be scaled as HP changes.
+        // The preview segment should stay in "full bar" space and be sized explicitly.
+        hpDamagePreviewRect.localScale = Vector3.one;
+    }
+
+    private void CacheFillCandidates()
+    {
+        // Find likely fill images: name contains "fill" OR Image.Type.Filled.
+        // Exclude background/frame names so we don't accidentally change them.
+        var images = GetComponentsInChildren<Image>(true);
+        System.Collections.Generic.List<Image> list = new System.Collections.Generic.List<Image>(8);
+        for (int i = 0; i < images.Length; i++)
+        {
+            var img = images[i];
+            if (img == null) continue;
+            if (hpDamagePreviewImage != null && img == hpDamagePreviewImage) continue;
+
+            string n = img.name != null ? img.name.ToLowerInvariant() : "";
+            bool looksLikeBg = n.Contains("bg") || n.Contains("back") || n.Contains("frame") || n.Contains("border");
+            bool looksLikeFill = n.Contains("fill") || img.type == Image.Type.Filled;
+
+            if (looksLikeFill && !looksLikeBg)
+                list.Add(img);
+        }
+
+        _fillCandidates = list.ToArray();
+
+        if (debugHpBarLogs)
+        {
+            string names = "";
+            for (int i = 0; i < _fillCandidates.Length; i++)
+                names += (i == 0 ? "" : ", ") + _fillCandidates[i].name + ":" + _fillCandidates[i].type;
+            Debug.Log($"[MonsterHpBar] CacheFillCandidates count={_fillCandidates.Length} [{names}] barObj={name}", this);
+        }
     }
 
     private void CacheFillMode()
@@ -152,6 +223,9 @@ public class MonsterHpBar : MonoBehaviour
 
         // If it's a Filled image, fillAmount works.
         _useFillAmount = (fillImage.type == Image.Type.Filled);
+
+        // NOTE: We do NOT set any fillAmount here because this method is called during caching.
+        // Actual fill updates happen in ApplyFillAmountToCandidates(value01).
 
         RectTransform rt = fillImage.rectTransform;
         if (rt == null)
@@ -169,50 +243,195 @@ public class MonsterHpBar : MonoBehaviour
         // Non-filled images: either resize (if fixed anchors) or scale (if stretch anchors).
         _useScaleFallback = !Mathf.Approximately(rt.anchorMin.x, rt.anchorMax.x);
 
-        // Try to capture the full width at "100% HP". If current HP isn't full, we'll still use the current rect width
-        // and scale from there – better than doing nothing.
+        // Try to capture the full width at "100% HP".
         _fullWidth = rt.rect.width;
         if (_fullWidth <= 0.01f)
             _fullWidth = rt.sizeDelta.x;
     }
 
-    private void SetFill01(float value01)
+    private void ApplyFillAmountToCandidates(float value01)
+    {
+        if (_fillCandidates == null) return;
+
+        for (int i = 0; i < _fillCandidates.Length; i++)
+        {
+            var img = _fillCandidates[i];
+            if (img == null) continue;
+            if (!img.enabled) continue;
+            if (img.gameObject == null) continue;
+            if (img.gameObject.name == "HPDamagePreview") continue;
+
+            // Only touch plausible fill visuals.
+            string n = img.name.ToLowerInvariant();
+            bool nameLooksLikeFill = (n == "fill" || n.Contains("fill"));
+            bool typeIsFilled = (img.type == Image.Type.Filled);
+
+            // Avoid modifying obvious non-fills.
+            bool looksLikeBackground = n.Contains("bg") || n.Contains("back") || n.Contains("frame") || n.Contains("border");
+            if (looksLikeBackground && !typeIsFilled) continue;
+
+            if (typeIsFilled || nameLooksLikeFill)
+            {
+                // If it's actually filled, fillAmount is authoritative.
+                if (img.type == Image.Type.Filled)
+                    img.fillAmount = value01;
+            }
+        }
+    }
+    private void CacheBaseFillGeometry()
     {
         if (fillImage == null) return;
+        var rt = fillImage.rectTransform;
+        if (rt == null) return;
+
+        if (_baseFillWidth <= 0.01f)
+        {
+            // Prefer sizeDelta.x if meaningful, otherwise rect.width.
+            float w = (rt.sizeDelta.x > 0.01f) ? rt.sizeDelta.x : rt.rect.width;
+            if (w <= 0.01f) w = 100f;
+            _baseFillWidth = w;
+        }
+
+        // Cache the starting scale (used for stretch-anchor cases)
+        if (_baseFillScale == Vector3.one && rt.localScale != Vector3.one)
+            _baseFillScale = rt.localScale;
+        else if (_baseFillScale == Vector3.one)
+            _baseFillScale = rt.localScale;
+    }
+
+    private void SetFill01(float value01)
+    {
+        if (fillImage == null)
+        {
+            AutoFindFillImages();
+            if (fillImage == null) return;
+        }
 
         value01 = Mathf.Clamp01(value01);
 
-        if (_useFillAmount && fillImage.type == Image.Type.Filled)
+        // Make sure candidates exist (your script already has this)
+        if (_fillCandidates == null || _fillCandidates.Length == 0)
+            CacheFillCandidates();
+
+        CacheBaseFillGeometry();
+
+        // 1) Filled-image path: update all Filled candidates (covers “wrong Image bound” issues)
+        ApplyFillAmountToCandidates(value01);
+
+        // 2) Width/scale path: ALSO update the RectTransform for the primary fill
+        //    (covers prefabs where visible bar uses mask/width rather than fillAmount)
+        RectTransform rt = fillImage.rectTransform;
+        if (rt != null)
         {
-            fillImage.fillAmount = value01;
+            bool fixedAnchors = Mathf.Abs(rt.anchorMin.x - rt.anchorMax.x) < 0.0001f;
+
+            if (fixedAnchors)
+            {
+                // Fixed anchors => width is driven by sizeDelta / SetSizeWithCurrentAnchors
+                float fullW = (_baseFillWidth > 0.01f) ? _baseFillWidth : rt.rect.width;
+                if (fullW <= 0.01f) fullW = 100f;
+                SetWidthKeepLeft(rt, fullW * value01);
+            }
+            else
+            {
+                // Stretch anchors => safest is scale
+                Vector3 s = _baseFillScale;
+                s.x = _baseFillScale.x * value01;
+                SetScaleKeepLeft(rt, s.x);
+            }
+
+            fillImage.SetVerticesDirty();
+        }
+
+        // 3) If there are non-Filled images named exactly “Fill”, resize/scale them too.
+        //    (Some prefabs have a Simple Image called Fill under a Mask.)
+        if (_fillCandidates != null)
+        {
+            for (int i = 0; i < _fillCandidates.Length; i++)
+            {
+                var img = _fillCandidates[i];
+                if (img == null) continue;
+                if (img == hpDamagePreviewImage) continue;
+
+                string n = (img.name ?? "").ToLowerInvariant();
+                if (n != "fill") continue;
+                if (img.type == Image.Type.Filled) continue;
+
+                var rti = img.rectTransform;
+                if (rti == null) continue;
+
+                bool fixedA = Mathf.Abs(rti.anchorMin.x - rti.anchorMax.x) < 0.0001f;
+                if (fixedA)
+                {
+                    float fullW = (rti.sizeDelta.x > 0.01f) ? rti.sizeDelta.x : rti.rect.width;
+                    if (fullW <= 0.01f) fullW = (_baseFillWidth > 0.01f) ? _baseFillWidth : 100f;
+                    SetWidthKeepLeft(rti, fullW * value01);
+                }
+                else
+                {
+                    // Keep left edge fixed while scaling.
+                    SetScaleKeepLeft(rti, value01);
+                }
+
+                img.SetVerticesDirty();
+            }
+        }
+
+        if (debugHpBarLogs && monster != null)
+            Debug.Log($"[MonsterHpBar] SetFill01 applied value01={value01:0.###} monster={monster.name} hp={monster.CurrentHp}/{monster.MaxHp}", this);
+    }
+
+    private void DebugDumpVisualInternal(string tag, bool force)
+    {
+        if (!force && !debugHpBarLogs) return;
+
+        TryAutoBind();
+
+        if (fillImage == null)
+        {
+            Debug.LogWarning($"[MonsterHpBar] DebugDumpVisual tag={tag} no fillImage. barObj={name}", this);
             return;
         }
 
-        RectTransform rt = fillImage.rectTransform;
-        if (rt == null) return;
+        var rt = fillImage.rectTransform;
+        string m = (monster != null)
+            ? $"monster={monster.name} hp={monster.CurrentHp}/{monster.MaxHp} monsterInstance={monster.GetInstanceID()}"
+            : "monster=NULL";
 
-        // If the prefab uses stretch anchors, changing sizeDelta won't do what we want.
-        if (_useScaleFallback)
+        Debug.Log(
+            $"[MonsterHpBar] DebugDumpVisual tag={tag} {m} barObj={name} barInstance={GetInstanceID()} " +
+            $"imgType={fillImage.type} fillAmt={fillImage.fillAmount:0.###} rectW={rt.rect.width:0.###} rectH={rt.rect.height:0.###} " +
+            $"anchors=({rt.anchorMin.x:0.###},{rt.anchorMin.y:0.###})-({rt.anchorMax.x:0.###},{rt.anchorMax.y:0.###}) " +
+            $"sizeDelta=({rt.sizeDelta.x:0.###},{rt.sizeDelta.y:0.###}) localScale=({rt.localScale.x:0.###},{rt.localScale.y:0.###},{rt.localScale.z:0.###})",
+            this);
+
+        // Also dump all filled candidates (helps diagnose "stomped"/wrong-image cases).
+        if (_fillCandidates != null)
         {
-            Vector3 s = _baseScale;
-            s.x = _baseScale.x * value01;
-            rt.localScale = s;
-        }
-        else
-        {
-            float w = _fullWidth;
-            if (w <= 0.01f)
-                w = rt.rect.width;
-            rt.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, w * value01);
+            for (int i = 0; i < _fillCandidates.Length; i++)
+            {
+                var img = _fillCandidates[i];
+                if (img == null) continue;
+                if (img.gameObject != null && img.gameObject.name == "HPDamagePreview") continue;
+                if (img.type != Image.Type.Filled) continue;
+
+                Debug.Log(
+                    $"[MonsterHpBar] CandidateFilled tag={tag} name={img.name} enabled={img.enabled} fillAmt={img.fillAmount:0.###} colorA={img.color.a:0.###} goActive={img.gameObject.activeInHierarchy}",
+                    this);
+            }
         }
     }
+
+    public void DebugDumpVisual(string tag) => DebugDumpVisualInternal(tag, force: false);
+    public void ForceDebugDumpVisual(string tag) => DebugDumpVisualInternal(tag, force: true);
 
     private void HandleHpChanged(int current, int max)
     {
         _lastHp = current;
         _lastMaxHp = max;
 
-        if (fillImage == null) return;
+        if (debugHpBarLogs && monster != null)
+            Debug.Log($"[MonsterHpBar] HandleHpChanged monster={monster.name} hp={current}/{max} barObj={name} monsterInstance={monster.GetInstanceID()} barInstance={GetInstanceID()}", this);
 
         int safeMax = Mathf.Max(1, max);
         float current01 = Mathf.Clamp01((float)current / safeMax);
@@ -226,13 +445,20 @@ public class MonsterHpBar : MonoBehaviour
     public void SetDamagePreview(int predictedHpAfterDamage)
     {
         if (monster == null) return;
-        if (fillImage == null) AutoFindFillImage();
+        if (fillImage == null) AutoFindFillImages();
         if (fillImage == null) return;
 
         EnsurePreviewObjects();
         if (hpBarFullRect == null || hpDamagePreviewRect == null || hpDamagePreviewImage == null) return;
 
+        // IMPORTANT: preview math must be based on the FULL bar geometry (100% HP),
+        // not on the current/shrunk fill rect. Otherwise the preview segment will
+        // appear offset, too small/large, or leave "black gaps".
+        CacheBaseFillGeometry();
+
         int currentHP = monster.CurrentHp;
+        if (debugHpBarLogs)
+            Debug.Log($"[MonsterHpBar] SetDamagePreview monster={monster.name} hpNow={currentHP}/{monster.MaxHp} predictedAfter={predictedHpAfterDamage} barObj={name} monsterInstance={monster.GetInstanceID()} barInstance={GetInstanceID()}", this);
         int maxHP = Mathf.Max(1, monster.MaxHp);
 
         // Clamp predicted HP into a valid range
@@ -244,21 +470,47 @@ public class MonsterHpBar : MonoBehaviour
         float current01 = Mathf.Clamp01((float)currentHP / maxHP);
         float predicted01 = Mathf.Clamp01((float)predictedHP / maxHP);
 
-        // Shrink main fill to predicted
-        SetFill01(predicted01);
+        // Create a segment from predicted -> current using FULL width (cached).
+        // _baseFillWidth is the local-width at 100% HP (unscaled).
+        float fullLocalWidth = (_baseFillWidth > 0.01f) ? _baseFillWidth : hpBarFullRect.rect.width;
+        if (fullLocalWidth <= 0.01f) fullLocalWidth = 100f;
 
-        // Create a segment from predicted -> current
-        float barWidth = hpBarFullRect.rect.width;
-        float leftX = predicted01 * barWidth;
-        float rightX = current01 * barWidth;
-        float width = Mathf.Max(0f, rightX - leftX);
+        float leftX = predicted01 * fullLocalWidth;
+        float width = Mathf.Max(0f, (current01 - predicted01) * fullLocalWidth);
 
-        // Position segment
-        hpDamagePreviewRect.anchoredPosition = new Vector2(leftX, hpDamagePreviewRect.anchoredPosition.y);
-        hpDamagePreviewRect.sizeDelta = new Vector2(width, hpDamagePreviewRect.sizeDelta.y);
-
+        // Position segment (our preview rect is anchored/pivoted to the left in EnsurePreviewObjects).
         bool visible = dmg > 0 && width > 0.5f; // avoid tiny slivers
         hpDamagePreviewImage.enabled = visible;
+
+        if (visible)
+        {
+            hpDamagePreviewRect.anchoredPosition = new Vector2(leftX, hpDamagePreviewRect.anchoredPosition.y);
+            hpDamagePreviewRect.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, width);
+        }
+        else
+        {
+            // Prevent stale segments from previous previews.
+            hpDamagePreviewRect.anchoredPosition = new Vector2(0f, hpDamagePreviewRect.anchoredPosition.y);
+            hpDamagePreviewRect.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, 0f);
+        }
+
+        // Shrink main fill to predicted (after preview is computed, so we don't stomp our measurements)
+        SetFill01(predicted01);
+    }
+
+    public void RefreshNow(string reason = "")
+    {
+        TryAutoBind();
+        if (monster == null)
+        {
+            if (debugHpBarLogs) Debug.LogWarning($"[MonsterHpBar] RefreshNow: no monster bound. reason={reason} this={name}", this);
+            return;
+        }
+
+        if (debugHpBarLogs)
+            Debug.Log($"[MonsterHpBar] RefreshNow reason={reason} monster={monster.name} hp={monster.CurrentHp}/{monster.MaxHp} barObj={name} monsterInstance={monster.GetInstanceID()} barInstance={GetInstanceID()}", this);
+
+        HandleHpChanged(monster.CurrentHp, monster.MaxHp);
     }
 
     public void ClearPreview()
@@ -266,13 +518,58 @@ public class MonsterHpBar : MonoBehaviour
         if (hpDamagePreviewImage != null)
             hpDamagePreviewImage.enabled = false;
 
+        if (hpDamagePreviewRect != null)
+            hpDamagePreviewRect.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, 0f);
+
         // Restore fill to current HP
-        if (fillImage != null && monster != null)
+        if (debugHpBarLogs && monster != null)
+            Debug.Log($"[MonsterHpBar] ClearPreview monster={monster.name} hp={monster.CurrentHp}/{monster.MaxHp} barObj={name} monsterInstance={monster.GetInstanceID()} barInstance={GetInstanceID()}", this);
+
+        if (monster != null)
         {
             int maxHP = Mathf.Max(1, monster.MaxHp);
             float current01 = Mathf.Clamp01((float)monster.CurrentHp / maxHP);
             SetFill01(current01);
         }
     }
-}
 
+    private void CacheFillBase(RectTransform rt)
+    {
+        if (rt == null || _baseFillCached) return;
+
+        // Full-width geometry at "100% HP"
+        _baseFillWidth = (rt.sizeDelta.x > 0.01f) ? rt.sizeDelta.x : rt.rect.width;
+        if (_baseFillWidth <= 0.01f) _baseFillWidth = 100f;
+
+        _baseFillScale = rt.localScale;
+        _baseFillAnchoredPos = rt.anchoredPosition;
+        _baseFillCached = true;
+    }
+
+    private void SetWidthKeepLeft(RectTransform rt, float newWidth)
+    {
+        // Keep the left edge constant in anchored space
+        float left = rt.anchoredPosition.x - rt.rect.width * rt.pivot.x;
+
+        rt.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, newWidth);
+
+        // After width change, restore anchoredPosition so left edge stays fixed
+        rt.anchoredPosition = new Vector2(left + newWidth * rt.pivot.x, rt.anchoredPosition.y);
+    }
+
+    private void SetScaleKeepLeft(RectTransform rt, float newScaleX)
+    {
+        // Keep the left edge constant in anchored space, without relying on cached base geometry.
+        // This is robust even if the monster spawns already damaged.
+        float currentRenderedW = rt.rect.width * rt.localScale.x;
+        float left = rt.anchoredPosition.x - currentRenderedW * rt.pivot.x;
+
+        var s = rt.localScale;
+        s.x = newScaleX;
+        rt.localScale = s;
+
+        float newRenderedW = rt.rect.width * newScaleX;
+        rt.anchoredPosition = new Vector2(left + newRenderedW * rt.pivot.x, rt.anchoredPosition.y);
+    }
+
+}
