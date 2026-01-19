@@ -10,6 +10,9 @@ using UnityEngine.UI;
 using TMPro;
 using System.Runtime.CompilerServices;
 
+// Project specific namespaces
+using SlotsAndSorcery.VFX;
+
 public class BattleManager : MonoBehaviour
 {
     public  int PlayerTurnNumber;
@@ -184,6 +187,15 @@ public class BattleManager : MonoBehaviour
     [SerializeField] private DamageNumber damageNumberPrefab;
     [SerializeField] private Vector3 damageNumberWorldOffset = new Vector3(0f, 1.2f, 0f);
     [SerializeField] private Vector3 damageNumberRandomJitter = new Vector3(0.2f, 0.15f, 0f);
+
+    [Header("Heal VFX Spawner")]
+    [SerializeField] private HealVFXSpawner healVfxSpawner;
+
+    [Tooltip("World offset applied when spawning the heal VFX.")]
+    [SerializeField] private Vector3 healVfxWorldOffset = new Vector3(0f, 1.2f, 0f);
+
+    [Tooltip("Fallback destroy time if the prefab has no ParticleSystems or duration can't be computed.")]
+    [SerializeField] private float healVfxFallbackDestroySeconds = 2.0f;
 
     [Tooltip("If Damage Number Prefab is not assigned, BattleManager will spawn a simple TextMeshPro damage number in world-space.")]
     [SerializeField] private bool enableRuntimeDamageNumbers = true;
@@ -1384,6 +1396,24 @@ NotifyPartyChanged();
                         stateToPlay = "mage_basic_attack"; // fallback example
                     break;
 
+                case "Heal":
+                    // Heal uses the same casting animation timing as Pyre.
+                    useImpactSync = true;
+                    // Prefer an explicit Heal mapping if provided, otherwise fall back to Pyre mapping, then the mage default.
+                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("Heal") : null;
+                    if (string.IsNullOrWhiteSpace(stateToPlay))
+                        stateToPlay = profile != null ? profile.GetAttackStateForAbility("Pyre") : null;
+                    if (string.IsNullOrWhiteSpace(stateToPlay))
+                        stateToPlay = "mage_basic_attack";
+                    break;
+
+                case "First Aid":
+                    useImpactSync = true;
+                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("First Aid") : null;
+                    if (string.IsNullOrWhiteSpace(stateToPlay))
+                        stateToPlay = "fighter_magic_ability";
+                    break;
+
                 case "Backstab":
                     useImpactSync = true; // if you want damage to happen on a specific frame
                     stateToPlay = profile != null ? profile.GetAttackStateForAbility("Backstab") : null;
@@ -1417,6 +1447,14 @@ NotifyPartyChanged();
                     break;
             }
 
+            // If this is a heal/shield targeting Self/Ally, default to syncing the effect
+            // to the impact event (if the animation clip has one).
+            if ((ability.targetType == AbilityTargetType.Self || ability.targetType == AbilityTargetType.Ally) &&
+                (ability.healAmount > 0 || ability.shieldAmount > 0))
+            {
+                useImpactSync = true;
+            }
+
             if (!string.IsNullOrWhiteSpace(stateToPlay))
             {
                 if (logFlow) Debug.Log($"[Battle][Resolve] Playing animation state '{stateToPlay}'. useImpactSync={useImpactSync}", this);
@@ -1430,6 +1468,28 @@ NotifyPartyChanged();
         else
         {
             if (logFlow) Debug.Log("[Battle][Resolve] No animator found on actor; skipping animation.", this);
+        }
+
+        // For ally/self support abilities (heal/shield), we want the effect to occur
+        // on the caster's impact frame if the animation is configured with an AttackImpact event.
+        bool isSupportAbility = (ability.targetType == AbilityTargetType.Self || ability.targetType == AbilityTargetType.Ally)
+                                && (ability.healAmount > 0 || ability.shieldAmount > 0);
+
+        if (isSupportAbility && useImpactSync && anim != null)
+        {
+            if (logFlow) Debug.Log("[Battle][Resolve] Support ability: waiting for AttackImpact animation event...", this);
+
+            yield return null;
+
+            float elapsed = 0f;
+            const float failSafeSeconds = 3.0f;
+            while (!_impactFired && elapsed < failSafeSeconds)
+            {
+                elapsed += Time.deltaTime;
+                yield return null;
+            }
+
+            if (logFlow) Debug.Log($"[Battle][Resolve] Support impact wait finished. impactFired={_impactFired} elapsed={elapsed:0.000}s", this);
         }
 
         if (ability.targetType == AbilityTargetType.Enemy && enemyTarget != null)
@@ -1551,6 +1611,7 @@ NotifyPartyChanged();
                 {
                     Vector3 pos = (targetGO != null) ? targetGO.transform.position : (targetStats != null ? targetStats.transform.position : Vector3.zero);
                     SpawnHealNumber(pos, healed);
+                    SpawnHealVfx(targetStats.transform);
                 }
             }
         }
@@ -2527,6 +2588,60 @@ NotifyPartyChanged();
 
         var runtime = go.AddComponent<RuntimeDamageNumber>();
         runtime.Initialize(Camera.main, runtimeDamageNumberLifetime, runtimeDamageNumberRiseDistance);
+    }
+
+    // private void SpawnHealVfx(Vector3 worldPos)
+    // {
+    //     if (healVfxPrefab == null)
+    //         return;
+
+    //     GameObject go = Instantiate(healVfxPrefab, worldPos + healVfxWorldOffset, Quaternion.identity);
+
+    //     // Auto-destroy after the longest particle system finishes.
+    //     float life = ComputeParticleLifetimeSeconds(go, healVfxFallbackDestroySeconds);
+    //     Destroy(go, life);
+    // }
+
+    private void SpawnHealVfx(Transform targetRoot)
+    {
+        if (healVfxSpawner == null || targetRoot == null)
+            return;
+
+        healVfxSpawner.PlayHealVfx(targetRoot);
+    }
+
+    private static float ComputeParticleLifetimeSeconds(GameObject root, float fallbackSeconds)
+    {
+        if (root == null) return fallbackSeconds;
+
+        var systems = root.GetComponentsInChildren<ParticleSystem>(true);
+        if (systems == null || systems.Length == 0)
+            return fallbackSeconds;
+
+        float maxEnd = 0f;
+        for (int i = 0; i < systems.Length; i++)
+        {
+            var ps = systems[i];
+            var main = ps.main;
+
+            float duration = main.duration;
+
+            float startDelay = 0f;
+            var delay = main.startDelay;
+            if (delay.mode == ParticleSystemCurveMode.Constant) startDelay = delay.constant;
+            else if (delay.mode == ParticleSystemCurveMode.TwoConstants) startDelay = delay.constantMax;
+
+            float lifetime = 0f;
+            var lt = main.startLifetime;
+            if (lt.mode == ParticleSystemCurveMode.Constant) lifetime = lt.constant;
+            else if (lt.mode == ParticleSystemCurveMode.TwoConstants) lifetime = lt.constantMax;
+
+            float end = startDelay + duration + lifetime;
+            if (end > maxEnd) maxEnd = end;
+        }
+
+        // small padding so the fade completes
+        return Mathf.Max(fallbackSeconds, maxEnd + 0.15f);
     }
 
     private static void TrySetDamageNumberValue(DamageNumber dn, int amount)
