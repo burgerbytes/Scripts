@@ -414,6 +414,21 @@ public class HeroStats : MonoBehaviour
         return Mathf.Max(0, before - currentHp);
     }
 
+    /// <summary>
+    /// Removes all Bleeding stacks immediately.
+    /// Returns true if a change was made.
+    /// </summary>
+    public bool ClearBleeding()
+    {
+        if (bleedStacks <= 0)
+            return false;
+
+        bleedStacks = 0;
+        bleedAppliedOnPlayerTurn = -999;
+        NotifyChanged();
+        return true;
+    }
+
 
 
     // ---------------- Stun ----------------
@@ -457,6 +472,32 @@ public class HeroStats : MonoBehaviour
         if (playerPhases <= 0) return;
         stunnedPlayerPhasesRemaining += playerPhases;
         NotifyChanged();
+    }
+
+    /// <summary>
+    /// Clears any current stun and any queued upcoming stunned player phases.
+    /// Returns true if a change was made.
+    /// </summary>
+    public bool ClearStun()
+    {
+        bool changed = false;
+
+        if (isStunned)
+        {
+            isStunned = false;
+            changed = true;
+        }
+
+        if (stunnedPlayerPhasesRemaining > 0)
+        {
+            stunnedPlayerPhasesRemaining = 0;
+            changed = true;
+        }
+
+        if (changed)
+            NotifyChanged();
+
+        return changed;
     }
 
     // ---------------- Triple Blade flag ----------------
@@ -974,3 +1015,5 @@ public class HeroStats : MonoBehaviour
 
 
 ////////////////////////////////////////////////////////////
+
+

@@ -1634,6 +1634,35 @@ NotifyPartyChanged();
             }
         }
 
+        // ---------------- Status Cleansing (Bleeding / Stunned) ----------------
+        // Support abilities can optionally remove certain status effects from the Hero target.
+        // This is data-driven via AbilityDefinitionSO.removesStatusEffects, with a safety
+        // special-case so that "First Aid" always clears Bleeding.
+        if (ability.targetType == AbilityTargetType.Self || ability.targetType == AbilityTargetType.Ally)
+        {
+            bool hasConfiguredCleansing = (ability.removesStatusEffects != null && ability.removesStatusEffects.Count > 0);
+            bool isFirstAid = (ability.name == "First Aid" || ability.abilityName == "First Aid");
+
+            if (hasConfiguredCleansing || isFirstAid)
+            {
+                HeroStats cleanseTargetStats = actorStats;
+                GameObject cleanseTargetGO = actor != null ? actor.avatarGO : null;
+                string cleanseTargetName = actor != null ? actor.name : (actorStats != null ? actorStats.name : "<null>");
+
+                if (ability.targetType == AbilityTargetType.Ally)
+                {
+                    if (IsValidPartyIndex(_selectedPartyTargetIndex) && _party[_selectedPartyTargetIndex] != null)
+                    {
+                        cleanseTargetStats = _party[_selectedPartyTargetIndex].stats;
+                        cleanseTargetGO = _party[_selectedPartyTargetIndex].avatarGO;
+                        cleanseTargetName = _party[_selectedPartyTargetIndex].name;
+                    }
+                }
+
+                ApplyStatusCleansingToHero(ability, cleanseTargetStats, cleanseTargetName, cleanseTargetGO, forceBleedForFirstAid: isFirstAid);
+            }
+        }
+
         bool wasHiddenBeforeCast = actorStats.IsHidden;
 
         if (ability.name == "Conceal")
@@ -1666,6 +1695,57 @@ NotifyPartyChanged();
         if (_saveStates != null && _saveStates.Count > 1)
             SetUndoButtonEnabled(true);
 
+    }
+
+    private void ApplyStatusCleansingToHero(
+        AbilityDefinitionSO ability,
+        HeroStats targetStats,
+        string targetName,
+        GameObject targetGO,
+        bool forceBleedForFirstAid)
+    {
+        if (ability == null || targetStats == null) return;
+
+        bool clearBleed = forceBleedForFirstAid;
+        bool clearStun = false;
+
+        var list = ability.removesStatusEffects;
+        if (list != null)
+        {
+            for (int i = 0; i < list.Count; i++)
+            {
+                switch (list[i])
+                {
+                    case RemovableStatusEffect.Bleeding:
+                        clearBleed = true;
+                        break;
+                    case RemovableStatusEffect.Stunned:
+                        clearStun = true;
+                        break;
+                }
+            }
+        }
+
+        int removedCount = 0;
+
+        if (clearBleed)
+        {
+            bool removed = false;
+            try { removed = targetStats.ClearBleeding(); } catch { removed = false; }
+            if (removed) removedCount++;
+            if (logFlow && removed) Debug.Log($"[Battle][Cleanse] Removed BLEEDING from {targetName} via {ability.abilityName}", this);
+        }
+
+        if (clearStun)
+        {
+            bool removed = false;
+            try { removed = targetStats.ClearStun(); } catch { removed = false; }
+            if (removed) removedCount++;
+            if (logFlow && removed) Debug.Log($"[Battle][Cleanse] Removed STUNNED from {targetName} via {ability.abilityName}", this);
+        }
+
+        if (removedCount > 0)
+            NotifyPartyChanged();
     }
 
     private ResourceCost GetEffectiveCost(HeroStats actor, AbilityDefinitionSO ability)
@@ -2997,3 +3077,4 @@ NotifyPartyChanged();
 
 
 ////////////////////////////////////////////////////////////
+

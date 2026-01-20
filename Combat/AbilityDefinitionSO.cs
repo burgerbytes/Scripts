@@ -19,6 +19,16 @@ public enum AbilityTag
     FireElemental
 }
 
+/// <summary>
+/// Status effects an ability can remove from a Hero target.
+/// (We only include effects that exist in the current runtime status systems.)
+/// </summary>
+public enum RemovableStatusEffect
+{
+    Bleeding,
+    Stunned
+}
+
 [CreateAssetMenu(menuName = "Combat/Ability Definition")]
 public class AbilityDefinitionSO : ScriptableObject
 {
@@ -41,6 +51,10 @@ public class AbilityDefinitionSO : ScriptableObject
     [Header("Healing")]
     [Tooltip("Flat HP restored to the target (clamped to Max HP).")]
     public int healAmount = 0;
+
+    [Header("Cleansing")]
+    [Tooltip("Status effects removed from the target when this ability resolves (Hero targets only).")]
+    public List<RemovableStatusEffect> removesStatusEffects = new List<RemovableStatusEffect>();
 
     [Header("Tags")]
     [Tooltip("Optional tags that can add special rules and synergies.")]
@@ -68,3 +82,5 @@ public class AbilityDefinitionSO : ScriptableObject
 
 
 ////////////////////////////////////////////////////////////
+
+
