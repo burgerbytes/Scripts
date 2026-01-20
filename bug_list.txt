@@ -1,7 +1,6 @@
 bugs
 - status and ability menus should be hidden during reel phase
 - after reel phase ability and stats panels should be disabled
-- aoe attacks now hit concealed units, but aoe attacks need to show damage preview on concealed units
 - fighter reelcraft doesnt work properly (needs throrough debugging)
 - upgrade reel spin shouldnt choose another random symbol to upgrade if the symbol landed on is already upgraded
 

@@ -23,6 +23,9 @@ public class ReelcraftController : MonoBehaviour
     [Header("Debug")]
     [SerializeField] private bool logFlow = true;
 
+    [Tooltip("Debug: allow Fighter's Measured Bash to be used unlimited times per battle (ignores once-per-battle lockout).")]
+    [SerializeField] private bool debugUnlimitedFighterMeasuredBash = true;
+
     private bool[] _usedThisBattle;
     private int _cachedPartyCount;
 
@@ -218,7 +221,19 @@ public class ReelcraftController : MonoBehaviour
         if (reelSpinSystem == null) return false;
         if (!reelSpinSystem.InReelPhase) return false;
         if (!reelSpinSystem.HasCurrentLandedSymbols) return false;
-        return !HasUsed(partyIndex);
+
+        if (!HasUsed(partyIndex))
+            return true;
+
+        // Debug: allow unlimited Measured Bash for Fighters.
+        if (debugUnlimitedFighterMeasuredBash && battleManager != null)
+        {
+            HeroStats hero = battleManager.GetHeroAtPartyIndex(partyIndex);
+            if (GetArchetype(hero) == ReelcraftArchetype.Fighter)
+                return true;
+        }
+
+        return false;
     }
 
     public ReelcraftArchetype GetArchetype(HeroStats hero)
@@ -267,7 +282,22 @@ public class ReelcraftController : MonoBehaviour
 
         // Mark as used immediately so UI disables right away.
         // If the routine fails for any reason, we don't refund the use.
-        MarkUsed(partyIndex);
+        bool consumeUse = true;
+        if (debugUnlimitedFighterMeasuredBash && battleManager != null)
+        {
+            HeroStats hero = battleManager.GetHeroAtPartyIndex(partyIndex);
+            if (GetArchetype(hero) == ReelcraftArchetype.Fighter)
+                consumeUse = false;
+        }
+
+        if (consumeUse)
+        {
+            MarkUsed(partyIndex);
+        }
+        else if (logFlow)
+        {
+            Debug.Log($"[Reelcraft] DebugUnlimitedFighterMeasuredBash active: not consuming use for partyIndex={partyIndex}.", this);
+        }
 
         StartCoroutine(MeasuredBashRoutine(partyIndex, deltaSteps));
         return true;
@@ -279,12 +309,129 @@ public class ReelcraftController : MonoBehaviour
         if (entry == null || entry.reel3d == null)
             yield break;
 
+        // IMPORTANT: Use the same midrow query method that ReelSpinSystem uses (GetMidrowSymbolAndMultiplier)
+        // so our quad index matches the reel payout logic.
+        int beforeQi = -1;
+        if (reelSpinSystem != null && reelSpinSystem.MidrowPlane != null)
+        {
+            int _mult;
+            var _sym = entry.reel3d.GetMidrowSymbolAndMultiplier(reelSpinSystem.MidrowPlane, out beforeQi, out _mult);
+            if (_sym == null) beforeQi = -1;
+        }
+
+        if (logFlow)
+            Debug.Log($"[Reelcraft][MeasuredBash] BEFORE nudge: partyIndex={partyIndex} deltaSteps={deltaSteps} midQi={beforeQi}", this);
+
         yield return entry.reel3d.ShakeRoutine(0.12f, 6f);
 
-        bool ok = reelSpinSystem.TryNudgeReel(partyIndex, deltaSteps);
+        // Nudge can fail for a frame if a prior tween/animation is still settling.
+        // For debug reliability, retry briefly.
+        bool ok = false;
+        for (int i = 0; i < 10 && !ok; i++)
+        {
+            ok = reelSpinSystem.TryNudgeReel(partyIndex, deltaSteps);
+            if (!ok) yield return null;
+        }
         if (!ok) yield break;
+
+        // Read & log midrow quad after applying the nudge.
+        int afterQi = -1;
+        if (reelSpinSystem != null && reelSpinSystem.MidrowPlane != null)
+        {
+            int _mult;
+            var _sym = entry.reel3d.GetMidrowSymbolAndMultiplier(reelSpinSystem.MidrowPlane, out afterQi, out _mult);
+            if (_sym == null) afterQi = -1;
+        }
+
+        if (logFlow)
+            Debug.Log($"[Reelcraft][MeasuredBash] AFTER nudge: partyIndex={partyIndex} deltaSteps={deltaSteps} midQi={afterQi}", this);
+
+        // Safety: sometimes the reel visually doesn't advance far enough (or advances the wrong amount),
+        // so the midrow quad doesn't end up where we expect.
+        // If that happens, force additional single-step nudges until the expected quad is in midrow.
+        if (beforeQi >= 0 && deltaSteps != 0)
+        {
+            int qc = Mathf.Max(1, entry.reel3d.QuadCount);
+
+            // IMPORTANT: Your reels are indexed such that "up" on screen corresponds to a DECREASE in quad index.
+            // (Confirmed by your debug: beforeQi=1, up should land on qi=0.)
+            // So convert the UI nudge direction (deltaSteps) into the expected quad-index delta.
+            int indexDelta = -deltaSteps;
+            int desiredQi = Mod(beforeQi + indexDelta, qc);
+            int stepDir = Math.Sign(indexDelta);
+
+            // If we couldn't read the midrow quad after the initial nudge, don't try to auto-correct
+            // (otherwise we'll potentially spin the reel unpredictably while our sensor is "blind").
+            if (afterQi < 0)
+            {
+                if (logFlow)
+                    Debug.LogWarning($"[Reelcraft][MeasuredBash] Unable to read midrow quad after nudge (afterQi={afterQi}). Skipping correction. desiredQi={desiredQi}", this);
+                goto DoneMeasuredBash;
+            }
+
+            // Only correct if we didn't land on the expected quad.
+            if (afterQi == desiredQi)
+                goto DoneMeasuredBash;
+
+            if (logFlow)
+                Debug.LogWarning($"[Reelcraft][MeasuredBash] Midrow quad mismatch after nudge. Forcing correction... beforeQi={beforeQi} afterQi={afterQi} desiredQi={desiredQi} stepDir={stepDir}", this);
+
+            // Try advancing in the intended direction up to one full revolution.
+            int safety = qc + 2;
+            while (safety-- > 0 && afterQi != desiredQi)
+            {
+                bool ok2 = false;
+                for (int i = 0; i < 10 && !ok2; i++)
+                {
+                    ok2 = reelSpinSystem.TryNudgeReel(partyIndex, stepDir);
+                    if (!ok2) yield return null;
+                }
+                if (!ok2) break;
+
+                if (reelSpinSystem != null && reelSpinSystem.MidrowPlane != null)
+                {
+                    int _mult;
+                    var _sym = entry.reel3d.GetMidrowSymbolAndMultiplier(reelSpinSystem.MidrowPlane, out afterQi, out _mult);
+                    if (_sym == null) afterQi = -1;
+                }
+            }
+
+            // If we're still not correct, attempt backing up (helps if TryNudgeSteps direction is inverted).
+            if (afterQi != desiredQi)
+            {
+                int safety2 = qc + 2;
+                while (safety2-- > 0 && afterQi != desiredQi)
+                {
+                    bool ok3 = false;
+                    for (int i = 0; i < 10 && !ok3; i++)
+                    {
+                        ok3 = reelSpinSystem.TryNudgeReel(partyIndex, -stepDir);
+                        if (!ok3) yield return null;
+                    }
+                    if (!ok3) break;
+
+                    if (reelSpinSystem != null && reelSpinSystem.MidrowPlane != null)
+                    {
+                        int _mult;
+                        var _sym = entry.reel3d.GetMidrowSymbolAndMultiplier(reelSpinSystem.MidrowPlane, out afterQi, out _mult);
+                        if (_sym == null) afterQi = -1;
+                    }
+                }
+            }
+
+            if (logFlow)
+                Debug.Log($"[Reelcraft][MeasuredBash] CORRECTION result: partyIndex={partyIndex} desiredQi={desiredQi} finalMidQi={afterQi}", this);
+        }
+        DoneMeasuredBash:
         if (logFlow)
             Debug.Log($"[Reelcraft] Measured Bash used. partyIndex={partyIndex} deltaSteps={deltaSteps}", this);
+    }
+
+    private static int Mod(int x, int m)
+    {
+        if (m <= 0) return 0;
+        int r = x % m;
+        return (r < 0) ? (r + m) : r;
     }
 
     /// <summary>

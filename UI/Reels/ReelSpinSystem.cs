@@ -97,6 +97,9 @@ public class ReelSpinSystem : MonoBehaviour
     [Tooltip("Log midrow symbols for 3D reels each time we spin.")]
     [SerializeField] private bool log3DMidRowSymbolsEachSpin = true;
 
+    [Tooltip("Debug: when a 3D spin lands, log the symbols directly above and below the landed (midrow) symbol for each reel.")]
+    [SerializeField] private bool log3DAdjacentSymbolsEachSpin = true;
+
     public event Action<int> OnSpinsRemainingChanged;
 
     /// <summary>
@@ -840,6 +843,25 @@ public class ReelSpinSystem : MonoBehaviour
             landed.Add(sym);
             multipliers.Add(Mathf.Max(1, mult));
 
+            if (log3DAdjacentSymbolsEachSpin && entry != null && entry.reel3d != null)
+            {
+                int qc = Mathf.Max(1, entry.reel3d.QuadCount);
+
+                // IMPORTANT: In our 3D reel implementation, quad indices increase "up" the column
+                // (visually). That means the symbol directly *above* the midrow is qi+1, and the
+                // symbol directly *below* is qi-1.
+                int aboveQi = Mod(qi + 1, qc);
+                int belowQi = Mod(qi - 1, qc);
+                ReelSymbolSO above = entry.reel3d.GetSymbolOnQuad(aboveQi);
+                ReelSymbolSO below = entry.reel3d.GetSymbolOnQuad(belowQi);
+
+                string id2 = !string.IsNullOrEmpty(entry.reelId) ? entry.reelId : $"slot{i}";
+                string midName = sym != null ? sym.name : "<null>";
+                string aboveName = above != null ? above.name : "<null>";
+                string belowName = below != null ? below.name : "<null>";
+                Debug.Log($"[ReelSpinSystem] 3D Adjacent (post-select): {id2} mid={midName}(quad {qi}) above={aboveName}(quad {aboveQi}) below={belowName}(quad {belowQi})");
+            }
+
             string id = !string.IsNullOrEmpty(entry.reelId) ? entry.reelId : $"slot{i}";
             string name = sym != null ? sym.name : "<null>";
             parts.Add($"{id}={name}(quad {qi})");
@@ -996,6 +1018,13 @@ public class ReelSpinSystem : MonoBehaviour
             if (e == null || e.reel3d == null) continue;
             e.reel3d.ClearAllDoubles();
         }
+    }
+
+    private static int Mod(int x, int m)
+    {
+        if (m <= 0) return 0;
+        int r = x % m;
+        return r < 0 ? r + m : r;
     }
 }
 ////////////////////////////////////////////////////////////
