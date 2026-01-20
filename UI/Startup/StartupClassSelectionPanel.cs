@@ -38,6 +38,20 @@ public class StartupClassSelectionPanel : MonoBehaviour
     [Tooltip("If true, only show one icon per unique symbol (by ScriptableObject reference). If false, show the FULL strip including duplicates.")]
     [SerializeField] private bool showUniqueReelSymbolsOnly = false;
 
+    [Header("Class Info (Optional)")]
+    [Tooltip("Optional: per-slot text for the selected class' Reelcraft ability name.")]
+    [SerializeField] private TMP_Text[] slotReelcraftNameTexts = new TMP_Text[3];
+
+    [Tooltip("Optional: per-slot text for the selected class' Reelcraft ability description.")]
+    [SerializeField] private TMP_Text[] slotReelcraftDescriptionTexts = new TMP_Text[3];
+
+    [Header("Starting Ability Choice (Optional)")]
+    [Tooltip("Optional: per-slot dropdown to choose which ability the hero begins with (uses AbilityDefinitionSO.starterChoice).")]
+    [SerializeField] private TMP_Dropdown[] slotStartingAbilityDropdowns = new TMP_Dropdown[3];
+
+    [Tooltip("Optional: per-slot text that shows the description of the currently selected starting ability.")]
+    [SerializeField] private TMP_Text[] slotStartingAbilityDescriptionTexts = new TMP_Text[3];
+
 
     [Header("Buttons")]
     [SerializeField] private Button confirmButton;
@@ -47,6 +61,7 @@ public class StartupClassSelectionPanel : MonoBehaviour
     private Action<GameObject[]> _onConfirm;
 
     private readonly List<Image>[] _slotReelIcons = new List<Image>[3];
+    private readonly List<AbilityDefinitionSO>[] _slotStartingAbilityOptions = new List<AbilityDefinitionSO>[3];
 
 
     private void Awake()
@@ -69,6 +84,7 @@ public class StartupClassSelectionPanel : MonoBehaviour
     {
         _available = availablePartyPrefabs ?? Array.Empty<GameObject>();
         _partySize = Mathf.Clamp(partySize, 1, 3);
+        StartupPartySelectionData.Clear();
         _onConfirm = onConfirm;
 
         if (root != null) root.SetActive(true);
@@ -101,6 +117,7 @@ public class StartupClassSelectionPanel : MonoBehaviour
             dd.onValueChanged.AddListener(_ => RefreshPortrait(capturedSlot));
 
             dd.onValueChanged.AddListener(_ => RefreshReelSymbols(capturedSlot));
+            dd.onValueChanged.AddListener(_ => RefreshClassInfo(capturedSlot));
 
             // Default selection: slot index if possible
             dd.value = Mathf.Clamp(slot, 0, Mathf.Max(0, _available.Length - 1));
@@ -109,6 +126,7 @@ public class StartupClassSelectionPanel : MonoBehaviour
             RefreshPortrait(slot);
 
             RefreshReelSymbols(slot);
+            RefreshClassInfo(slot);
         }
 
         if (confirmButton != null)
@@ -200,7 +218,136 @@ public class StartupClassSelectionPanel : MonoBehaviour
         }
     }
 
-    private GameObject GetSelectedPrefabForSlot(int slot)
+    
+
+    private void RefreshClassInfo(int slot)
+    {
+        // Reelcraft text
+        ClassDefinitionSO classDef = GetSelectedClassDefForSlot(slot);
+
+        if (slotReelcraftNameTexts != null && slot < slotReelcraftNameTexts.Length && slotReelcraftNameTexts[slot] != null)
+        {
+            slotReelcraftNameTexts[slot].text = (classDef != null && !string.IsNullOrWhiteSpace(classDef.reelcraftName))
+                ? classDef.reelcraftName
+                : "";
+        }
+
+        if (slotReelcraftDescriptionTexts != null && slot < slotReelcraftDescriptionTexts.Length && slotReelcraftDescriptionTexts[slot] != null)
+        {
+            slotReelcraftDescriptionTexts[slot].text = (classDef != null && !string.IsNullOrWhiteSpace(classDef.reelcraftDescription))
+                ? classDef.reelcraftDescription
+                : "";
+        }
+
+        // Starting ability dropdown
+        if (slotStartingAbilityDropdowns == null || slot >= slotStartingAbilityDropdowns.Length || slotStartingAbilityDropdowns[slot] == null)
+            return;
+
+        var dd = slotStartingAbilityDropdowns[slot];
+        dd.onValueChanged.RemoveAllListeners();
+
+        if (_slotStartingAbilityOptions[slot] == null)
+            _slotStartingAbilityOptions[slot] = new List<AbilityDefinitionSO>();
+        _slotStartingAbilityOptions[slot].Clear();
+
+        List<AbilityDefinitionSO> all = GetAbilitiesFromClassDef(classDef);
+        if (all == null) all = new List<AbilityDefinitionSO>();
+
+        // Prefer starterChoice abilities if any exist; otherwise list all abilities.
+        bool hasStarterChoices = false;
+        for (int i = 0; i < all.Count; i++)
+        {
+            if (all[i] != null && all[i].starterChoice)
+            {
+                hasStarterChoices = true;
+                break;
+            }
+        }
+
+        for (int i = 0; i < all.Count; i++)
+        {
+            var a = all[i];
+            if (a == null) continue;
+            if (hasStarterChoices && !a.starterChoice) continue;
+            _slotStartingAbilityOptions[slot].Add(a);
+        }
+
+        // Populate dropdown options
+        var options = new List<TMP_Dropdown.OptionData>();
+        for (int i = 0; i < _slotStartingAbilityOptions[slot].Count; i++)
+        {
+            var a = _slotStartingAbilityOptions[slot][i];
+            options.Add(new TMP_Dropdown.OptionData(a != null ? a.abilityName : "<null>"));
+        }
+
+        dd.ClearOptions();
+        dd.AddOptions(options);
+
+        bool interactable = (_slotStartingAbilityOptions[slot].Count > 0);
+        dd.interactable = interactable;
+
+        // Default selection to first option
+        dd.value = 0;
+        dd.RefreshShownValue();
+
+        // Commit selection immediately
+        CommitStartingAbilitySelection(slot);
+
+        dd.onValueChanged.AddListener(_ => CommitStartingAbilitySelection(slot));
+    }
+
+    private void CommitStartingAbilitySelection(int slot)
+    {
+        if (_slotStartingAbilityOptions == null || slot < 0 || slot >= _slotStartingAbilityOptions.Length) return;
+
+        AbilityDefinitionSO selected = null;
+        var opts = _slotStartingAbilityOptions[slot];
+        if (opts != null && slotStartingAbilityDropdowns != null && slot < slotStartingAbilityDropdowns.Length && slotStartingAbilityDropdowns[slot] != null)
+        {
+            int idx = slotStartingAbilityDropdowns[slot].value;
+            if (idx >= 0 && idx < opts.Count)
+                selected = opts[idx];
+        }
+
+        StartupPartySelectionData.SetStartingAbility(slot, selected);
+
+        if (slotStartingAbilityDescriptionTexts != null && slot < slotStartingAbilityDescriptionTexts.Length && slotStartingAbilityDescriptionTexts[slot] != null)
+        {
+            slotStartingAbilityDescriptionTexts[slot].text = (selected != null) ? selected.description : "";
+        }
+    }
+
+    private ClassDefinitionSO GetSelectedClassDefForSlot(int slot)
+    {
+        var prefab = GetSelectedPrefabForSlot(slot);
+        if (prefab == null) return null;
+
+        var hs = prefab.GetComponentInChildren<HeroStats>(true);
+        if (hs == null) return null;
+
+        // At startup we only care about the base class definition.
+        return hs.BaseClassDef;
+    }
+
+    private List<AbilityDefinitionSO> GetAbilitiesFromClassDef(ClassDefinitionSO classDef)
+    {
+        var list = new List<AbilityDefinitionSO>();
+        if (classDef == null) return list;
+
+        if (classDef.abilities != null && classDef.abilities.Count > 0)
+        {
+            list.AddRange(classDef.abilities);
+        }
+        else
+        {
+            if (classDef.ability1 != null) list.Add(classDef.ability1);
+            if (classDef.ability2 != null) list.Add(classDef.ability2);
+        }
+
+        return list;
+    }
+
+private GameObject GetSelectedPrefabForSlot(int slot)
     {
         if (_available == null || _available.Length == 0) return null;
         if (slotDropdowns == null || slot >= slotDropdowns.Length || slotDropdowns[slot] == null) return null;
@@ -224,6 +371,7 @@ public class StartupClassSelectionPanel : MonoBehaviour
             }
 
             chosen[i] = GetSelectedPrefabForSlot(i);
+            CommitStartingAbilitySelection(i);
         }
 
         Hide();

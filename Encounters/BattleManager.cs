@@ -198,6 +198,16 @@ public class BattleManager : MonoBehaviour
     [Tooltip("If Damage Number Prefab is not assigned, BattleManager will spawn a simple TextMeshPro damage number in world-space.")]
     [SerializeField] private bool enableRuntimeDamageNumbers = true;
 
+    [Header("Target Indicators")]
+    [Tooltip("Optional. If assigned, BattleManager will spawn one indicator per monster at runtime (no prefab edits needed).")]
+    [SerializeField] private TargetIndicatorUI enemyTargetIndicatorPrefab;
+
+    [Tooltip("Anchored offset applied to the spawned indicator relative to its parent (typically the monster HP bar UI).")]
+    [SerializeField] private Vector2 enemyTargetIndicatorOffset = new Vector2(-40f, 0f);
+
+    [Tooltip("Uniform scale applied to the spawned indicator.")]
+    [SerializeField] private float enemyTargetIndicatorScale = 1f;
+
     [SerializeField] private float runtimeDamageNumberLifetime = 0.75f;
     [SerializeField] private float runtimeDamageNumberRiseDistance = 0.8f;
     [SerializeField] private float runtimeDamageNumberFontSize = 3.5f;
@@ -283,9 +293,19 @@ public class BattleManager : MonoBehaviour
     public int PartyCount => _party != null ? _party.Count : 0;
     public int ActivePartyIndex => _activePartyIndex;
 
+    // Exposed for UI (PartyHUD target indicators, etc.)
+    public bool IsAwaitingEnemyTarget => _awaitingEnemyTarget;
+    public Monster PreviewEnemyTarget => _previewEnemyTarget;
+    public bool IsAwaitingPartyTarget => _awaitingPartyTarget;
+    public int PreviewPartyTargetIndex => _previewPartyTargetIndex;
+
     private BattleState _state = BattleState.Idle;
 
     private readonly List<Monster> _activeMonsters = new List<Monster>();
+
+    // Runtime-spawned / cached target indicators (one per monster).
+    private readonly Dictionary<Monster, TargetIndicatorUI> _enemyTargetIndicators = new Dictionary<Monster, TargetIndicatorUI>(16);
+    private readonly HashSet<Monster> _spawnedEnemyTargetIndicators = new HashSet<Monster>();
 
     private readonly List<Monster> _encounterMonsters = new List<Monster>(8);
 
@@ -324,6 +344,11 @@ public class BattleManager : MonoBehaviour
     private bool _startupRewardHandled;
 
     private bool _postBattleRunning;
+
+    [Header("Target Indicator")]
+    public TargetIndicatorUI indicatorPrefab;
+    public Vector2 indicatorOffset;
+    public float indicatorScale;
 
     private static T FindInSceneIncludingInactive<T>() where T : UnityEngine.Object
     {
@@ -562,11 +587,22 @@ public class BattleManager : MonoBehaviour
                 Debug.LogError($"[BattleManager] Party prefab slot {i} has no HeroStats component.");
 
             if (m.stats != null)
+            {
                 m.stats.ResetForNewRun();
+
+                // Apply startup-selected starting ability (if any).
+                AbilityDefinitionSO starting = StartupPartySelectionData.GetStartingAbility(i);
+                if (starting != null)
+                    m.stats.SetStartingAbilityOverride(starting);
+            }
 
             _party.Add(m);
         }
-        if (reelSpinSystem != null)
+        
+        // Startup selection data is one-shot.
+        StartupPartySelectionData.Clear();
+
+if (reelSpinSystem != null)
         {
             var heroes = new List<HeroStats>();
             for (int i = 0; i < _party.Count; i++)
@@ -1792,6 +1828,9 @@ NotifyPartyChanged();
         var bar = target.GetComponentInChildren<MonsterHpBar>(true);
         if (bar != null)
             bar.SetDamagePreview(previewHp);
+
+        UpdateEnemyTargetIndicators();
+        NotifyPartyChanged(); // lets PartyHUD refresh ally target indicators
     }
 
     private void ClearEnemyTargetPreview()
@@ -1802,6 +1841,114 @@ NotifyPartyChanged();
             if (bar != null) bar.ClearPreview();
         }
         _previewEnemyTarget = null;
+
+        UpdateEnemyTargetIndicators();
+        NotifyPartyChanged();
+    }
+
+    private TargetIndicatorUI GetOrCreateEnemyTargetIndicator(Monster m)
+    {
+        if (m == null) return null;
+
+        if (_enemyTargetIndicators.TryGetValue(m, out var cached) && cached != null)
+            return cached;
+
+        // If the prefab already has an indicator wired, use it.
+        var existing = m.GetComponentInChildren<TargetIndicatorUI>(true);
+        if (existing != null)
+        {
+            _enemyTargetIndicators[m] = existing;
+            return existing;
+        }
+
+        // Option A: Spawn at runtime if a prefab is provided.
+        if (enemyTargetIndicatorPrefab == null)
+            return null;
+
+        RectTransform parent = null;
+
+        // Prefer attaching to the HP bar object so offsets are intuitive.
+        var hpBar = m.GetComponentInChildren<MonsterHpBar>(true);
+        if (hpBar != null)
+        {
+            parent = hpBar.GetComponent<RectTransform>();
+            if (parent == null)
+                parent = hpBar.transform.parent as RectTransform;
+        }
+
+        // Fallback: any canvas under the monster.
+        if (parent == null)
+        {
+            var canvas = m.GetComponentInChildren<Canvas>(true);
+            if (canvas != null)
+                parent = canvas.transform as RectTransform;
+        }
+
+        if (parent == null)
+            return null;
+
+        TargetIndicatorUI spawned = Instantiate(enemyTargetIndicatorPrefab, parent);
+        spawned.name = "TargetIndicator";
+        spawned.transform.SetAsLastSibling();
+        spawned.Configure(enemyTargetIndicatorOffset, enemyTargetIndicatorScale);
+        spawned.SetVisible(false);
+
+        _enemyTargetIndicators[m] = spawned;
+        _spawnedEnemyTargetIndicators.Add(m);
+        return spawned;
+    }
+
+    private void RemoveEnemyTargetIndicatorForMonster(Monster m)
+    {
+        if (m == null) return;
+        if (_enemyTargetIndicators == null) return;
+
+        if (_enemyTargetIndicators.TryGetValue(m, out var indicator))
+        {
+            _enemyTargetIndicators.Remove(m);
+            if (_spawnedEnemyTargetIndicators.Contains(m))
+            {
+                _spawnedEnemyTargetIndicators.Remove(m);
+                if (indicator != null && indicator.gameObject != null)
+                    Destroy(indicator.gameObject);
+            }
+        }
+    }
+
+    private void CleanupEnemyTargetIndicators()
+    {
+        if (_enemyTargetIndicators == null || _enemyTargetIndicators.Count == 0)
+            return;
+
+        foreach (var kvp in _enemyTargetIndicators)
+        {
+            if (!_spawnedEnemyTargetIndicators.Contains(kvp.Key))
+                continue;
+
+            var indicator = kvp.Value;
+            if (indicator != null && indicator.gameObject != null)
+                Destroy(indicator.gameObject);
+        }
+        _enemyTargetIndicators.Clear();
+        _spawnedEnemyTargetIndicators.Clear();
+    }
+
+    private void UpdateEnemyTargetIndicators()
+    {
+        // Optional, purely visual.
+        // Show indicator only while awaiting an enemy target, and only on the current preview target.
+        bool shouldShow = _awaitingEnemyTarget && _previewEnemyTarget != null;
+
+        for (int i = 0; i < _activeMonsters.Count; i++)
+        {
+            Monster m = _activeMonsters[i];
+            if (m == null) continue;
+
+            var indicator = GetOrCreateEnemyTargetIndicator(m);
+            if (indicator == null) continue;
+
+            indicator.SetVisible(shouldShow && m == _previewEnemyTarget);
+        }
     }
 
     private void CancelPendingAbility()
@@ -1818,6 +1965,7 @@ NotifyPartyChanged();
         _selectedPartyTargetIndex = -1;
         HideConfirmText();
         ClearEnemyTargetPreview();
+        UpdateEnemyTargetIndicators();
         _impactFired = false;
         _attackFinished = false;
 
@@ -2095,17 +2243,75 @@ NotifyPartyChanged();
         }
         else if (enemyPartyPool != null && enemyPartyPool.Count > 0)
         {
-            if (randomizeEnemyPartyFromPool)
-            {
-                chosen = enemyPartyPool[UnityEngine.Random.Range(0, enemyPartyPool.Count)];
-            }
-            else
-            {
-                if (_enemyPartyPoolIndex < 0) _enemyPartyPoolIndex = 0;
-                if (_enemyPartyPoolIndex >= enemyPartyPool.Count) _enemyPartyPoolIndex = 0;
+            // Progression gating: EnemyPartyCompositionSO is eligible ONLY for a single fight index (0-based).
+            // We treat the current fight index as: "number of battles already completed in this stretch".
+            int fightIndex = 0;
+            if (stretchController != null)
+                fightIndex = Mathf.Max(0, stretchController.BattlesCompleted);
 
-                chosen = enemyPartyPool[_enemyPartyPoolIndex];
-                _enemyPartyPoolIndex = (_enemyPartyPoolIndex + 1) % enemyPartyPool.Count;
+            // Build eligible pool for this fight.
+            List<EnemyPartyCompositionSO> eligible = new List<EnemyPartyCompositionSO>(enemyPartyPool.Count);
+            for (int i = 0; i < enemyPartyPool.Count; i++)
+            {
+                var p = enemyPartyPool[i];
+                if (p == null) continue;
+                if (p.IsEligibleForFight(fightIndex))
+                    eligible.Add(p);
+            }
+
+            // If authoring forgot to create an eligible party for this fight, fall back to the entire pool
+            // (otherwise the encounter would silently spawn random monsters).
+            if (eligible.Count == 0)
+            {
+                for (int i = 0; i < enemyPartyPool.Count; i++)
+                {
+                    var p = enemyPartyPool[i];
+                    if (p != null) eligible.Add(p);
+                }
+
+                Debug.LogWarning($"[BattleManager] No EnemyPartyCompositionSO matched fightIndex={fightIndex}. Falling back to ungated pool selection.", this);
+            }
+
+            if (eligible.Count > 0)
+            {
+                if (randomizeEnemyPartyFromPool)
+                {
+                    // Weighted random by selectionWeight (<=0 means "never", unless all are <=0).
+                    float totalW = 0f;
+                    for (int i = 0; i < eligible.Count; i++)
+                        totalW += Mathf.Max(0f, eligible[i] != null ? eligible[i].selectionWeight : 0f);
+
+                    if (totalW <= 0f)
+                    {
+                        chosen = eligible[UnityEngine.Random.Range(0, eligible.Count)];
+                    }
+                    else
+                    {
+                        float r = UnityEngine.Random.Range(0f, totalW);
+                        float acc = 0f;
+                        for (int i = 0; i < eligible.Count; i++)
+                        {
+                            float w = Mathf.Max(0f, eligible[i].selectionWeight);
+                            acc += w;
+                            if (r <= acc)
+                            {
+                                chosen = eligible[i];
+                                break;
+                            }
+                        }
+                        if (chosen == null)
+                            chosen = eligible[eligible.Count - 1];
+                    }
+                }
+                else
+                {
+                    // Deterministic cycle through eligible parties.
+                    if (_enemyPartyPoolIndex < 0) _enemyPartyPoolIndex = 0;
+                    if (_enemyPartyPoolIndex >= eligible.Count) _enemyPartyPoolIndex = 0;
+
+                    chosen = eligible[_enemyPartyPoolIndex];
+                    _enemyPartyPoolIndex = (_enemyPartyPoolIndex + 1) % Mathf.Max(1, eligible.Count);
+                }
             }
         }
 
@@ -2193,6 +2399,8 @@ NotifyPartyChanged();
     private void RemoveMonster(Monster m)
     {
         if (m == null) return;
+
+        RemoveEnemyTargetIndicatorForMonster(m);
 
         if (monsterInfoController != null)
             monsterInfoController.HideIfShowing(m);
@@ -2408,6 +2616,8 @@ NotifyPartyChanged();
 
     private void CleanupExistingEncounter()
     {
+        CleanupEnemyTargetIndicators();
+
         for (int i = 0; i < _activeMonsters.Count; i++)
             if (_activeMonsters[i] != null) Destroy(_activeMonsters[i].gameObject);
 
@@ -3081,5 +3291,3 @@ NotifyPartyChanged();
             SetUndoButtonEnabled(false);
     }
 }
-
-

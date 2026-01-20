@@ -43,6 +43,14 @@ public class AbilityDefinitionSO : ScriptableObject
     [Header("Costs")]
     public ResourceCost cost = new ResourceCost(0, 0, 0, 0);
 
+    [Header("Unlock / Starter")]
+    [Tooltip("If true, this ability can be chosen as the hero's starting ability on the Class Selection panel.")]
+    public bool starterChoice = false;
+
+    [Tooltip("Minimum hero level required for this ability to appear in the Ability Menu.")]
+    [Min(1)] public int unlockAtLevel = 1;
+
+
     [Header("Damage / Defense")]
     public int baseDamage = 0;
     public int shieldAmount = 0;
@@ -82,5 +90,3 @@ public class AbilityDefinitionSO : ScriptableObject
 
 
 ////////////////////////////////////////////////////////////
-
-

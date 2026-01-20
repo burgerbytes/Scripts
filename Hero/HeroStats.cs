@@ -118,6 +118,18 @@ public class HeroStats : MonoBehaviour
     public ClassDefinitionSO AdvancedClassDef => advancedClassDef;
 
     // ✅ NEW: Reel strip + portrait come from the hero prefab
+        [Header("Startup / Ability Selection")]
+    [Tooltip("Optional: selected on the startup class selection panel. If set and the class has starter-choice abilities, this will be the one available at Level 1.")]
+    [SerializeField] private AbilityDefinitionSO startingAbilityOverride;
+
+    public AbilityDefinitionSO StartingAbilityOverride => startingAbilityOverride;
+
+    public void SetStartingAbilityOverride(AbilityDefinitionSO ability)
+    {
+        startingAbilityOverride = ability;
+        OnChanged?.Invoke();
+    }
+
     [Header("Reels / UI (Prefab Data)")]
     [Tooltip("Reel strip used for this hero's reel.")]
     [SerializeField] private ReelStripSO reelStrip;
@@ -1015,5 +1027,3 @@ public class HeroStats : MonoBehaviour
 
 
 ////////////////////////////////////////////////////////////
-
-

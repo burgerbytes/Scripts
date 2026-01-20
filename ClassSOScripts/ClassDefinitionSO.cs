@@ -17,7 +17,12 @@ public class ClassDefinitionSO : ScriptableObject
     [Tooltip("Small icon used in menus, lists, or ability UIs")]
     public Sprite icon;
 
-    [Header("UI")]
+    
+    [Header("Reelcraft (UI)")]
+    public string reelcraftName;
+    [TextArea(2, 6)] public string reelcraftDescription;
+
+[Header("UI")]
     [Tooltip("Larger portrait used on Party HUD buttons")]
     public Sprite portraitSprite;
 

@@ -1,3 +1,5 @@
+// GUID: bf5e02a1e0e38924facba44bb1cf2fc2
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -785,16 +787,34 @@ public class Reel3DColumn : MonoBehaviour
     {
         EnsureBuilt();
 
+        Vector3 p = planeBounds.center;
+
+        // Prefer the *closest* intersecting quad (some bounds may overlap multiple quads depending on scale/PPU).
+        int bestIntersect = -1;
+        float bestIntersectDist = float.PositiveInfinity;
+
         for (int i = 0; i < _quads.Count; i++)
         {
-            var mr = _quads[i].frontMr;
-            if (mr == null) continue;
+            var q = _quads[i];
+            if (q.frontMr == null) continue;
 
-            if (mr.bounds.Intersects(planeBounds))
-                return i;
+            if (!q.frontMr.bounds.Intersects(planeBounds))
+                continue;
+
+            // Use transform position (stable) rather than bounds center (can be inflated by render bounds).
+            var t = q.frontT != null ? q.frontT : q.frontMr.transform;
+            float d = (t.position - p).sqrMagnitude;
+            if (d < bestIntersectDist)
+            {
+                bestIntersectDist = d;
+                bestIntersect = i;
+            }
         }
 
-        Vector3 p = planeBounds.center;
+        if (bestIntersect >= 0)
+            return bestIntersect;
+
+        // Fallback: choose nearest quad by position (covers cases where renderer bounds don't intersect).
         int best = -1;
         float bestDist = float.PositiveInfinity;
 
@@ -946,3 +966,6 @@ public class Reel3DColumn : MonoBehaviour
         if (qp.back != null) qp.back.SetSymbol(newSymbol);
     }
 }
+
+
+////////////////////////////////////////////////////////////
