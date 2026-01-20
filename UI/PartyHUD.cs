@@ -149,14 +149,11 @@ public class PartyHUD : MonoBehaviour
             // Hide menus while the player is interacting with the reels.
             if (abilityMenu != null) abilityMenu.Close();
             if (statsPanel != null) statsPanel.Hide();
-            if (reelcraftPanel != null) reelcraftPanel.Hide();
             _menusWereHiddenForReelPhase = true;
             return;
         }
 
         // Reel phase ended.
-        if (reelcraftPanel != null)
-            reelcraftPanel.Hide();
 
         // Reel phase ended -> restore if the player had a hero selected.
         if (!_menusWereHiddenForReelPhase) return;
@@ -425,3 +422,6 @@ public class PartyHUD : MonoBehaviour
         return null;
     }
 }
+
+
+////////////////////////////////////////////////////////////

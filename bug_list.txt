@@ -1,5 +1,9 @@
 bugs
-- damage numbers show hp lost, not damage done
 - status and ability menus should be hidden during reel phase
-- intent icon is obscured by hp bars of larger enemy sprites
-- damage previews on enemies remains even after changing targets
+- after reel phase ability and stats panels should be disabled
+- aoe attacks now hit concealed units, but aoe attacks need to show damage preview on concealed units
+- fighter reelcraft doesnt work properly (needs throrough debugging)
+- upgrade reel spin shouldnt choose another random symbol to upgrade if the symbol landed on is already upgraded
+
+features
+- add some type of indictor (arrow, glow) to enemy unit being targeted

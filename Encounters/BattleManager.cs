@@ -1,7 +1,3 @@
-// GUID: 30f201f35d336bf4d840162cd6fd1fde
-////////////////////////////////////////////////////////////
-// GUID: 30f201f35d336bf4d840162cd6fd1fde
-////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -657,9 +653,6 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
         var hs = _party[index].stats;
         if (hs == null || hs.CurrentHp <= 0) return 0;
 
-        // Conceal/Hidden: attacks miss, so don't show a preview.
-        if (hs.IsHidden) return 0;
-
         // Predict HP loss by simulating how shields + defense will reduce incoming damage.
         int predictedHpLoss = 0;
         int remainingShield = Mathf.Max(0, hs.Shield);
@@ -669,8 +662,13 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
         {
             var intent = _plannedIntents[i];
             if (intent.enemy == null || intent.enemy.IsDead) continue;
+            // Conceal/Hidden: single-target attacks miss, but AoE still hits.
+            // Mirror the runtime resolution rules (see EnemyAttack resolution).
             bool hitsThisHero = intent.isAoe || intent.targetPartyIndex == index;
             if (!hitsThisHero) continue;
+
+            if (hs.IsHidden && !intent.isAoe)
+                continue;
 
             int raw = intent.damage > 0 ? intent.damage : intent.enemy.GetDamage();
             raw = Mathf.Max(0, raw);
@@ -863,7 +861,8 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
 
         if (_previewEnemyTarget != target)
         {
-            _previewEnemyTarget = target;
+            // IMPORTANT: do NOT set _previewEnemyTarget here; SetEnemyTargetPreview() needs the old value
+            // so it can clear the previous target's preview correctly.
             SetEnemyTargetPreview(target);
             ShowConfirmText();
 
@@ -1029,7 +1028,7 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
                 int raw = intent.damage;
                 if (raw <= 0 && intent.enemy != null) raw = intent.enemy.GetDamage();
 
-                if (intent.type == IntentType.AoEAttack)
+                if (intent.isAoe || intent.type == IntentType.AoEAttack)
                 {
                     for (int pi = 0; pi < PartyCount; pi++)
                     {
@@ -1069,7 +1068,7 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
 
                 if (targetStats == null) return;
 
-                if (targetStats.IsHidden)
+                if (targetStats.IsHidden && !intent.isAoe)
                 {
                     if (logFlow) Debug.Log($"[Battle][EnemyAtk] Target is hidden (Conceal). Attack misses. attacker={(intent.enemy != null ? intent.enemy.name : "<null>")} targetIdx={targetIdx}", this);
                     return;
@@ -1531,6 +1530,14 @@ NotifyPartyChanged();
 
             int totalBaseDamage = Mathf.Max(0, actorStats.Attack) + Mathf.Max(0, ability.baseDamage);
 
+            // Damage numbers should show the actual damage computed by the attack formula,
+            // not the clamped HP lost (overkill should still show the full hit).
+            int shownDamage = enemyTarget.CalculateDamageFromAbility(
+                abilityBaseDamage: totalBaseDamage,
+                classAttackModifier: 1f,
+                element: ability.element,
+                abilityTags: ability.tags);
+
             int dealt = enemyTarget.TakeDamageFromAbility(
                 abilityBaseDamage: totalBaseDamage,
                 classAttackModifier: 1f,
@@ -1562,7 +1569,7 @@ NotifyPartyChanged();
             if (performanceTracker != null)
                 performanceTracker.RecordDamageDealt(actorStats, dealt);
 
-            SpawnDamageNumber(enemyTarget.transform.position, dealt);
+            SpawnDamageNumber(enemyTarget.transform.position, shownDamage);
             actorStats.ApplyOnHitEffectsTo(enemyTarget);
 
             if (totalBaseDamage > 0)
@@ -3075,6 +3082,4 @@ NotifyPartyChanged();
     }
 }
 
-
-////////////////////////////////////////////////////////////
 

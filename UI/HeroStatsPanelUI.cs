@@ -38,12 +38,36 @@ public class HeroStatsPanelUI : MonoBehaviour
     [Tooltip("If true, calling SetHero(null) will hide this panel.")]
     [SerializeField] private bool hideWhenCleared = true;
 
+    [Header("Reel Phase")]
+    [SerializeField] private ReelSpinSystem reelSpinSystem;
+
     private HeroStats _hero;
 
     private void Update()
     {
         if (liveRefresh && _hero != null)
             Refresh();
+    }
+
+    private void OnEnable()
+    {
+        if (reelSpinSystem == null)
+            reelSpinSystem = FindFirstObjectByType<ReelSpinSystem>();
+        if (reelSpinSystem != null)
+            reelSpinSystem.OnReelPhaseChanged += HandleReelPhaseChanged;
+    }
+
+    private void OnDisable()
+    {
+        if (reelSpinSystem != null)
+            reelSpinSystem.OnReelPhaseChanged -= HandleReelPhaseChanged;
+    }
+
+    private void HandleReelPhaseChanged(bool inReelPhase)
+    {
+        // Status/stats panel should be hidden during reel phase.
+        if (inReelPhase)
+            Hide();
     }
 
     public void SetHero(HeroStats hero)
@@ -123,3 +147,6 @@ public class HeroStatsPanelUI : MonoBehaviour
         }
     }
 }
+
+
+////////////////////////////////////////////////////////////

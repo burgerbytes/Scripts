@@ -133,8 +133,10 @@ public class PartyHUDSlot : MonoBehaviour
         int currentHP = snapshot.HP;
         int maxHP = Mathf.Max(1, snapshot.MaxHP);
 
-        // Conceal/Hidden: attacks miss, so suppress incoming damage preview.
-        int incoming = snapshot.IsHidden ? 0 : Mathf.Max(0, incomingDamagePreview);
+        // Conceal/Hidden: single-target attacks miss, but AoE still hits.
+        // The incomingDamagePreview value is computed by BattleManager and already accounts for that rule,
+        // so we should NOT blanket-suppress preview just because the hero is Hidden.
+        int incoming = Mathf.Max(0, incomingDamagePreview);
         int predictedHP = Mathf.Max(0, currentHP - incoming);
 
         float current01 = Mathf.Clamp01((float)currentHP / maxHP);
@@ -313,4 +315,3 @@ public class PartyHUDSlot : MonoBehaviour
 }
 
 
-////////////////////////////////////////////////////////////

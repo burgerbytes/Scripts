@@ -1,6 +1,3 @@
-// PATH: Assets/Scripts/UI/Reels/ReelSpinSystem.cs
-// GUID: 1b9947b6d65d049459a446a098bd7cb3
-////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -235,6 +232,10 @@ public class ReelSpinSystem : MonoBehaviour
     {
         spinsRemaining = spinsPerTurn;
         OnSpinsRemainingChanged?.Invoke(spinsRemaining);
+
+        // Cashout must always be available during reel phase.
+        if (stopSpinningButton != null)
+            stopSpinningButton.interactable = true;
 
         // New reel phase -> clear any previous landed state.
         _currentLandedSymbols = null;
@@ -872,7 +873,12 @@ public class ReelSpinSystem : MonoBehaviour
             OnSpinsRemainingChanged?.Invoke(spinsRemaining);
 
             if (spinsRemaining <= 0)
-                CollectPendingPayout();
+            {
+                // No auto-cashout: player must press Cashout so Reelcraft can still be used.
+                // Spin button should be disabled by UI via spinsRemaining == 0, but we keep reel phase active.
+                if (log3DMidRowSymbolsEachSpin)
+                    Debug.Log("[ReelSpinSystem] SpinsRemaining reached 0 (no auto-cashout). Waiting for player Cashout.");
+            }
         }
 
         spinning = false;
@@ -992,4 +998,6 @@ public class ReelSpinSystem : MonoBehaviour
         }
     }
 }
+////////////////////////////////////////////////////////////
+
 ////////////////////////////////////////////////////////////

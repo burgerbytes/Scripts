@@ -1,5 +1,3 @@
-// GUID: 341fb70d5f7f2f6418a9eacb8b240559
-////////////////////////////////////////////////////////////
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
@@ -24,6 +22,7 @@ public class AbilityMenuUI : MonoBehaviour
     [Header("Refs")]
     [SerializeField] private ResourcePool resourcePool;
     [SerializeField] private BattleManager battleManager;
+    [SerializeField] private ReelSpinSystem reelSpinSystem;
 
     [Header("Debug")]
     [SerializeField] private bool debugLogs = true;
@@ -44,13 +43,37 @@ public class AbilityMenuUI : MonoBehaviour
         if (battleManager == null)
             battleManager = BattleManager.Instance != null ? BattleManager.Instance : FindFirstObjectByType<BattleManager>();
 
+        if (reelSpinSystem == null)
+            reelSpinSystem = FindFirstObjectByType<ReelSpinSystem>();
+
         HideAbilityDescPanel();
 
         if (root != null)
             root.SetActive(false);
     }
 
-    private void Update()
+    private void OnEnable()
+{
+    if (reelSpinSystem == null)
+        reelSpinSystem = FindFirstObjectByType<ReelSpinSystem>();
+    if (reelSpinSystem != null)
+        reelSpinSystem.OnReelPhaseChanged += HandleReelPhaseChanged;
+}
+
+private void OnDisable()
+{
+    if (reelSpinSystem != null)
+        reelSpinSystem.OnReelPhaseChanged -= HandleReelPhaseChanged;
+}
+
+private void HandleReelPhaseChanged(bool inReelPhase)
+{
+    // Ability menu should be hidden during reel phase.
+    if (inReelPhase)
+        Close();
+}
+
+private void Update()
     {
         // If we pinned the description panel during targeting, hide it once the cast state clears.
         if (_descPinnedUntilCast)
@@ -74,6 +97,9 @@ public class AbilityMenuUI : MonoBehaviour
 
         if (battleManager == null)
             battleManager = BattleManager.Instance != null ? BattleManager.Instance : FindFirstObjectByType<BattleManager>();
+
+        if (reelSpinSystem == null)
+            reelSpinSystem = FindFirstObjectByType<ReelSpinSystem>();
 
         if (debugLogs)
         {
@@ -159,6 +185,9 @@ public class AbilityMenuUI : MonoBehaviour
 
         if (battleManager == null)
             battleManager = BattleManager.Instance != null ? BattleManager.Instance : FindFirstObjectByType<BattleManager>();
+
+        if (reelSpinSystem == null)
+            reelSpinSystem = FindFirstObjectByType<ReelSpinSystem>();
 
         if (battleManager == null || currentHero == null)
         {
@@ -271,6 +300,9 @@ public class AbilityMenuUI : MonoBehaviour
 }
 
 
+
+
+////////////////////////////////////////////////////////////
 
 
 ////////////////////////////////////////////////////////////
