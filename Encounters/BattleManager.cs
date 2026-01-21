@@ -1,3 +1,5 @@
+// GUID: 30f201f35d336bf4d840162cd6fd1fde
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -667,6 +669,175 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
         };
     }
 
+
+    // ---------------- Party Lookup / Evolution ----------------
+    public int GetPartyIndexForHeroStats(HeroStats hero)
+    {
+        if (hero == null || _party == null) return -1;
+        for (int i = 0; i < _party.Count; i++)
+        {
+            if (_party[i] != null && _party[i].stats == hero)
+                return i;
+        }
+        return -1;
+    }
+
+    /// <summary>
+    /// Swaps a party member's prefab at runtime (e.g., Fighter -> Templar) while preserving all HeroStats progress.
+    /// This is called after the Level 5 reel-evolution minigame finishes.
+    /// </summary>
+    public bool EvolvePartyMemberToAdvanced(
+        int partyIndex,
+        GameObject advancedPrefab,
+        ClassDefinitionSO advancedClassDef,
+        ReelStripSO advancedReelStripTemplate,
+        Sprite advancedPortraitOverride,
+        Sprite advancedWorldSpriteOverride)
+    {
+        Debug.Log(
+            $"[Evolution] BattleManager.EvolvePartyMemberToAdvanced BEGIN partyIndex={partyIndex} advancedPrefab='{(advancedPrefab != null ? advancedPrefab.name : "NULL")}' " +
+            $"advancedClassDef='{(advancedClassDef != null ? advancedClassDef.className : "NULL")}' advancedStrip='{(advancedReelStripTemplate != null ? advancedReelStripTemplate.name : "NULL")}' " +
+            $"portraitOverride='{(advancedPortraitOverride != null ? advancedPortraitOverride.name : "NULL")}' worldSpriteOverride='{(advancedWorldSpriteOverride != null ? advancedWorldSpriteOverride.name : "NULL")}'",
+            this
+        );
+
+        if (!IsValidPartyIndex(partyIndex))
+        {
+            Debug.LogError($"[BattleManager] EvolvePartyMemberToAdvanced invalid partyIndex={partyIndex}");
+            return false;
+        }
+
+        if (advancedPrefab == null)
+        {
+            Debug.LogError("[BattleManager] EvolvePartyMemberToAdvanced advancedPrefab is NULL.");
+            return false;
+        }
+
+        PartyMemberRuntime m = _party[partyIndex];
+        if (m == null || m.avatarGO == null || m.stats == null)
+        {
+            Debug.LogError($"[BattleManager] EvolvePartyMemberToAdvanced partyIndex={partyIndex} missing avatar/stats.");
+            return false;
+        }
+
+        HeroStats oldStats = m.stats;
+        Debug.Log(
+            $"[Evolution] Old hero instance='{(m.avatarGO != null ? m.avatarGO.name : "NULL")}' stats='{(oldStats != null ? oldStats.name : "NULL")}' level={(oldStats != null ? oldStats.Level : 0)}",
+            this
+        );
+        Transform parent = (partyRoot != null) ? partyRoot : m.avatarGO.transform.parent;
+
+        Vector3 pos = m.avatarGO.transform.position;
+        Quaternion rot = m.avatarGO.transform.rotation;
+
+        GameObject newGo = Instantiate(advancedPrefab, pos, rot, parent);
+        Debug.Log($"[Evolution] Instantiated new advanced prefab GO='{newGo.name}'", this);
+        HeroStats newStats = newGo.GetComponentInChildren<HeroStats>(true);
+        Animator newAnim = newGo.GetComponentInChildren<Animator>(true);
+
+        if (newStats == null)
+        {
+            Debug.LogError($"[BattleManager] Advanced prefab '{advancedPrefab.name}' has no HeroStats component.");
+            Destroy(newGo);
+            return false;
+        }
+
+        // Preserve all runtime progress from the old instance.
+        Debug.Log("[Evolution] Copying runtime state oldStats -> newStats", this);
+        newStats.CopyRuntimeStateFrom(oldStats);
+
+        // Apply advanced class definition (if not already present).
+        if (advancedClassDef != null && newStats.AdvancedClassDef == null)
+        {
+            Debug.Log($"[Evolution] Applying advanced class def '{advancedClassDef.className}'", this);
+            newStats.ApplyClassDefinition(advancedClassDef);
+        }
+        else
+        {
+            Debug.Log($"[Evolution] Skipping ApplyClassDefinition (advancedClassDef NULL or already set). currentAdvanced='{(newStats.AdvancedClassDef != null ? newStats.AdvancedClassDef.className : "NULL")}'", this);
+        }
+
+        // Swap reel strip to advanced template (if provided).
+        if (advancedReelStripTemplate != null)
+        {
+            Debug.Log($"[Evolution] Replacing reel strip from template '{advancedReelStripTemplate.name}'", this);
+            newStats.ReplaceReelStripFromTemplate(advancedReelStripTemplate);
+        }
+        else
+        {
+            Debug.Log("[Evolution] No advancedReelStripTemplate provided. Leaving current reel strip as-is.", this);
+        }
+
+        // Override portrait (optional).
+        if (advancedPortraitOverride != null)
+        {
+            Debug.Log($"[Evolution] Setting portrait override '{advancedPortraitOverride.name}'", this);
+            newStats.SetPortrait(advancedPortraitOverride);
+        }
+        else
+        {
+            Debug.Log("[Evolution] No portrait override provided. Leaving portrait as-is.", this);
+        }
+
+
+        // Override world sprite (optional) - useful during early prefab setup.
+        if (advancedWorldSpriteOverride != null)
+        {
+            var srs = newGo.GetComponentsInChildren<SpriteRenderer>(true);
+            int changed = 0;
+            for (int i = 0; i < srs.Length; i++)
+            {
+                if (srs[i] == null) continue;
+                srs[i].sprite = advancedWorldSpriteOverride;
+                changed++;
+            }
+            Debug.Log($"[Evolution] Applied world sprite override '{advancedWorldSpriteOverride.name}'. spriteRenderersChanged={changed}", this);
+        }
+        else
+        {
+            Debug.Log("[Evolution] No world sprite override provided. Leaving SpriteRenderer sprites as-is.", this);
+        }
+
+        // Ensure advanced class abilities are available immediately.
+        if (advancedClassDef != null)
+            newStats.ForceUnlockAllAbilitiesFromClassDef(advancedClassDef, includeStarterChoice: true);
+
+
+        // Destroy old avatar
+        Debug.Log($"[Evolution] Destroying old avatar GO='{m.avatarGO.name}'", this);
+        Destroy(m.avatarGO);
+
+        // Update runtime party entry
+        m.avatarGO = newGo;
+        m.animator = newAnim;
+        m.stats = newStats;
+        _party[partyIndex] = m;
+
+        // Reconfigure reels to reference the new HeroStats instances.
+        if (reelSpinSystem != null)
+        {
+            Debug.Log("[Evolution] Reconfiguring ReelSpinSystem from updated party", this);
+            var heroes = new List<HeroStats>(_party.Count);
+            for (int i = 0; i < _party.Count; i++)
+                if (_party[i] != null && _party[i].stats != null)
+                    heroes.Add(_party[i].stats);
+
+            reelSpinSystem.ConfigureFromParty(heroes);
+            Debug.Log($"[Evolution] ReelSpinSystem.ConfigureFromParty done. heroes={heroes.Count}", this);
+        }
+        else
+        {
+            Debug.Log("[Evolution] reelSpinSystem is NULL. Skipping reel reconfigure.", this);
+        }
+
+        NotifyPartyChanged();
+
+        Debug.Log("[Evolution] NotifyPartyChanged called.", this);
+
+        Debug.Log($"[BattleManager] Evolved partyIndex={partyIndex} '{oldStats.name}' -> prefab='{advancedPrefab.name}' class='{(advancedClassDef != null ? advancedClassDef.className : "NULL")}'.");
+        return true;
+    }
+
     /// <summary>
     /// Enables/disables the instantiated party avatar GameObjects (the in-world ally sprites).
     /// Used by post-battle panels that should not show the full party lineup.
@@ -817,6 +988,15 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
 
         PartyMemberRuntime actor = _party[actorIndex];
         if (actor.IsDead) return;
+
+
+// Ability unlock rules (Starter Choice / level unlock).
+HeroStats gateHero = actor.stats != null ? actor.stats : hero;
+if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
+{
+    if (logFlow) Debug.Log($"[Battle][Ability] Blocked: {actor.name} tried to use locked ability '{ability.abilityName}'.", this);
+    return;
+}
 
         if (_pendingAction != PlayerActionType.None) return;
 
@@ -1490,6 +1670,26 @@ NotifyPartyChanged();
                     useImpactSync = false;
                     stateToPlay = null;
                     if (logFlow) Debug.Log("[Battle][Resolve] Aegis: no animation and no impact sync.", this);
+                    break;
+                
+                // Templar Abilities
+                case "Righteous Cut":
+                    useImpactSync = true;
+                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("Righteous Cut") : null;
+                    if (string.IsNullOrWhiteSpace(stateToPlay))
+                        stateToPlay = "templar_basic_attack"; // fallback
+                    break;
+                case "Verdict & Execution":
+                    useImpactSync = true;
+                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("Verdict & Execution") : null;
+                    if (string.IsNullOrWhiteSpace(stateToPlay))
+                        stateToPlay = "templar_strong_attack"; // fallback
+                    break;
+                case "Stay the Sentence":
+                    useImpactSync = true;
+                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("Stay the Sentence") : null;
+                    if (string.IsNullOrWhiteSpace(stateToPlay))
+                        stateToPlay = "templar_magic_ability"; // fallback
                     break;
 
                 default:
@@ -3291,3 +3491,8 @@ NotifyPartyChanged();
             SetUndoButtonEnabled(false);
     }
 }
+
+
+////////////////////////////////////////////////////////////
+
+
