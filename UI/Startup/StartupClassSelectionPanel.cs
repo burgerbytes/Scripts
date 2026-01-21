@@ -1,6 +1,3 @@
-// PATH: Assets/Scripts/UI/Startup/StartupClassSelectionPanel.cs
-// GUID: e60b184de68ccf241b14fb67f0b6851b
-////////////////////////////////////////////////////////////
 using System;
 using System.Collections.Generic;
 using TMPro;
@@ -8,199 +5,296 @@ using UnityEngine;
 using UnityEngine.UI;
 
 /// <summary>
-/// Simple startup party/class selection UI.
+/// Startup class selection panel.
 ///
-/// Expected scene wiring (minimal):
-/// - A root GameObject for the panel
-/// - One TMP_Dropdown per party slot
-/// - Optional portrait Images per slot (reads from HeroStats.Portrait on the prefab)
-/// - A Confirm/Start button
-///
-/// The panel does NOT create/destroy heroes. It only returns the selected prefabs.
+/// Current requirement:
+/// - Only Ally1 is used as a LIVE preview of the current midrow hero.
+/// - Ally2/Ally3 will be removed later, so we do NOT maintain their UI here.
+/// - ReelSymbols preview already works; we extend the same preview flow to populate:
+///     ReelcraftName, ReelcraftDesc, StartAbilityHeader, StartAbilityDropdown, StartAbilityDesc.
 /// </summary>
 public class StartupClassSelectionPanel : MonoBehaviour
 {
     [Header("Root")]
     [SerializeField] private GameObject root;
 
-    [Header("Slot UI")]
-    [SerializeField] private TMP_Dropdown[] slotDropdowns = new TMP_Dropdown[3];
-    [SerializeField] private Image[] slotPortraits = new Image[3];
-    [SerializeField] private TMP_Text[] slotLabels = new TMP_Text[3];
-
-    [Header("Reel Symbols Preview (Optional)")]
-    [Tooltip("Assign a container (e.g., HorizontalLayoutGroup) per party slot. The panel will populate it with symbol icons from the selected hero's ReelStrip.")]
-    [SerializeField] private Transform[] slotReelSymbolContainers = new Transform[3];
-    [Tooltip("UI Image prefab used to render each reel symbol icon.")]
-    [SerializeField] private Image reelSymbolIconPrefab;
-    [Tooltip("Maximum number of symbol icons to show per slot (helps avoid huge strips overflowing UI). Set to 0 to show ALL symbols in the strip.")]
-    [SerializeField] private int maxReelSymbolsToShow = 0;
-    [Tooltip("If true, only show one icon per unique symbol (by ScriptableObject reference). If false, show the FULL strip including duplicates.")]
-    [SerializeField] private bool showUniqueReelSymbolsOnly = false;
-
-    [Header("Class Info (Optional)")]
-    [Tooltip("Optional: per-slot text for the selected class' Reelcraft ability name.")]
-    [SerializeField] private TMP_Text[] slotReelcraftNameTexts = new TMP_Text[3];
-
-    [Tooltip("Optional: per-slot text for the selected class' Reelcraft ability description.")]
-    [SerializeField] private TMP_Text[] slotReelcraftDescriptionTexts = new TMP_Text[3];
-
-    [Header("Starting Ability Choice (Optional)")]
-    [Tooltip("Optional: per-slot dropdown to choose which ability the hero begins with (uses AbilityDefinitionSO.starterChoice).")]
-    [SerializeField] private TMP_Dropdown[] slotStartingAbilityDropdowns = new TMP_Dropdown[3];
-
-    [Tooltip("Optional: per-slot text that shows the description of the currently selected starting ability.")]
-    [SerializeField] private TMP_Text[] slotStartingAbilityDescriptionTexts = new TMP_Text[3];
-
-
-    [Header("Buttons")]
+    [Header("Confirm")]
     [SerializeField] private Button confirmButton;
 
-    private GameObject[] _available;
-    private int _partySize;
+    [Header("Ally1 Preview UI (REQUIRED for full preview)")]
+    [SerializeField] private TMP_Dropdown ally1ClassDropdown;              // Optional: used if you still want dropdown selection to work
+    [SerializeField] private Image ally1Portrait;
+    [SerializeField] private TMP_Text ally1Label;
+
+    [Header("Ally1 Reel Symbols Preview")]
+    [SerializeField] private Transform ally1ReelSymbolsContainer;
+    [SerializeField] private Image reelSymbolIconPrefab;
+    [SerializeField] private int maxReelSymbolsToShow = 12;
+    [SerializeField] private bool showUniqueReelSymbolsOnly = false;
+
+    [Header("Ally1 Reelcraft Preview")]
+    [SerializeField] private TMP_Text ally1ReelcraftName;
+    [SerializeField] private TMP_Text ally1ReelcraftDesc;
+
+    [Header("Ally1 Starting Ability Preview")]
+    [SerializeField] private TMP_Text ally1StartAbilityHeader;
+    [SerializeField] private TMP_Dropdown ally1StartAbilityDropdown;
+    [SerializeField] private TMP_Text ally1StartAbilityDesc;
+
+    [Header("Debug")]
+    [SerializeField] private bool logFlow = false;
+
+    private GameObject[] _available = Array.Empty<GameObject>();
+    private int _partySize = 3;
     private Action<GameObject[]> _onConfirm;
 
-    private readonly List<Image>[] _slotReelIcons = new List<Image>[3];
-    private readonly List<AbilityDefinitionSO>[] _slotStartingAbilityOptions = new List<AbilityDefinitionSO>[3];
+    // symbolId -> prefab index
+    private readonly Dictionary<string, int> _symbolIdToPrefabIndex = new Dictionary<string, int>(StringComparer.Ordinal);
 
+    // For cleaning / tracking created reel symbol icons
+    private readonly List<Image> _ally1ReelIcons = new List<Image>();
+
+    // Starting ability options for Ally1 dropdown
+    private readonly List<AbilityDefinitionSO> _ally1StartAbilityOptions = new List<AbilityDefinitionSO>();
 
     private void Awake()
     {
-        for (int i = 0; i < _slotReelIcons.Length; i++)
-        {
-            if (_slotReelIcons[i] == null) _slotReelIcons[i] = new List<Image>();
-        }
-
         if (confirmButton != null)
         {
-            confirmButton.onClick.RemoveListener(Confirm);
+            confirmButton.onClick.RemoveAllListeners();
             confirmButton.onClick.AddListener(Confirm);
         }
 
-        Hide();
+        if (ally1ClassDropdown != null)
+        {
+            ally1ClassDropdown.onValueChanged.RemoveAllListeners();
+            ally1ClassDropdown.onValueChanged.AddListener(_ =>
+            {
+                // If the user manually changes the dropdown, refresh Ally1 preview to match
+                RefreshAlly1FromSelectedDropdown();
+            });
+        }
+
+        if (ally1StartAbilityDropdown != null)
+        {
+            ally1StartAbilityDropdown.onValueChanged.RemoveAllListeners();
+            ally1StartAbilityDropdown.onValueChanged.AddListener(_ => CommitAlly1StartingAbilitySelection());
+        }
     }
 
+    /// <summary>
+    /// Kept for compatibility with StartupClassSelectionBootstrapper.
+    /// </summary>
     public void Show(GameObject[] availablePartyPrefabs, int partySize, Action<GameObject[]> onConfirm)
     {
         _available = availablePartyPrefabs ?? Array.Empty<GameObject>();
         _partySize = Mathf.Clamp(partySize, 1, 3);
-        StartupPartySelectionData.Clear();
         _onConfirm = onConfirm;
+
+        StartupPartySelectionData.Clear();
 
         if (root != null) root.SetActive(true);
         gameObject.SetActive(true);
 
-        // Build dropdown options
-        var options = new List<TMP_Dropdown.OptionData>();
-        for (int i = 0; i < _available.Length; i++)
-        {
-            var go = _available[i];
-            options.Add(new TMP_Dropdown.OptionData(go != null ? go.name : "<Missing Prefab>"));
-        }
+        BuildSymbolCacheAndDropdown();
 
-        for (int slot = 0; slot < slotDropdowns.Length; slot++)
-        {
-            var dd = slotDropdowns[slot];
-            if (dd == null) continue;
-
-            dd.onValueChanged.RemoveAllListeners();
-            dd.ClearOptions();
-            dd.AddOptions(options);
-
-            // Disable slots above party size
-            bool active = slot < _partySize;
-            dd.interactable = active;
-            if (slotLabels != null && slot < slotLabels.Length && slotLabels[slot] != null)
-                slotLabels[slot].text = active ? $"Reel {slot + 1}" : $"Reel {slot + 1} (unused)";
-
-            int capturedSlot = slot;
-            dd.onValueChanged.AddListener(_ => RefreshPortrait(capturedSlot));
-
-            dd.onValueChanged.AddListener(_ => RefreshReelSymbols(capturedSlot));
-            dd.onValueChanged.AddListener(_ => RefreshClassInfo(capturedSlot));
-
-            // Default selection: slot index if possible
-            dd.value = Mathf.Clamp(slot, 0, Mathf.Max(0, _available.Length - 1));
-            dd.RefreshShownValue();
-
-            RefreshPortrait(slot);
-
-            RefreshReelSymbols(slot);
-            RefreshClassInfo(slot);
-        }
-
-        if (confirmButton != null)
-            confirmButton.interactable = _available.Length > 0;
+        // Initialize Ally1 preview from dropdown selection (if available)
+        RefreshAlly1FromSelectedDropdown();
     }
 
     public void Hide()
     {
         if (root != null) root.SetActive(false);
-        // keep component enabled; just hide visuals
+        gameObject.SetActive(false);
     }
 
-    private void RefreshPortrait(int slot)
+    /// <summary>
+    /// This is the reel-driven entry point.
+    /// Call this every time the midrow symbol id changes.
+    /// </summary>
+    public void PreviewAlly1BySymbolId(string symbolId)
     {
-        if (slotPortraits == null || slot >= slotPortraits.Length) return;
-        var img = slotPortraits[slot];
-        if (img == null) return;
+        if (string.IsNullOrEmpty(symbolId)) return;
+        if (_available == null || _available.Length == 0) return;
 
-        var prefab = GetSelectedPrefabForSlot(slot);
-        if (prefab == null)
+        int idx;
+        if (!_symbolIdToPrefabIndex.TryGetValue(symbolId, out idx))
         {
-            img.enabled = false;
+            // Fallback scan: match BaseClassDef.className OR prefab name.
+            idx = FindPrefabIndexBySymbolIdScan(symbolId);
+            if (idx >= 0) _symbolIdToPrefabIndex[symbolId] = idx;
+        }
+
+        if (idx < 0 || idx >= _available.Length)
+        {
+            if (logFlow) Debug.Log($"[StartupClassSelectionPanel] PreviewAlly1BySymbolId MISS symbolId={symbolId}", this);
             return;
         }
 
-        var hs = prefab.GetComponentInChildren<HeroStats>(true);
-        if (hs != null && hs.Portrait != null)
+        // Drive dropdown if it exists (keeps any old wiring consistent),
+        // but we DO NOT rely on dropdown callbacks for updates.
+        if (ally1ClassDropdown != null)
         {
-            img.enabled = true;
-            img.sprite = hs.Portrait;
+            if (ally1ClassDropdown.options == null || ally1ClassDropdown.options.Count != _available.Length)
+            {
+                // Safety: rebuild options if needed
+                BuildSymbolCacheAndDropdown();
+            }
+
+            ally1ClassDropdown.SetValueWithoutNotify(idx);
+            ally1ClassDropdown.RefreshShownValue();
         }
-        else
+
+        // Update ALL Ally1 preview fields directly
+        RefreshAlly1FromPrefab(_available[idx]);
+    }
+
+    /// <summary>
+    /// Optional compatibility wrapper if older code calls this name.
+    /// </summary>
+    public void PreviewSlot0BySymbolId(string symbolId) => PreviewAlly1BySymbolId(symbolId);
+
+    private void BuildSymbolCacheAndDropdown()
+    {
+        _symbolIdToPrefabIndex.Clear();
+
+        // Build dropdown options
+        if (ally1ClassDropdown != null)
         {
-            img.enabled = false;
+            ally1ClassDropdown.ClearOptions();
+            var opts = new List<TMP_Dropdown.OptionData>();
+            for (int i = 0; i < _available.Length; i++)
+            {
+                var go = _available[i];
+                opts.Add(new TMP_Dropdown.OptionData(go != null ? go.name : "<Missing>"));
+            }
+            ally1ClassDropdown.AddOptions(opts);
+            ally1ClassDropdown.value = Mathf.Clamp(ally1ClassDropdown.value, 0, Mathf.Max(0, _available.Length - 1));
+            ally1ClassDropdown.RefreshShownValue();
+        }
+
+        // Cache: key = BaseClassDef.className (preferred) and prefab name (fallback)
+        for (int i = 0; i < _available.Length; i++)
+        {
+            var go = _available[i];
+            if (go == null) continue;
+
+            string key1 = null;
+            var hs = go.GetComponentInChildren<HeroStats>(true);
+            if (hs != null && hs.BaseClassDef != null && !string.IsNullOrEmpty(hs.BaseClassDef.className))
+                key1 = hs.BaseClassDef.className;
+
+            if (!string.IsNullOrEmpty(key1) && !_symbolIdToPrefabIndex.ContainsKey(key1))
+                _symbolIdToPrefabIndex.Add(key1, i);
+
+            if (!_symbolIdToPrefabIndex.ContainsKey(go.name))
+                _symbolIdToPrefabIndex.Add(go.name, i);
         }
     }
 
-    
-    private void RefreshReelSymbols(int slot)
+    private int FindPrefabIndexBySymbolIdScan(string symbolId)
     {
-        if (slotReelSymbolContainers == null || slot >= slotReelSymbolContainers.Length) return;
-        var container = slotReelSymbolContainers[slot];
-        if (container == null) return;
-        if (reelSymbolIconPrefab == null) return;
-
-        if (_slotReelIcons[slot] == null) _slotReelIcons[slot] = new List<Image>();
-
-        // Clear previous
-        for (int i = _slotReelIcons[slot].Count - 1; i >= 0; i--)
+        for (int i = 0; i < _available.Length; i++)
         {
-            if (_slotReelIcons[slot][i] != null)
-                Destroy(_slotReelIcons[slot][i].gameObject);
+            var go = _available[i];
+            if (go == null) continue;
+
+            if (go.name == symbolId) return i;
+
+            var hs = go.GetComponentInChildren<HeroStats>(true);
+            if (hs != null && hs.BaseClassDef != null && hs.BaseClassDef.className == symbolId)
+                return i;
         }
-        _slotReelIcons[slot].Clear();
+        return -1;
+    }
 
-        var prefab = GetSelectedPrefabForSlot(slot);
-        if (prefab == null) return;
+    private void RefreshAlly1FromSelectedDropdown()
+    {
+        if (ally1ClassDropdown == null) return;
+        if (_available == null || _available.Length == 0) return;
 
-        var hs = prefab.GetComponentInChildren<HeroStats>(true);
+        int idx = ally1ClassDropdown.value;
+        if (idx < 0 || idx >= _available.Length) return;
+
+        RefreshAlly1FromPrefab(_available[idx]);
+    }
+
+    private void RefreshAlly1FromPrefab(GameObject heroPrefab)
+    {
+        if (heroPrefab == null) return;
+
+        var hs = heroPrefab.GetComponentInChildren<HeroStats>(true);
+        var classDef = (hs != null) ? hs.BaseClassDef : null;
+
+        if (logFlow)
+        {
+            Debug.Log($"[StartupClassSelectionPanel] RefreshAlly1FromPrefab prefab={heroPrefab.name} heroStats={(hs != null)} classDef={(classDef != null ? classDef.className : "NULL")}", this);
+            Debug.Log($"[StartupClassSelectionPanel] UI refs: portrait={(ally1Portrait!=null)} label={(ally1Label!=null)} reelcraftName={(ally1ReelcraftName!=null)} reelcraftDesc={(ally1ReelcraftDesc!=null)} startHdr={(ally1StartAbilityHeader!=null)} startDD={(ally1StartAbilityDropdown!=null)} startDesc={(ally1StartAbilityDesc!=null)}", this);
+        }
+
+        // Portrait
+        if (ally1Portrait != null)
+        {
+            if (hs != null && hs.Portrait != null)
+            {
+                ally1Portrait.enabled = true;
+                ally1Portrait.sprite = hs.Portrait;
+            }
+            else
+            {
+                ally1Portrait.enabled = false;
+            }
+        }
+
+        // Label (class name)
+        if (ally1Label != null)
+        {
+            ally1Label.text = (classDef != null && !string.IsNullOrEmpty(classDef.className))
+                ? classDef.className
+                : heroPrefab.name;
+        }
+
+        // Reel symbols (this is the part you said is already working, keep it)
+        RefreshAlly1ReelSymbols(hs);
+
+        // Reelcraft fields
+        if (ally1ReelcraftName != null)
+            ally1ReelcraftName.text = (classDef != null) ? classDef.reelcraftName : "";
+
+        if (ally1ReelcraftDesc != null)
+            ally1ReelcraftDesc.text = (classDef != null) ? classDef.reelcraftDescription : "";
+
+        // Starting ability header + dropdown + desc
+        if (ally1StartAbilityHeader != null)
+            ally1StartAbilityHeader.text = "Starting Ability";
+
+        RefreshAlly1StartingAbilityDropdown(classDef);
+        CommitAlly1StartingAbilitySelection();
+    }
+
+    private void RefreshAlly1ReelSymbols(HeroStats hs)
+    {
+        if (ally1ReelSymbolsContainer == null || reelSymbolIconPrefab == null) return;
+
+        // Clear existing
+        for (int i = _ally1ReelIcons.Count - 1; i >= 0; i--)
+        {
+            if (_ally1ReelIcons[i] != null)
+                Destroy(_ally1ReelIcons[i].gameObject);
+        }
+        _ally1ReelIcons.Clear();
+
         if (hs == null || hs.ReelStrip == null || hs.ReelStrip.symbols == null) return;
 
-        var symbols = hs.ReelStrip.symbols;
-
-        // If maxReelSymbolsToShow <= 0, show ALL symbols (including duplicates).
-        int limit = maxReelSymbolsToShow <= 0 ? int.MaxValue : Mathf.Clamp(maxReelSymbolsToShow, 1, 9999);
-
-        // Optional: show unique symbols only
+        int limit = (maxReelSymbolsToShow <= 0) ? int.MaxValue : maxReelSymbolsToShow;
         HashSet<ReelSymbolSO> seen = showUniqueReelSymbolsOnly ? new HashSet<ReelSymbolSO>() : null;
 
         int shown = 0;
-        for (int i = 0; i < symbols.Count; i++)
+        for (int i = 0; i < hs.ReelStrip.symbols.Count; i++)
         {
             if (shown >= limit) break;
-            var sym = symbols[i];
+
+            var sym = hs.ReelStrip.symbols[i];
             if (sym == null || sym.icon == null) continue;
 
             if (seen != null)
@@ -209,172 +303,113 @@ public class StartupClassSelectionPanel : MonoBehaviour
                 seen.Add(sym);
             }
 
-            var img = Instantiate(reelSymbolIconPrefab, container);
+            var img = Instantiate(reelSymbolIconPrefab, ally1ReelSymbolsContainer);
             img.sprite = sym.icon;
             img.enabled = true;
             img.preserveAspect = true;
-            _slotReelIcons[slot].Add(img);
+            _ally1ReelIcons.Add(img);
             shown++;
         }
     }
 
-    
-
-    private void RefreshClassInfo(int slot)
+    private void RefreshAlly1StartingAbilityDropdown(ClassDefinitionSO classDef)
     {
-        // Reelcraft text
-        ClassDefinitionSO classDef = GetSelectedClassDefForSlot(slot);
+        if (ally1StartAbilityDropdown == null) return;
 
-        if (slotReelcraftNameTexts != null && slot < slotReelcraftNameTexts.Length && slotReelcraftNameTexts[slot] != null)
+        ally1StartAbilityDropdown.onValueChanged.RemoveAllListeners();
+
+        _ally1StartAbilityOptions.Clear();
+
+        // Gather abilities from classDef using your existing model:
+        // - prefer classDef.abilities if present
+        // - fallback to classDef.ability1/ability2 if that's how you store them
+        var all = new List<AbilityDefinitionSO>();
+
+        if (classDef != null)
         {
-            slotReelcraftNameTexts[slot].text = (classDef != null && !string.IsNullOrWhiteSpace(classDef.reelcraftName))
-                ? classDef.reelcraftName
-                : "";
+            if (classDef.abilities != null && classDef.abilities.Count > 0)
+                all.AddRange(classDef.abilities);
+            else
+            {
+                if (classDef.ability1 != null) all.Add(classDef.ability1);
+                if (classDef.ability2 != null) all.Add(classDef.ability2);
+            }
         }
 
-        if (slotReelcraftDescriptionTexts != null && slot < slotReelcraftDescriptionTexts.Length && slotReelcraftDescriptionTexts[slot] != null)
-        {
-            slotReelcraftDescriptionTexts[slot].text = (classDef != null && !string.IsNullOrWhiteSpace(classDef.reelcraftDescription))
-                ? classDef.reelcraftDescription
-                : "";
-        }
-
-        // Starting ability dropdown
-        if (slotStartingAbilityDropdowns == null || slot >= slotStartingAbilityDropdowns.Length || slotStartingAbilityDropdowns[slot] == null)
-            return;
-
-        var dd = slotStartingAbilityDropdowns[slot];
-        dd.onValueChanged.RemoveAllListeners();
-
-        if (_slotStartingAbilityOptions[slot] == null)
-            _slotStartingAbilityOptions[slot] = new List<AbilityDefinitionSO>();
-        _slotStartingAbilityOptions[slot].Clear();
-
-        List<AbilityDefinitionSO> all = GetAbilitiesFromClassDef(classDef);
-        if (all == null) all = new List<AbilityDefinitionSO>();
-
-        // Prefer starterChoice abilities if any exist; otherwise list all abilities.
-        bool hasStarterChoices = false;
+        // Only show starterChoice abilities if any exist; otherwise show all.
+        bool hasStarter = false;
         for (int i = 0; i < all.Count; i++)
         {
-            if (all[i] != null && all[i].starterChoice)
-            {
-                hasStarterChoices = true;
-                break;
-            }
+            if (all[i] != null && all[i].starterChoice) { hasStarter = true; break; }
         }
 
         for (int i = 0; i < all.Count; i++)
         {
             var a = all[i];
             if (a == null) continue;
-            if (hasStarterChoices && !a.starterChoice) continue;
-            _slotStartingAbilityOptions[slot].Add(a);
+            if (hasStarter && !a.starterChoice) continue;
+            _ally1StartAbilityOptions.Add(a);
         }
 
-        // Populate dropdown options
-        var options = new List<TMP_Dropdown.OptionData>();
-        for (int i = 0; i < _slotStartingAbilityOptions[slot].Count; i++)
+        // Build dropdown options
+        ally1StartAbilityDropdown.ClearOptions();
+        var opts = new List<TMP_Dropdown.OptionData>();
+        for (int i = 0; i < _ally1StartAbilityOptions.Count; i++)
         {
-            var a = _slotStartingAbilityOptions[slot][i];
-            options.Add(new TMP_Dropdown.OptionData(a != null ? a.abilityName : "<null>"));
+            var a = _ally1StartAbilityOptions[i];
+            opts.Add(new TMP_Dropdown.OptionData(a != null ? a.abilityName : "<null>"));
         }
+        ally1StartAbilityDropdown.AddOptions(opts);
 
-        dd.ClearOptions();
-        dd.AddOptions(options);
+        bool interactable = _ally1StartAbilityOptions.Count > 0;
+        ally1StartAbilityDropdown.interactable = interactable;
+        ally1StartAbilityDropdown.SetValueWithoutNotify(0);
+        ally1StartAbilityDropdown.RefreshShownValue();
 
-        bool interactable = (_slotStartingAbilityOptions[slot].Count > 0);
-        dd.interactable = interactable;
-
-        // Default selection to first option
-        dd.value = 0;
-        dd.RefreshShownValue();
-
-        // Commit selection immediately
-        CommitStartingAbilitySelection(slot);
-
-        dd.onValueChanged.AddListener(_ => CommitStartingAbilitySelection(slot));
+        ally1StartAbilityDropdown.onValueChanged.AddListener(_ => CommitAlly1StartingAbilitySelection());
     }
 
-    private void CommitStartingAbilitySelection(int slot)
+    private void CommitAlly1StartingAbilitySelection()
     {
-        if (_slotStartingAbilityOptions == null || slot < 0 || slot >= _slotStartingAbilityOptions.Length) return;
+        AbilityDefinitionSO chosen = null;
 
-        AbilityDefinitionSO selected = null;
-        var opts = _slotStartingAbilityOptions[slot];
-        if (opts != null && slotStartingAbilityDropdowns != null && slot < slotStartingAbilityDropdowns.Length && slotStartingAbilityDropdowns[slot] != null)
+        if (ally1StartAbilityDropdown != null && _ally1StartAbilityOptions.Count > 0)
         {
-            int idx = slotStartingAbilityDropdowns[slot].value;
-            if (idx >= 0 && idx < opts.Count)
-                selected = opts[idx];
+            int idx = ally1StartAbilityDropdown.value;
+            if (idx >= 0 && idx < _ally1StartAbilityOptions.Count)
+                chosen = _ally1StartAbilityOptions[idx];
         }
 
-        StartupPartySelectionData.SetStartingAbility(slot, selected);
+        // Store for runtime spawn (if you still use StartupPartySelectionData)
+        StartupPartySelectionData.SetStartingAbility(0, chosen);
 
-        if (slotStartingAbilityDescriptionTexts != null && slot < slotStartingAbilityDescriptionTexts.Length && slotStartingAbilityDescriptionTexts[slot] != null)
-        {
-            slotStartingAbilityDescriptionTexts[slot].text = (selected != null) ? selected.description : "";
-        }
-    }
-
-    private ClassDefinitionSO GetSelectedClassDefForSlot(int slot)
-    {
-        var prefab = GetSelectedPrefabForSlot(slot);
-        if (prefab == null) return null;
-
-        var hs = prefab.GetComponentInChildren<HeroStats>(true);
-        if (hs == null) return null;
-
-        // At startup we only care about the base class definition.
-        return hs.BaseClassDef;
-    }
-
-    private List<AbilityDefinitionSO> GetAbilitiesFromClassDef(ClassDefinitionSO classDef)
-    {
-        var list = new List<AbilityDefinitionSO>();
-        if (classDef == null) return list;
-
-        if (classDef.abilities != null && classDef.abilities.Count > 0)
-        {
-            list.AddRange(classDef.abilities);
-        }
-        else
-        {
-            if (classDef.ability1 != null) list.Add(classDef.ability1);
-            if (classDef.ability2 != null) list.Add(classDef.ability2);
-        }
-
-        return list;
-    }
-
-private GameObject GetSelectedPrefabForSlot(int slot)
-    {
-        if (_available == null || _available.Length == 0) return null;
-        if (slotDropdowns == null || slot >= slotDropdowns.Length || slotDropdowns[slot] == null) return null;
-
-        int idx = slotDropdowns[slot].value;
-        if (idx < 0 || idx >= _available.Length) return null;
-        return _available[idx];
+        if (ally1StartAbilityDesc != null)
+            ally1StartAbilityDesc.text = (chosen != null) ? chosen.description : "";
     }
 
     private void Confirm()
     {
-        if (_available == null || _available.Length == 0) return;
-
+        // Even though Ally2/3 will be removed, keep legacy confirm output stable.
         var chosen = new GameObject[3];
-        for (int i = 0; i < 3; i++)
-        {
-            if (i >= _partySize)
-            {
-                chosen[i] = null;
-                continue;
-            }
-
-            chosen[i] = GetSelectedPrefabForSlot(i);
-            CommitStartingAbilitySelection(i);
-        }
+        chosen[0] = GetSelectedPrefabFromAlly1();
+        chosen[1] = null;
+        chosen[2] = null;
 
         Hide();
         _onConfirm?.Invoke(chosen);
+    }
+
+    private GameObject GetSelectedPrefabFromAlly1()
+    {
+        if (_available == null || _available.Length == 0) return null;
+
+        if (ally1ClassDropdown != null)
+        {
+            int idx = ally1ClassDropdown.value;
+            if (idx >= 0 && idx < _available.Length) return _available[idx];
+        }
+
+        // Fallback: first prefab
+        return _available[0];
     }
 }

@@ -115,7 +115,15 @@ public class Reel3DColumn : MonoBehaviour
     // Authoritative reel pose (integer steps). Angle is always step*StepDeg when stopped.
     private int _currentStep;
 
+    // Rotation bookkeeping (avoid Euler wrap/jitter by driving localRotation directly)
+    private bool _baseRotationInitialized = false;
+    private Quaternion _baseLocalRotation;
+    private float _primaryAxisAngleUnwrapped = 0f;
+
     public bool IsSpinning { get; private set; }
+
+    private bool _isNudging = false;
+    public bool IsNudging => _isNudging;
 
     public ReelStripSO Strip => strip;
     public int QuadCount => quadCount;
@@ -194,6 +202,56 @@ public class Reel3DColumn : MonoBehaviour
         SetPrimaryAxisAngle(_currentStep * StepDeg);
         return true;
     }
+
+    /// <summary>
+    /// Nudges the reel by an integer number of steps while stopped, but animates the rotation
+    /// instead of snapping instantly. Returns false if the reel is spinning or already nudging.
+    /// </summary>
+    public bool TryNudgeStepsAnimated(int deltaSteps, float durationSeconds = 0.14f, AnimationCurve ease = null)
+    {
+        EnsureBuilt();
+
+        if (IsSpinning || _isNudging)
+            return false;
+
+        if (quadCount <= 0)
+            return false;
+
+        if (deltaSteps == 0)
+            return true;
+
+        StartCoroutine(NudgeStepsAnimatedRoutine(deltaSteps, durationSeconds, ease));
+        return true;
+    }
+
+    private IEnumerator NudgeStepsAnimatedRoutine(int deltaSteps, float durationSeconds, AnimationCurve ease)
+    {
+        _isNudging = true;
+
+        float dur = Mathf.Max(0.01f, durationSeconds);
+
+        // Use unwrapped angles so a +/-1 step nudge never takes the long way around 0/360.
+        float startAngle = _currentStep * StepDeg;
+        float deltaAngle = deltaSteps * StepDeg;
+
+        float t = 0f;
+        while (t < dur)
+        {
+            t += Time.deltaTime;
+            float u = Mathf.Clamp01(t / dur);
+            if (ease != null) u = ease.Evaluate(u);
+
+            SetPrimaryAxisAngle(startAngle + deltaAngle * u);
+            yield return null;
+        }
+
+        // Commit step state (exact) and snap to canonical resting angle.
+        _currentStep = Mod(_currentStep + deltaSteps, quadCount);
+        SetPrimaryAxisAngle(_currentStep * StepDeg);
+
+        _isNudging = false;
+    }
+
 
     /// <summary>
     /// Shakes the whole reel object a bit (same style as the reel-upgrade minigame),
@@ -705,7 +763,7 @@ public class Reel3DColumn : MonoBehaviour
 
         // Commit step state (exact)
         int stepDelta = stepsForward * (reverseSpinDirection ? -1 : 1);
-        _currentStep = startStep + stepDelta;
+        _currentStep = Mod(startStep + stepDelta, quadCount);
 
         SetPrimaryAxisAngle(_currentStep * StepDeg);
 
@@ -926,35 +984,34 @@ public class Reel3DColumn : MonoBehaviour
         }
     }
 
-    private float GetPrimaryAxisAngle()
+    
+private float GetPrimaryAxisAngle()
+{
+    // We track the unwrapped angle ourselves (in degrees) to avoid Euler wrap-around
+    // causing apparent direction flips or aliasing.
+    return _primaryAxisAngleUnwrapped;
+}
+
+private void SetPrimaryAxisAngle(float ang)
+{
+    EnsureBuilt();
+
+    if (!_baseRotationInitialized)
     {
-        Vector3 e = transform.localEulerAngles;
-
-        Vector3 a = localSpinAxis;
-        a = a.sqrMagnitude < 0.0001f ? Vector3.right : a.normalized;
-
-        float ax = Mathf.Abs(a.x), ay = Mathf.Abs(a.y), az = Mathf.Abs(a.z);
-        if (ax >= ay && ax >= az) return e.x;
-        if (ay >= ax && ay >= az) return e.y;
-        return e.z;
+        _baseLocalRotation = transform.localRotation;
+        _baseRotationInitialized = true;
     }
 
-    private void SetPrimaryAxisAngle(float ang)
-    {
-        Vector3 e = transform.localEulerAngles;
+    _primaryAxisAngleUnwrapped = ang;
 
-        Vector3 a = localSpinAxis;
-        a = a.sqrMagnitude < 0.0001f ? Vector3.right : a.normalized;
+    Vector3 a = localSpinAxis;
+    if (a.sqrMagnitude < 0.0001f) a = Vector3.right;
+    a.Normalize();
 
-        float ax = Mathf.Abs(a.x), ay = Mathf.Abs(a.y), az = Mathf.Abs(a.z);
-        if (ax >= ay && ax >= az) e.x = ang;
-        else if (ay >= ax && ay >= az) e.y = ang;
-        else e.z = ang;
-
-        transform.localEulerAngles = e;
-    }
-
-    private static int Mod(int x, int m)
+    // Apply rotation around the configured local spin axis without Euler angle wrapping.
+    transform.localRotation = _baseLocalRotation * Quaternion.AngleAxis(ang, a);
+}
+private static int Mod(int x, int m)
     {
         if (m <= 0) return 0;
         int r = x % m;
