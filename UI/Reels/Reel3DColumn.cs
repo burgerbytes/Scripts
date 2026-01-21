@@ -120,6 +120,59 @@ public class Reel3DColumn : MonoBehaviour
     public ReelStripSO Strip => strip;
     public int QuadCount => quadCount;
 
+    /// <summary>Current spin speed in degrees/second. Can be modified at runtime.</summary>
+    public float SpinDegreesPerSecond
+    {
+        get => spinDegreesPerSecond;
+        set => spinDegreesPerSecond = Mathf.Max(1f, value);
+    }
+
+    private float _globalWhiteGlow01 = 0f;
+
+    /// <summary>
+    /// Sets a simple white "glow" by tinting all reel icon quads toward white.
+    /// Shader-agnostic: uses MaterialPropertyBlock and writes both _Color/_BaseColor.
+    /// 0 = no tint, 1 = fully white.
+    /// </summary>
+    public void SetGlobalWhiteGlow(float glow01)
+    {
+        EnsureBuilt();
+        _globalWhiteGlow01 = Mathf.Clamp01(glow01);
+
+        for (int i = 0; i < _quads.Count; i++)
+        {
+            ApplyGlobalGlowToRenderer(_quads[i].frontMr);
+            if (_quads[i].back != null)
+                ApplyGlobalGlowToRenderer(_quads[i].back.GetComponent<MeshRenderer>());
+        }
+
+        foreach (var kv in _shadowRenderers)
+            ApplyGlobalGlowToRenderer(kv.Value);
+    }
+
+    private void ApplyGlobalGlowToRenderer(MeshRenderer mr)
+    {
+        if (mr == null) return;
+
+        Color baseCol = Color.white;
+        if (mr.sharedMaterial != null)
+        {
+            if (mr.sharedMaterial.HasProperty("_BaseColor"))
+                baseCol = mr.sharedMaterial.GetColor("_BaseColor");
+            else if (mr.sharedMaterial.HasProperty("_Color"))
+                baseCol = mr.sharedMaterial.color;
+        }
+
+        Color outCol = Color.Lerp(baseCol, Color.white, _globalWhiteGlow01);
+
+        var mpb = new MaterialPropertyBlock();
+        mr.GetPropertyBlock(mpb);
+        mpb.SetColor("_Color", outCol);
+        mpb.SetColor("_BaseColor", outCol);
+        mr.SetPropertyBlock(mpb);
+    }
+
+
     /// <summary>
     /// Nudges the reel by an integer number of steps while stopped.
     /// Used by Reelcraft abilities (e.g., Measured Bash).
@@ -632,7 +685,7 @@ public class Reel3DColumn : MonoBehaviour
         IsSpinning = true;
 
         float totalDeg = stepsForward * StepDeg;
-        float speed = Mathf.Max(1f, spinDegreesPerSecond); // deg/sec
+        // NOTE: spin speed can be adjusted at runtime by changing SpinDegreesPerSecond.
         float sign = StepDir;
 
         float traveled = 0f;
@@ -641,7 +694,7 @@ public class Reel3DColumn : MonoBehaviour
 
         while (traveled < totalDeg)
         {
-            traveled += speed * Time.deltaTime;
+            traveled += Mathf.Max(1f, spinDegreesPerSecond) * Time.deltaTime;
             float clamped = Mathf.Min(traveled, totalDeg);
 
             float ang = startAngle + sign * clamped;
@@ -969,3 +1022,4 @@ public class Reel3DColumn : MonoBehaviour
 
 
 ////////////////////////////////////////////////////////////
+

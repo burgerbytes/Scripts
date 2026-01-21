@@ -1,11 +1,43 @@
 // GUID: a3e2dd32a76bf594ba876a56162b79f2
 ////////////////////////////////////////////////////////////
+// GUID: a3e2dd32a76bf594ba876a56162b79f2
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections.Generic;
 using UnityEngine;
 
 public class HeroStats : MonoBehaviour
 {
+    [Header("DEV ONLY")]
+    [SerializeField] private bool devOverrideStartLevel = false;
+    [SerializeField] private int devStartLevel = 1;
+    [Tooltip("If true, clears PendingReelUpgrades after applying the start-level override (useful for testing evolution without multiple upgrade prompts).")]
+    [SerializeField] private bool devSuppressPendingReelUpgrades = true;
+    private bool devLevelApplied = false;
+
+    private void ApplyDevStartLevelIfNeeded()
+    {
+        if (!Application.isPlaying) return;
+        if (!devOverrideStartLevel || devLevelApplied) return;
+
+        int target = Mathf.Max(1, devStartLevel);
+        if (target > maxLevel) target = maxLevel;
+
+        int beforeLevel = level;
+        while (level < target)
+        {
+            LevelUp(); // uses existing progression logic
+        }
+
+        if (devSuppressPendingReelUpgrades)
+            pendingReelUpgrades = 0;
+
+        devLevelApplied = true;
+#if UNITY_EDITOR
+        Debug.Log($"[DEV][HeroStats] Start level override applied for '{name}': {beforeLevel} -> {level}. (pendingReelUpgrades={pendingReelUpgrades})", this);
+#endif
+    }
+
     [Header("Progression")]
     [SerializeField] private int level = 1;
     [SerializeField] private int maxLevel = 5;
@@ -119,18 +151,138 @@ public class HeroStats : MonoBehaviour
 
     // ✅ NEW: Reel strip + portrait come from the hero prefab
         [Header("Startup / Ability Selection")]
-    [Tooltip("Optional: selected on the startup class selection panel. If set and the class has starter-choice abilities, this will be the one available at Level 1.")]
+    [Tooltip("Optional: selected on the startup class selection panel. If set to a starter-choice ability, this will be the one available at Level 1.\nStarter-choice abilities are ONLY available if they match this selection.")]
     [SerializeField] private AbilityDefinitionSO startingAbilityOverride;
+
+    [Tooltip("Abilities that have been unlocked/earned by this hero and should remain available (even if the hero later changes class definitions).")]
+    [SerializeField] private List<AbilityDefinitionSO> permanentlyUnlockedAbilities = new List<AbilityDefinitionSO>();
 
     public AbilityDefinitionSO StartingAbilityOverride => startingAbilityOverride;
 
+    /// <summary>
+    /// Sets the starter-choice ability selected on the startup class selection panel.
+    /// This selection is also persisted as a permanently unlocked ability so it will not be lost after level-ups.
+    /// </summary>
     public void SetStartingAbilityOverride(AbilityDefinitionSO ability)
     {
         startingAbilityOverride = ability;
-        OnChanged?.Invoke();
+
+        if (ability != null && !permanentlyUnlockedAbilities.Contains(ability))
+            permanentlyUnlockedAbilities.Add(ability);
+
+        NotifyChanged();
     }
 
-    [Header("Reels / UI (Prefab Data)")]
+    /// <summary>
+    /// Ensures that the hero's permanent unlock list includes any abilities that should have been unlocked
+    /// due to the hero's current level (for non-starter abilities), and the chosen starter ability.
+    /// This is lazy-synced (called when building menus / checking unlocks) so we don't depend on exact timing of LevelUp events.
+    /// </summary>
+    private void SyncPermanentUnlocks()
+    {
+        // Starter selection should always persist
+        if (startingAbilityOverride != null && !permanentlyUnlockedAbilities.Contains(startingAbilityOverride))
+            permanentlyUnlockedAbilities.Add(startingAbilityOverride);
+
+        // Non-starter abilities should persist once level-gated unlocked.
+        // We sync from whichever class defs exist, so changing class defs doesn't "forget" abilities.
+        AddEligibleUnlocksFromClassDef(baseClassDef);
+        AddEligibleUnlocksFromClassDef(advancedClassDef);
+    }
+
+    private void AddEligibleUnlocksFromClassDef(ClassDefinitionSO classDef)
+    {
+        if (classDef == null) return;
+        if (classDef.abilities == null) return;
+
+        for (int i = 0; i < classDef.abilities.Count; i++)
+        {
+            AbilityDefinitionSO a = classDef.abilities[i];
+            if (a == null) continue;
+
+            if (a.starterChoice) continue; // starter-choice is handled by startingAbilityOverride
+
+            int req = Mathf.Max(1, a.unlockAtLevel);
+            if (level >= req && !permanentlyUnlockedAbilities.Contains(a))
+                permanentlyUnlockedAbilities.Add(a);
+        }
+    }
+
+    /// <summary>
+    /// Returns true if this hero should be allowed to use the given ability right now,
+    /// based on Starter Choice rules + unlock level gating + persistent unlocks.
+    ///
+    /// Rules:
+    /// - Non-starter abilities are unlocked when hero.Level >= ability.unlockAtLevel (and then persist).
+    /// - Starter-choice abilities are ONLY available if they match startingAbilityOverride.
+    /// </summary>
+    public bool IsAbilityUnlocked(AbilityDefinitionSO ability)
+    {
+        if (ability == null) return false;
+
+        // Keep permanent unlocks in sync before we answer.
+        SyncPermanentUnlocks();
+
+        if (ability.starterChoice)
+        {
+            if (startingAbilityOverride == null) return false;
+            return ability == startingAbilityOverride;
+        }
+
+        // Non-starter abilities: if level gate is met, they are unlocked (and persisted).
+        int req = Mathf.Max(1, ability.unlockAtLevel);
+        if (level >= req)
+        {
+            if (!permanentlyUnlockedAbilities.Contains(ability))
+                permanentlyUnlockedAbilities.Add(ability);
+            return true;
+        }
+
+        // Otherwise, allow if it was previously unlocked/persisted (e.g., from a prior class definition).
+        return permanentlyUnlockedAbilities.Contains(ability);
+    }
+
+    /// <summary>
+    /// Builds the list of abilities that should be shown/usable for this hero.
+    ///
+    /// Source-of-truth:
+    /// - Class definition abilities (for current class actions)
+    /// - PLUS any permanently unlocked abilities (so chosen starter abilities don't disappear on later levels/class changes)
+    ///
+    /// Then we apply IsAbilityUnlocked() for gating.
+    /// </summary>
+    public List<AbilityDefinitionSO> GetUnlockedAbilitiesFromClassDef(ClassDefinitionSO classDef)
+    {
+        SyncPermanentUnlocks();
+
+        List<AbilityDefinitionSO> results = new List<AbilityDefinitionSO>();
+
+        // 1) Add abilities from the provided class definition (filtered)
+        if (classDef != null && classDef.abilities != null)
+        {
+            for (int i = 0; i < classDef.abilities.Count; i++)
+            {
+                AbilityDefinitionSO a = classDef.abilities[i];
+                if (a == null) continue;
+                if (IsAbilityUnlocked(a) && !results.Contains(a))
+                    results.Add(a);
+            }
+        }
+
+        // 2) Add any permanently unlocked abilities (filtered) so they persist across level ups/class changes
+        for (int i = 0; i < permanentlyUnlockedAbilities.Count; i++)
+        {
+            AbilityDefinitionSO a = permanentlyUnlockedAbilities[i];
+            if (a == null) continue;
+            if (IsAbilityUnlocked(a) && !results.Contains(a))
+                results.Add(a);
+        }
+
+        return results;
+    }
+
+
+[Header("Reels / UI (Prefab Data)")]
     [Tooltip("Reel strip used for this hero's reel.")]
     [SerializeField] private ReelStripSO reelStrip;
 
@@ -226,6 +378,7 @@ public class HeroStats : MonoBehaviour
 
         InitEquipmentWatcher();      // legacy array watcher (safe to keep)
         RefreshEquipSlotsFromGrid(); // runtime EquipGrid watcher
+        ApplyDevStartLevelIfNeeded();
         NotifyChanged();
     }
 
@@ -1011,19 +1164,145 @@ public class HeroStats : MonoBehaviour
 
         return false;
     }
+
+    // ---------------- Runtime Copy / Evolution Helpers ----------------
+    /// <summary>
+    /// Replaces this hero's reel strip with a fresh runtime instance cloned from the given template.
+    /// Use this when evolving to an advanced class so we don't mutate shared ScriptableObject assets.
+    /// </summary>
+    public void ReplaceReelStripFromTemplate(ReelStripSO newStripTemplate)
+    {
+        if (newStripTemplate == null) return;
+        reelStrip = Instantiate(newStripTemplate);
+        NotifyChanged();
+    }
+
+    /// <summary>Overrides the hero portrait used by UI panels (PartyHUD, etc.).</summary>
+    public void SetPortrait(Sprite newPortrait)
+    {
+        portrait = newPortrait;
+        NotifyChanged();
+    }
+
+    /// <summary>
+    /// Copies the complete runtime state from another HeroStats into this instance.
+    /// Intended for prefab swaps (e.g., Fighter -> Templar) where we want to preserve progress.
+    /// </summary>
+    public void CopyRuntimeStateFrom(HeroStats src)
+    {
+        if (src == null) return;
+
+        // Core progression
+        maxLevel = src.maxLevel;
+        level = src.level;
+        xp = src.xp;
+        xpToNextLevel = src.xpToNextLevel;
+        allowLevelUps = src.allowLevelUps;
+        pendingLevelUps = src.pendingLevelUps;
+
+        // Primary stats
+        maxHp = src.maxHp;
+        currentHp = src.currentHp;
+        attack = src.attack;
+        defense = src.defense;
+
+        // Stamina
+        maxStamina = src.maxStamina;
+        currentStamina = src.currentStamina;
+        staminaCostPerAttack = src.staminaCostPerAttack;
+        blockHoldDrainMultiplier = src.blockHoldDrainMultiplier;
+        blockImpactCostMultiplier = src.blockImpactCostMultiplier;
+
+        // Combat runtime
+        currentShield = src.currentShield;
+        isHidden = src.isHidden;
+        bleedStacks = src.bleedStacks;
+        bleedAppliedOnPlayerTurn = src.bleedAppliedOnPlayerTurn;
+        isStunned = src.isStunned;
+
+        // Gold/keys/etc.
+        gold = src.gold;
+        smallKeys = src.smallKeys;
+        largeKeys = src.largeKeys;
+
+        // Class modifiers
+        canBlock = src.canBlock;
+        attackFlatBonus = src.attackFlatBonus;
+        attackMultiplier = src.attackMultiplier;
+
+        // Per-turn multipliers/limits (safe to copy)
+        turnAttackMultiplier = src.turnAttackMultiplier;
+        maxDamageAttacksThisTurn = src.maxDamageAttacksThisTurn;
+        damageAttacksUsedThisTurn = src.damageAttacksUsedThisTurn;
+        selfDamagePerAttack = src.selfDamagePerAttack;
+
+        poisonStacksOnHit = src.poisonStacksOnHit;
+        poisonDpsPerStack = src.poisonDpsPerStack;
+        poisonDurationSeconds = src.poisonDurationSeconds;
+
+        tripleBladeEmpoweredThisTurn = src.tripleBladeEmpoweredThisTurn;
+
+        // Class defs
+        baseClassDef = src.baseClassDef;
+        advancedClassDef = src.advancedClassDef;
+
+        // Abilities / unlocks
+        startingAbilityOverride = src.startingAbilityOverride;
+        permanentlyUnlockedAbilities = (src.permanentlyUnlockedAbilities != null)
+            ? new List<AbilityDefinitionSO>(src.permanentlyUnlockedAbilities)
+            : new List<AbilityDefinitionSO>();
+
+        // Reel upgrades + rules
+        upgradeReelOnLevelUp = src.upgradeReelOnLevelUp;
+        reelUpgradeRules = src.reelUpgradeRules;
+        pendingReelUpgrades = src.pendingReelUpgrades;
+
+        // Copy the runtime reel strip (already per-hero)
+        if (src.reelStrip != null)
+            reelStrip = Instantiate(src.reelStrip);
+
+        // Portrait (optional)
+        portrait = src.portrait;
+
+        // Inventory/equipment references
+        // IMPORTANT: Do NOT copy scene/prefab object references such as equipmentSlots / equip grid roots.
+        // The evolved prefab should keep its own references wired via inspector.
+
+        // Per-turn ability usage tracker is runtime and can be reset safely.
+        _abilityLastUsedOnPlayerTurn = null;
+
+        NotifyChanged();
+    }
+
+
+    /// <summary>
+    /// Adds abilities from the provided class definition into the permanently-unlocked list.
+    /// Used by evolution to ensure the advanced class' abilities show up immediately.
+    /// </summary>
+    public void ForceUnlockAllAbilitiesFromClassDef(ClassDefinitionSO def, bool includeStarterChoice = true)
+    {
+        if (def == null || def.abilities == null) return;
+
+        if (permanentlyUnlockedAbilities == null)
+            permanentlyUnlockedAbilities = new List<AbilityDefinitionSO>();
+
+        int added = 0;
+        for (int i = 0; i < def.abilities.Count; i++)
+        {
+            var a = def.abilities[i];
+            if (a == null) continue;
+            if (!includeStarterChoice && a.starterChoice) continue;
+
+            if (!permanentlyUnlockedAbilities.Contains(a))
+            {
+                permanentlyUnlockedAbilities.Add(a);
+                added++;
+            }
+        }
+
+        Debug.Log($"[Evolution][HeroStats] ForceUnlockAllAbilitiesFromClassDef def='{def.className}' added={added} totalUnlocked={permanentlyUnlockedAbilities.Count}", this);
+        NotifyChanged();
+    }
+
+
 }
-
-////////////////////////////////////////////////////////////
-
-
-
-////////////////////////////////////////////////////////////
-
-
-////////////////////////////////////////////////////////////
-
-
-////////////////////////////////////////////////////////////
-
-
-////////////////////////////////////////////////////////////

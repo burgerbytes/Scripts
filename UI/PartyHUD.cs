@@ -153,8 +153,6 @@ public class PartyHUD : MonoBehaviour
             return;
         }
 
-        // Reel phase ended.
-
         // Reel phase ended -> restore if the player had a hero selected.
         if (!_menusWereHiddenForReelPhase) return;
         _menusWereHiddenForReelPhase = false;
@@ -168,7 +166,6 @@ public class PartyHUD : MonoBehaviour
                 // Stats panel: respect "show after click" behavior.
                 if (statsPanel != null && (!showStatsOnlyAfterPickAllyClick || _hasShownStatsOnce))
                 {
-                    // Keep this consistent with the rest of PartyHUD: Stats panel shows using the HeroStats reference.
                     HeroStats hero = battleManager.GetHeroAtPartyIndex(_selectedIndex);
                     if (hero != null)
                         statsPanel.ShowForHero(hero);
@@ -195,20 +192,8 @@ public class PartyHUD : MonoBehaviour
         // Prefer Advanced class if chosen, otherwise fall back to Base.
         ClassDefinitionSO classDef = (heroStats.AdvancedClassDef != null) ? heroStats.AdvancedClassDef : heroStats.BaseClassDef;
 
-        List<AbilityDefinitionSO> abilities = new List<AbilityDefinitionSO>();
-        if (classDef != null)
-        {
-            if (classDef.abilities != null && classDef.abilities.Count > 0)
-            {
-                abilities.AddRange(classDef.abilities);
-            }
-            else
-            {
-                // Legacy 2-slot abilities.
-                if (classDef.ability1 != null) abilities.Add(classDef.ability1);
-                if (classDef.ability2 != null) abilities.Add(classDef.ability2);
-            }
-        }
+        // Filter by Starter Choice + unlock rules.
+        List<AbilityDefinitionSO> abilities = heroStats.GetUnlockedAbilitiesFromClassDef(classDef);
 
         abilityMenu.OpenForHero(heroStats, abilities);
     }
@@ -355,10 +340,9 @@ public class PartyHUD : MonoBehaviour
         HeroStats hero = battleManager.GetHeroAtPartyIndex(index);
         if (hero == null) return;
 
-        ClassDefinitionSO classDef =
-            hero.AdvancedClassDef != null ? hero.AdvancedClassDef : hero.BaseClassDef;
+        ClassDefinitionSO classDef = hero.AdvancedClassDef != null ? hero.AdvancedClassDef : hero.BaseClassDef;
 
-        List<AbilityDefinitionSO> abilities = BuildAbilityListFromClassDef(classDef);
+        List<AbilityDefinitionSO> abilities = BuildAbilityListFromClassDef(hero, classDef);
 
         if (abilityMenu != null)
         {
@@ -377,21 +361,10 @@ public class PartyHUD : MonoBehaviour
         RefreshAllSlots();
     }
 
-    private List<AbilityDefinitionSO> BuildAbilityListFromClassDef(ClassDefinitionSO classDef)
+    private List<AbilityDefinitionSO> BuildAbilityListFromClassDef(HeroStats hero, ClassDefinitionSO classDef)
     {
-        var results = new List<AbilityDefinitionSO>();
-        if (classDef == null) return results;
-
-        if (classDef.abilities != null)
-        {
-            for (int i = 0; i < classDef.abilities.Count; i++)
-            {
-                var a = classDef.abilities[i];
-                if (a != null) results.Add(a);
-            }
-        }
-
-        return results;
+        if (hero == null) return new List<AbilityDefinitionSO>();
+        return hero.GetUnlockedAbilitiesFromClassDef(classDef);
     }
 
     /// <summary>
@@ -422,6 +395,3 @@ public class PartyHUD : MonoBehaviour
         return null;
     }
 }
-
-
-////////////////////////////////////////////////////////////
