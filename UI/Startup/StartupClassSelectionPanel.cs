@@ -1,3 +1,5 @@
+// GUID: e60b184de68ccf241b14fb67f0b6851b
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections.Generic;
 using TMPro;
@@ -24,7 +26,17 @@ public class StartupClassSelectionPanel : MonoBehaviour
     [Header("Ally1 Preview UI (REQUIRED for full preview)")]
     [SerializeField] private TMP_Dropdown ally1ClassDropdown;              // Optional: used if you still want dropdown selection to work
     [SerializeField] private Image ally1Portrait;
-    [SerializeField] private TMP_Text ally1Label;
+    
+
+    [Header("Selected Party Portraits")]
+    [Tooltip("Parent container where selected party portraits will be instantiated (left-to-right).")]
+    [SerializeField] private Transform selectedPartyPortraitsContainer;
+
+    [Tooltip("Image prefab/template used for each selected party portrait. If this object is part of the scene, keep it disabled and it will be cloned at runtime.")]
+    [SerializeField] private Image selectedPartyPortraitPrefab;
+
+    private readonly System.Collections.Generic.List<Image> _selectedPartyPortraitImages = new System.Collections.Generic.List<Image>();
+[SerializeField] private TMP_Text ally1Label;
 
     [Header("Ally1 Reel Symbols Preview")]
     [SerializeField] private Transform ally1ReelSymbolsContainer;
@@ -91,6 +103,11 @@ public class StartupClassSelectionPanel : MonoBehaviour
         _partySize = Mathf.Clamp(partySize, 1, 3);
         _onConfirm = onConfirm;
 
+        StartupPartySelectionData.EnsureCapacity(_partySize);
+        StartupPartySelectionData.Clear();
+        ClearSelectedPartyPortraits();
+
+
         StartupPartySelectionData.Clear();
 
         if (root != null) root.SetActive(true);
@@ -148,6 +165,125 @@ public class StartupClassSelectionPanel : MonoBehaviour
         // Update ALL Ally1 preview fields directly
         RefreshAlly1FromPrefab(_available[idx]);
     }
+
+    /// <summary>
+    /// Called by StartupReelPartySelectionController when the player locks in a hero via NextHero.
+    /// Updates/creates the portrait image for the corresponding party slot.
+    /// </summary>
+    
+    /// <summary>
+    /// Called by StartupReelPartySelectionController when the player locks in a hero via NextHero.
+    /// Updates/creates the portrait image for the corresponding party slot.
+    ///
+    /// NOTE: UI Images instantiated from a template inherit that template's anchoredPosition.
+    /// We explicitly force the portrait into a deterministic slot position:
+    ///   slot 0 => x = -2w
+    ///   slot 1 => x = -1w
+    ///   slot 2 => x =  0
+    /// where w is the portrait width.
+    /// </summary>
+    public void SetSelectedPartySlotPortrait(int slot, Sprite portrait)
+    {
+        if (selectedPartyPortraitsContainer == null || selectedPartyPortraitPrefab == null) return;
+        if (slot < 0) return;
+
+        // Ensure we have images up to this slot index
+        while (_selectedPartyPortraitImages.Count <= slot)
+        {
+            Image img = Instantiate(selectedPartyPortraitPrefab, selectedPartyPortraitsContainer);
+            img.gameObject.SetActive(true);
+            _selectedPartyPortraitImages.Add(img);
+        }
+
+        var target = _selectedPartyPortraitImages[slot];
+        if (target == null) return;
+
+        target.sprite = portrait;
+        target.enabled = (portrait != null);
+
+        // Force a stable UI transform position (do NOT inherit prefab offsets)
+        ForceSelectedPortraitSlotPosition(target.rectTransform, slot);
+    }
+
+    /// <summary>
+    /// Clears (removes) the portrait for a specific selected party slot.
+    /// Used by the Previous Reel / undo flow.
+    /// </summary>
+    public void ClearSelectedPartySlotPortrait(int slot)
+    {
+        if (slot < 0) return;
+        if (_selectedPartyPortraitImages == null) return;
+        if (slot >= _selectedPartyPortraitImages.Count) return;
+
+        var img = _selectedPartyPortraitImages[slot];
+        if (img == null) return;
+
+        // Remove the instance so the next set will recreate and re-position cleanly.
+        Destroy(img.gameObject);
+        _selectedPartyPortraitImages[slot] = null;
+    }
+
+
+    private void ForceSelectedPortraitSlotPosition(RectTransform rt, int slot)
+    {
+        if (rt == null) return;
+
+        // Force anchors/pivot so anchoredPosition math is consistent.
+        rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
+        rt.pivot = new Vector2(0.5f, 0.5f);
+        rt.localScale = Vector3.one;
+
+        float w = GetSelectedPortraitWidth(rt);
+        // slot 0: -2w | slot 1: -w | slot 2: 0
+        float x = -w * (2 - slot);
+
+        rt.anchoredPosition = new Vector2(x, 0f);
+
+        if (logFlow) Debug.Log($"[StartupClassSelectionPanel] SelectedParty portrait slot={slot} x={x} w={w}", this);
+    }
+
+    private float GetSelectedPortraitWidth(RectTransform instanceRt)
+    {
+        // Prefer the template/prefab width (stable even when instance rect isn't fully resolved yet).
+        if (selectedPartyPortraitPrefab != null)
+        {
+            var prt = selectedPartyPortraitPrefab.rectTransform;
+            float pw = prt.sizeDelta.x;
+            if (pw > 0.01f) return pw;
+
+            pw = prt.rect.width;
+            if (pw > 0.01f) return pw;
+        }
+
+        // Fallback to the instance width
+        float w = instanceRt.sizeDelta.x;
+        if (w > 0.01f) return w;
+
+        w = instanceRt.rect.width;
+        if (w > 0.01f) return w;
+        // Absolute last resort (prevents NaNs / all portraits at 0)
+        return 64f;
+    }
+
+
+    private void ClearSelectedPartyPortraits()
+    {
+        if (selectedPartyPortraitsContainer == null || selectedPartyPortraitPrefab == null) return;
+
+        // Destroy any runtime-cloned portraits (leave the template alone if it's parented here).
+        for (int i = _selectedPartyPortraitImages.Count - 1; i >= 0; i--)
+        {
+            var img = _selectedPartyPortraitImages[i];
+            if (img != null && img.gameObject != selectedPartyPortraitPrefab.gameObject)
+                Destroy(img.gameObject);
+        }
+        _selectedPartyPortraitImages.Clear();
+
+        // If the template lives under the container, keep it disabled.
+        if (selectedPartyPortraitPrefab != null)
+            selectedPartyPortraitPrefab.gameObject.SetActive(false);
+    }
+
 
     /// <summary>
     /// Optional compatibility wrapper if older code calls this name.
@@ -389,11 +525,13 @@ public class StartupClassSelectionPanel : MonoBehaviour
 
     private void Confirm()
     {
-        // Even though Ally2/3 will be removed, keep legacy confirm output stable.
-        var chosen = new GameObject[3];
-        chosen[0] = GetSelectedPrefabFromAlly1();
-        chosen[1] = null;
-        chosen[2] = null;
+        // Party members are locked in by the NextHero flow.
+        // Confirm should start the run with whatever has been chosen so far.
+        var chosen = StartupPartySelectionData.GetChosenPartyPrefabs(_partySize);
+
+        // Back-compat fallback: if slot 0 wasn't locked in, use current preview.
+        if (chosen != null && chosen.Length > 0 && chosen[0] == null)
+            chosen[0] = GetSelectedPrefabFromAlly1();
 
         Hide();
         _onConfirm?.Invoke(chosen);
@@ -413,3 +551,6 @@ public class StartupClassSelectionPanel : MonoBehaviour
         return _available[0];
     }
 }
+
+
+////////////////////////////////////////////////////////////

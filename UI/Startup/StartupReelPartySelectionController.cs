@@ -1,3 +1,5 @@
+// GUID: 8119e84ce7006d14d8b69d2fbcb3a6b1
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Reflection;
@@ -23,6 +25,7 @@ public class StartupReelPartySelectionController : MonoBehaviour
 
     [Header("Buttons")]
     [SerializeField] private Button nextHeroButton;
+    [SerializeField] private Button previousReelButton;
 
     [Header("Reels (in pick order)")]
     [SerializeField] private Reel3DColumn[] reels = new Reel3DColumn[3];
@@ -54,8 +57,15 @@ public class StartupReelPartySelectionController : MonoBehaviour
             nextHeroButton.onClick.AddListener(OnNextHero);
         }
 
+        if (previousReelButton != null)
+        {
+            previousReelButton.onClick.RemoveAllListeners();
+            previousReelButton.onClick.AddListener(OnPreviousReel);
+        }
+
         CacheHomePositions();
         ActivateSlot(0, instant: true);
+        UpdateNavButtons();
     }
 
     private void OnEnable()
@@ -67,7 +77,10 @@ public class StartupReelPartySelectionController : MonoBehaviour
         }
 
         RefreshAlly1PreviewFromCurrentMidrow();
+    
+        UpdateNavButtons();
     }
+
 
     private void OnDisable()
     {
@@ -133,6 +146,15 @@ public class StartupReelPartySelectionController : MonoBehaviour
 
         // Store into StartupPartySelectionData using reflection so we don't depend on a specific API name
         bool stored = TryStoreChosenPrefabIntoStartupPartySelectionData(_activeSlot, chosenPrefab);
+        // Also store via the concrete API (keeps things explicit and future-proof).
+        StartupPartySelectionData.SetPartyMemberPrefab(_activeSlot, chosenPrefab);
+
+        // Update selected party portraits UI.
+        Sprite portrait = null;
+        var hs = chosenPrefab.GetComponent<HeroStats>();
+        if (hs != null) portrait = hs.Portrait;
+        selectionPanel.SetSelectedPartySlotPortrait(_activeSlot, portrait);
+
 
         if (logFlow)
         {
@@ -148,14 +170,210 @@ public class StartupReelPartySelectionController : MonoBehaviour
             if (nextHeroButton != null)
                 nextHeroButton.interactable = false;
 
+            UpdateNavButtons();
             if (logFlow) Debug.Log("[StartupReelPartySelectionController] All slots chosen.", this);
             return;
         }
 
+        UpdateNavButtons();
+
         StartCoroutine(AdvanceToNextReelRoutine(fromSlot, _activeSlot));
     }
 
-    private IEnumerator AdvanceToNextReelRoutine(int fromSlot, int toSlot)
+    
+    private void UpdateNavButtons()
+    {
+        // Previous is only available once at least one hero has been locked in.
+        if (previousReelButton != null)
+            previousReelButton.interactable = !_busy && _activeSlot > 0;
+
+        // Next is available while we still have slots to pick.
+        if (nextHeroButton != null)
+        {
+            int partySize = Mathf.Clamp(this.partySize, 1, 3);
+            nextHeroButton.interactable = !_busy && _activeSlot < partySize;
+        }
+    }
+
+    private void OnPreviousReel()
+    {
+        if (_busy) return;
+
+        if (reelScroller == null || selectionPanel == null)
+        {
+            Debug.LogWarning("[StartupReelPartySelectionController] Missing reelScroller or selectionPanel reference.", this);
+            return;
+        }
+
+        // Nothing to undo yet
+        if (_activeSlot <= 0)
+            return;
+
+        int fromSlot = _activeSlot;          // current reel index (the one we are about to pick for)
+        int slotToClear = _activeSlot - 1;   // last chosen party slot
+        int toSlot = slotToClear;            // previous reel to return to
+
+        // Clear selection data + portrait for the slot we're undoing
+        StartupPartySelectionData.SetPartyMemberPrefab(slotToClear, null);
+        selectionPanel.ClearSelectedPartySlotPortrait(slotToClear);
+
+        // Move back one slot
+        _activeSlot = slotToClear;
+
+        UpdateNavButtons();
+
+        StartCoroutine(BackToPreviousReelRoutine(fromSlot, toSlot));
+    }
+
+    private IEnumerator BackToPreviousReelRoutine(int fromSlot, int toSlot)
+    {
+        _busy = true;
+
+        // Temporarily disable nudge by clearing active reel.
+        if (reelScroller != null)
+            reelScroller.SetActiveReel(null);
+
+        if (animateBetweenReels && transitionDuration > 0f)
+            yield return SlideFadeTransitionBack(fromSlot, toSlot);
+
+        ActivateSlot(toSlot, instant: true);
+
+        _busy = false;
+
+        UpdateNavButtons();
+        RefreshAlly1PreviewFromCurrentMidrow();
+    }
+
+    private IEnumerator SlideFadeTransitionBack(int fromSlot, int toSlot)
+    {
+        if (reelRoots == null || fromSlot >= reelRoots.Length || toSlot >= reelRoots.Length)
+            yield break;
+
+        Transform fromRoot = reelRoots[fromSlot];
+        Transform toRoot = reelRoots[toSlot];
+        if (fromRoot == null || toRoot == null)
+            yield break;
+
+        // Reverse direction: current slides LEFT out, previous comes from RIGHT.
+        Vector3 fromStart = fromRoot.localPosition;
+        Vector3 fromEnd = fromStart - new Vector3(slideRightDistance, 0f, 0f);
+
+        Vector3 toHome = _reelHomeLocalPos[toSlot];
+        Vector3 toStart = toHome + new Vector3(incomingStartLeftDistance, 0f, 0f);
+
+        toRoot.gameObject.SetActive(true);
+        toRoot.localPosition = toStart;
+
+        CanvasGroup fromCg = (reelCanvasGroups != null && fromSlot < reelCanvasGroups.Length) ? reelCanvasGroups[fromSlot] : null;
+        CanvasGroup toCg = (reelCanvasGroups != null && toSlot < reelCanvasGroups.Length) ? reelCanvasGroups[toSlot] : null;
+
+        if (toCg != null) toCg.alpha = 1f;
+        if (fromCg != null) fromCg.alpha = 1f;
+
+        float t = 0f;
+        while (t < transitionDuration)
+        {
+            float u = Mathf.Clamp01(t / transitionDuration);
+            float e = (transitionEase != null) ? transitionEase.Evaluate(u) : u;
+
+            fromRoot.localPosition = Vector3.Lerp(fromStart, fromEnd, e);
+            toRoot.localPosition = Vector3.Lerp(toStart, toHome, e);
+
+            if (fromCg != null)
+                fromCg.alpha = Mathf.Lerp(1f, 0f, e);
+
+            t += Time.unscaledDeltaTime;
+            yield return null;
+        }
+
+        if (fromCg != null) fromCg.alpha = 0f;
+        fromRoot.gameObject.SetActive(false);
+
+        toRoot.localPosition = toHome;
+        if (toCg != null) toCg.alpha = 1f;
+    }
+
+    /// <summary>
+    /// Called by the Start button flow to hard-disable the class selection reels/buttons so they can't be interacted with.
+    /// </summary>
+    public void DisableSelectionReels()
+    {
+        // Called after pressing Start.
+        // We want the current reel to slide out and disappear (like normal Next transitions),
+        // then fully disable all class-selection reel visuals and interaction.
+        if (_busy) return;
+
+        StartCoroutine(DisableSelectionReelsRoutine());
+    }
+
+    private IEnumerator DisableSelectionReelsRoutine()
+    {
+        _busy = true;
+
+        // Disable navigation immediately.
+        if (nextHeroButton != null) nextHeroButton.interactable = false;
+        if (previousReelButton != null) previousReelButton.interactable = false;
+
+        // Stop reel input/nudging.
+        if (reelScroller != null)
+            reelScroller.SetActiveReel(null);
+
+        // Slide the currently-visible reel out (no incoming reel).
+        if (animateBetweenReels && transitionDuration > 0f)
+        {
+            int slot = Mathf.Clamp(_activeSlot, 0, (reelRoots != null ? reelRoots.Length - 1 : 0));
+            yield return SlideFadeOutOnly(slot);
+        }
+
+        // Hard-disable all reel visuals/interaction.
+        if (reelRoots != null)
+        {
+            for (int i = 0; i < reelRoots.Length; i++)
+            {
+                if (reelRoots[i] != null)
+                    reelRoots[i].gameObject.SetActive(false);
+            }
+        }
+    }
+
+    private IEnumerator SlideFadeOutOnly(int slot)
+    {
+        if (reelRoots == null || slot < 0 || slot >= reelRoots.Length)
+            yield break;
+
+        Transform root = reelRoots[slot];
+        if (root == null)
+            yield break;
+
+        Vector3 fromStart = root.localPosition;
+        Vector3 fromEnd = fromStart + new Vector3(slideRightDistance, 0f, 0f);
+
+        CanvasGroup cg = (reelCanvasGroups != null && slot < reelCanvasGroups.Length) ? reelCanvasGroups[slot] : null;
+        if (cg != null) cg.alpha = 1f;
+
+        float t = 0f;
+        while (t < transitionDuration)
+        {
+            float u = Mathf.Clamp01(t / transitionDuration);
+            float e = (transitionEase != null) ? transitionEase.Evaluate(u) : u;
+
+            root.localPosition = Vector3.Lerp(fromStart, fromEnd, e);
+            if (cg != null)
+                cg.alpha = Mathf.Lerp(1f, 0f, e);
+
+            t += Time.unscaledDeltaTime;
+            yield return null;
+        }
+
+        root.localPosition = fromEnd;
+        if (cg != null) cg.alpha = 0f;
+
+        root.gameObject.SetActive(false);
+    }
+
+
+
+private IEnumerator AdvanceToNextReelRoutine(int fromSlot, int toSlot)
     {
         _busy = true;
 
@@ -174,6 +392,7 @@ public class StartupReelPartySelectionController : MonoBehaviour
         RefreshAlly1PreviewFromCurrentMidrow();
 
         _busy = false;
+        UpdateNavButtons();
     }
 
     private void ActivateSlot(int slot, bool instant)
@@ -406,3 +625,6 @@ public class StartupReelPartySelectionController : MonoBehaviour
         return false;
     }
 }
+
+
+////////////////////////////////////////////////////////////
