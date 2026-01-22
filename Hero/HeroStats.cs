@@ -8,36 +8,6 @@ using UnityEngine;
 
 public class HeroStats : MonoBehaviour
 {
-    [Header("DEV ONLY")]
-    [SerializeField] private bool devOverrideStartLevel = false;
-    [SerializeField] private int devStartLevel = 1;
-    [Tooltip("If true, clears PendingReelUpgrades after applying the start-level override (useful for testing evolution without multiple upgrade prompts).")]
-    [SerializeField] private bool devSuppressPendingReelUpgrades = true;
-    private bool devLevelApplied = false;
-
-    private void ApplyDevStartLevelIfNeeded()
-    {
-        if (!Application.isPlaying) return;
-        if (!devOverrideStartLevel || devLevelApplied) return;
-
-        int target = Mathf.Max(1, devStartLevel);
-        if (target > maxLevel) target = maxLevel;
-
-        int beforeLevel = level;
-        while (level < target)
-        {
-            LevelUp(); // uses existing progression logic
-        }
-
-        if (devSuppressPendingReelUpgrades)
-            pendingReelUpgrades = 0;
-
-        devLevelApplied = true;
-#if UNITY_EDITOR
-        Debug.Log($"[DEV][HeroStats] Start level override applied for '{name}': {beforeLevel} -> {level}. (pendingReelUpgrades={pendingReelUpgrades})", this);
-#endif
-    }
-
     [Header("Progression")]
     [SerializeField] private int level = 1;
     [SerializeField] private int maxLevel = 5;
@@ -158,20 +128,6 @@ public class HeroStats : MonoBehaviour
     [SerializeField] private List<AbilityDefinitionSO> permanentlyUnlockedAbilities = new List<AbilityDefinitionSO>();
 
     public AbilityDefinitionSO StartingAbilityOverride => startingAbilityOverride;
-
-    /// <summary>
-    /// Sets the starter-choice ability selected on the startup class selection panel.
-    /// This selection is also persisted as a permanently unlocked ability so it will not be lost after level-ups.
-    /// </summary>
-    public void SetStartingAbilityOverride(AbilityDefinitionSO ability)
-    {
-        startingAbilityOverride = ability;
-
-        if (ability != null && !permanentlyUnlockedAbilities.Contains(ability))
-            permanentlyUnlockedAbilities.Add(ability);
-
-        NotifyChanged();
-    }
 
     /// <summary>
     /// Ensures that the hero's permanent unlock list includes any abilities that should have been unlocked
@@ -378,7 +334,6 @@ public class HeroStats : MonoBehaviour
 
         InitEquipmentWatcher();      // legacy array watcher (safe to keep)
         RefreshEquipSlotsFromGrid(); // runtime EquipGrid watcher
-        ApplyDevStartLevelIfNeeded();
         NotifyChanged();
     }
 

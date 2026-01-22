@@ -591,11 +591,6 @@ public class BattleManager : MonoBehaviour
             if (m.stats != null)
             {
                 m.stats.ResetForNewRun();
-
-                // Apply startup-selected starting ability (if any).
-                AbilityDefinitionSO starting = StartupPartySelectionData.GetStartingAbility(i);
-                if (starting != null)
-                    m.stats.SetStartingAbilityOverride(starting);
             }
 
             _party.Add(m);
