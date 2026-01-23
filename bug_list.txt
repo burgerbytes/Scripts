@@ -2,6 +2,7 @@ bugs
 - status and ability menus should be hidden during reel phase
 - disable combat reels on ability selection screen
 - change upgrade reel to allow player to select what to upgrade. 
+- when iron guard triggers, block doesn't appear until reel phase has ended
 
 features
 - add some type of indictor (arrow, glow) to enemy unit being targeted
