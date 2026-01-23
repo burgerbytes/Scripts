@@ -255,6 +255,8 @@ public class BattleManager : MonoBehaviour
 
     [Header("Reels / Spins")]
     [SerializeField] private ReelSpinSystem reelSpinSystem;
+    [Tooltip("Log passive bridge events (symbol landed notifications).")]
+    [SerializeField] private bool logPassiveBridge = true;
     [Header("Input / Targeting")]
     [SerializeField] private bool allowClickToSelectMonsterTarget = true;
     [SerializeField] private bool ignoreClicksOverUI = true;
@@ -276,6 +278,12 @@ public class BattleManager : MonoBehaviour
     [SerializeField] private float enemyLungeHoldSeconds = 0.05f;
     [Tooltip("Seconds to move from lunge peak back to start.")]
     [SerializeField] private float enemyLungeBackSeconds = 0.12f;
+
+    [Header("VFX")]
+    [SerializeField] private ScreenDimmer screenDimmer;
+
+    [Header("Passive Effects")]
+    [NonSerialized] public int BonusDamageNextDamagingAbility = 0;
 
     [Header("Debug")]
     [SerializeField] private bool logFlow = true;
@@ -417,6 +425,10 @@ public class BattleManager : MonoBehaviour
         }
 
         if (reelSpinSystem == null) reelSpinSystem = FindInSceneIncludingInactive<ReelSpinSystem>();
+        if (reelSpinSystem != null)
+            reelSpinSystem.OnCurrentLandedChanged += HandleCurrentLandedChanged;
+        if (reelSpinSystem != null)
+            reelSpinSystem.OnSpinLanded += HandleSpinLandedBattle;
 
         if (undoButton == null)
         {
@@ -1309,7 +1321,7 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
                 if (targetGO != null)
                     SpawnDamageNumber(targetGO.transform.position, totalDamageShownSingle);
             });
-NotifyPartyChanged();
+            NotifyPartyChanged();
 
             if (IsPartyDefeated())
             {
@@ -1759,7 +1771,8 @@ NotifyPartyChanged();
                 if (logFlow) Debug.Log($"[Battle][Resolve] Done waiting for impact. impactFired={_impactFired} elapsed={elapsed:0.000}s", this);
             }
 
-            int totalBaseDamage = Mathf.Max(0, actorStats.Attack) + Mathf.Max(0, ability.baseDamage);
+            int passiveBonus = (actorStats != null) ? actorStats.ConsumeBonusDamageNextAttackIfDamaging(ability) : 0;
+            int totalBaseDamage = Mathf.Max(0, actorStats.Attack) + Mathf.Max(0, ability.baseDamage) + Mathf.Max(0, passiveBonus);
 
             // Damage numbers should show the actual damage computed by the attack formula,
             // not the clamped HP lost (overkill should still show the full hit).
@@ -2010,7 +2023,17 @@ NotifyPartyChanged();
         var actor = _party[_pendingActorIndex];
         if (actor == null || actor.stats == null || actor.IsDead) return;
 
-        int totalBaseDamage = Mathf.Max(0, actor.stats.Attack) + Mathf.Max(0, _pendingAbility.baseDamage);
+        int previewPassiveBonus = 0;
+        if (actor.stats != null && _pendingAbility != null && _pendingAbility.targetType == AbilityTargetType.Enemy)
+        {
+            // Preview should include the "next attack" bonus even when baseDamage is 0,
+            // because your runtime damage model is: Attack + baseDamage (+ bonus).
+            int baseNoBonus = Mathf.Max(0, actor.stats.Attack) + Mathf.Max(0, _pendingAbility.baseDamage);
+            if (baseNoBonus > 0)
+                previewPassiveBonus = actor.stats.BonusDamageNextAttack;
+        }
+
+        int totalBaseDamage = Mathf.Max(0, actor.stats.Attack) + Mathf.Max(0, _pendingAbility.baseDamage) + Mathf.Max(0, previewPassiveBonus);
 
         int predictedDamage = target.CalculateDamageFromAbility(
             abilityBaseDamage: totalBaseDamage,
@@ -3100,24 +3123,19 @@ NotifyPartyChanged();
         runtime.Initialize(Camera.main, runtimeDamageNumberLifetime, runtimeDamageNumberRiseDistance);
     }
 
-    // private void SpawnHealVfx(Vector3 worldPos)
-    // {
-    //     if (healVfxPrefab == null)
-    //         return;
-
-    //     GameObject go = Instantiate(healVfxPrefab, worldPos + healVfxWorldOffset, Quaternion.identity);
-
-    //     // Auto-destroy after the longest particle system finishes.
-    //     float life = ComputeParticleLifetimeSeconds(go, healVfxFallbackDestroySeconds);
-    //     Destroy(go, life);
-    // }
-
     private void SpawnHealVfx(Transform targetRoot)
     {
         if (healVfxSpawner == null || targetRoot == null)
             return;
 
         healVfxSpawner.PlayHealVfx(targetRoot);
+    }
+    private void SpawnBrVfx(Transform targetRoot)
+    {
+        if (healVfxSpawner == null || targetRoot == null)
+            return;
+
+        healVfxSpawner.PlayBRVfx(targetRoot);
     }
 
     private static float ComputeParticleLifetimeSeconds(GameObject root, float fallbackSeconds)
@@ -3485,9 +3503,129 @@ NotifyPartyChanged();
         if (_saveStates.Count <= 1)
             SetUndoButtonEnabled(false);
     }
+
+    private void OnDestroy()
+    {
+        if (reelSpinSystem != null)
+        {
+            reelSpinSystem.OnCurrentLandedChanged -= HandleCurrentLandedChanged;
+            reelSpinSystem.OnSpinLanded -= HandleSpinLandedBattle;
+        }
+    }
+
+
+    /// <summary>
+    /// Battle-only hook: fires ONLY when a spin lands (not on Reelcraft edits).
+    /// If the Fighter's own reel lands an ATK symbol on the midrow, log a debug message.
+    /// Mapping is index-based: party[0] -> reel[0], etc.
+    /// </summary>
+    private void HandleSpinLandedBattle(ReelSpinSystem.SpinLandedInfo info)
+    {
+        if (reelSpinSystem == null) return;
+        if (info.symbols == null || info.symbols.Count == 0) return;
+        if (_party == null || _party.Count == 0) return;
+
+        int count = Mathf.Min(_party.Count, info.symbols.Count);
+
+        for (int i = 0; i < count; i++)
+        {
+            var hero = _party[i]?.stats;
+            if (hero == null) continue;
+
+            // Only care about Fighters.    
+            string baseClassName = hero.BaseClassDef != null ? hero.BaseClassDef.className : string.Empty;
+            if (!string.Equals(baseClassName, "Fighter", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var sym = info.symbols[i];
+            if (sym == null) continue;
+
+            // Use the existing mapping helper.
+            if (!reelSpinSystem.TryMapSymbolPublic(sym, out var rt, out int amount))
+                continue;
+
+            if (rt == ReelSpinSystem.ResourceType.Attack)
+            {
+                if (hero.name == "Fighter(Clone)")
+                {
+                    DimScreenTemporarily(0.5f);
+                    healVfxSpawner.PlayBRVfx(hero.transform);
+                    hero.AddBonusDamageNextAttack(1);    
+                }
+            }
+            if (rt == ReelSpinSystem.ResourceType.Defend)
+            {
+                if (hero.name == "Fighter(Clone)")
+                {
+                    DimScreenTemporarily(0.5f);
+                    healVfxSpawner.PlayBRVfx(hero.transform);
+                    hero.AddBonusDamageNextAttack(1);    
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Distributes per-reel landed symbols to the corresponding hero so passive abilities can react.
+    /// This fires on initial spin land AND after any Reelcraft modifications.
+    /// </summary>
+    private void HandleCurrentLandedChanged(ReelSpinSystem.SpinLandedInfo info)
+    {
+        if (reelSpinSystem == null) return;
+        if (info.symbols == null || info.symbols.Count == 0) return;
+        if (_party == null || _party.Count == 0) return;
+
+        var multipliers = reelSpinSystem.CurrentLandedMultipliers;
+
+        int count = Mathf.Min(_party.Count, info.symbols.Count);
+
+        if (logPassiveBridge)
+            Debug.Log($"[Battle][PassiveBridge] CurrentLandedChanged symbols={info.symbols.Count} partyCount={_party.Count}", this);
+
+        for (int i = 0; i < count; i++)
+        {
+            var hero = _party[i]?.stats;
+            if (hero == null) continue;
+
+            var sym = info.symbols[i];
+            if (sym == null) continue;
+
+            if (!reelSpinSystem.TryMapSymbolPublic(sym, out var rt, out int amount))
+                continue;
+
+            int mult = 1;
+            if (multipliers != null && i < multipliers.Count)
+                mult = Mathf.Max(1, multipliers[i]);
+
+            if (logPassiveBridge)
+                Debug.Log($"[Battle][PassiveBridge] SymbolLanded partyIndex={i} hero='{hero.name}' symbol='{sym.name}' type={rt} amount={amount} mult={mult}", this);
+
+            if (rt == ReelSpinSystem.ResourceType.Attack && logPassiveBridge)
+                Debug.Log($"[Battle][PassiveBridge] ATK symbol landed hero='{hero.name}' symbol='{sym.name}' amount={amount} mult={mult}", this);
+
+            hero.NotifyReelSymbolLanded(sym, rt, amount, mult);
+        }
+    }
+
+    private Coroutine _dimRoutine;
+
+    private void DimScreenTemporarily(float duration)
+    {
+        if (_dimRoutine != null)
+            StopCoroutine(_dimRoutine);
+
+        _dimRoutine = StartCoroutine(DimRoutine(duration));
+    }
+
+    private IEnumerator DimRoutine(float duration)
+    {
+        screenDimmer.DimScreenTo(0.8f);
+
+        yield return new WaitForSeconds(duration);
+
+        // UNDIM
+        screenDimmer.DimScreenTo(0.0f);
+
+        _dimRoutine = null;
+    }
 }
-
-
-////////////////////////////////////////////////////////////
-
-

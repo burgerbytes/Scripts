@@ -1,3 +1,5 @@
+// GUID: 29ee3befdcd36de4d8496291abe6a704
+////////////////////////////////////////////////////////////
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -54,4 +56,11 @@ public class ClassDefinitionSO : ScriptableObject
 
     [Header("Abilities (new list)")]
     public List<AbilityDefinitionSO> abilities = new List<AbilityDefinitionSO>();
+
+    [Header("Passive Abilities")]
+    public List<PassiveAbilitySO> passiveAbilities = new List<PassiveAbilitySO>();
+
 }
+
+
+////////////////////////////////////////////////////////////

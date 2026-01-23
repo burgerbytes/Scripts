@@ -8,6 +8,9 @@ namespace SlotsAndSorcery.VFX
         [Tooltip("A prefab that contains a ParticleSystem (or multiple) configured for the heal swirl effect.")]
         [SerializeField] private GameObject healVfxPrefab;
 
+        [Header("Battle Rhythm VFX Prefab")]
+        [SerializeField] private GameObject brVfxPrefab;
+
         [Header("Placement")]
         [Tooltip("If set, VFX will spawn at this transform. If null, spawns at targetRoot.")]
         [SerializeField] private Transform defaultAnchor;
@@ -30,6 +33,23 @@ namespace SlotsAndSorcery.VFX
                                (defaultAnchor != null ? defaultAnchor : targetRoot);
 
             var go = Instantiate(healVfxPrefab, anchor);
+            go.transform.localPosition += localOffset;
+            go.transform.localRotation = Quaternion.identity;
+
+            if (!autoDestroyWhenFinished)
+                return;
+
+            float life = ComputeLifetimeSeconds(go);
+            Destroy(go, life);
+        }
+        public void PlayBRVfx(Transform targetRoot, Transform optionalAnchorOverride = null)
+        {
+            if (brVfxPrefab == null || targetRoot == null) return;
+
+            Transform anchor = optionalAnchorOverride != null ? optionalAnchorOverride :
+                               (defaultAnchor != null ? defaultAnchor : targetRoot);
+
+            var go = Instantiate(brVfxPrefab, anchor);
             go.transform.localPosition += localOffset;
             go.transform.localRotation = Quaternion.identity;
 

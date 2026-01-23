@@ -23,7 +23,7 @@ public class CharacterSelectReelScroller : MonoBehaviour
     [SerializeField] private UnityEvent<string> onMidrowSymbolIdChanged;
 
     [Header("Debug")]
-    [SerializeField] private bool logMidrow = true;
+    [SerializeField] private bool logMidrow = false;
 
     private Coroutine _postNudgeRoutine;
 

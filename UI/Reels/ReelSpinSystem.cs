@@ -97,6 +97,9 @@ public class ReelSpinSystem : MonoBehaviour
     [Tooltip("Log midrow symbols for 3D reels each time we spin.")]
     [SerializeField] private bool log3DMidRowSymbolsEachSpin = true;
 
+    [Tooltip("Log passive bridge events (symbol landed notifications).")]
+    [SerializeField] private bool logPassiveBridge = true;
+
     [Tooltip("Debug: when a 3D spin lands, log the symbols directly above and below the landed (midrow) symbol for each reel.")]
     [SerializeField] private bool log3DAdjacentSymbolsEachSpin = true;
 
@@ -151,6 +154,9 @@ public class ReelSpinSystem : MonoBehaviour
 
     /// <summary>Read-only view of the most recent landed symbols for this reel phase.</summary>
     public IReadOnlyList<ReelSymbolSO> CurrentLandedSymbols => _currentLandedSymbols;
+
+    /// <summary>Read-only view of the most recent landed multipliers for this reel phase (parallel to CurrentLandedSymbols).</summary>
+    public IReadOnlyList<int> CurrentLandedMultipliers => _currentLandedMultipliers;
 
     // (duplicate event declaration removed)
 
@@ -645,7 +651,9 @@ public class ReelSpinSystem : MonoBehaviour
         SetPendingFromSymbols(_currentLandedSymbols, _currentLandedMultipliers);
 
         SpinLandedInfo info = BuildSpinLandedInfo(_currentLandedSymbols);
-        OnCurrentLandedChanged?.Invoke(info);
+                    if (logPassiveBridge)
+                Debug.Log($"[ReelSpinSystem][PassiveBridge] OnCurrentLandedChanged invoke: symbols={(info.symbols != null ? info.symbols.Count : 0)} A={info.attackCount} D={info.defendCount} M={info.magicCount} W={info.wildCount}", this);
+            OnCurrentLandedChanged?.Invoke(info);
         return true;
     }
 
@@ -887,6 +895,8 @@ public class ReelSpinSystem : MonoBehaviour
             // Cache current landed symbols so Reelcraft can operate during this reel phase.
             _currentLandedSymbols = new List<ReelSymbolSO>(landed);
             _currentLandedMultipliers = new List<int>(multipliers);
+                        if (logPassiveBridge)
+                Debug.Log($"[ReelSpinSystem][PassiveBridge] OnCurrentLandedChanged invoke: symbols={(info.symbols != null ? info.symbols.Count : 0)} A={info.attackCount} D={info.defendCount} M={info.magicCount} W={info.wildCount}", this);
             OnCurrentLandedChanged?.Invoke(info);
 
             SetPendingFromSymbols(landed, multipliers);
@@ -1030,3 +1040,5 @@ public class ReelSpinSystem : MonoBehaviour
 ////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////
+
+

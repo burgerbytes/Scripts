@@ -1,13 +1,30 @@
-// GUID: a3e2dd32a76bf594ba876a56162b79f2
-////////////////////////////////////////////////////////////
-// GUID: a3e2dd32a76bf594ba876a56162b79f2
-////////////////////////////////////////////////////////////
 using System;
 using System.Collections.Generic;
 using UnityEngine;
 
 public class HeroStats : MonoBehaviour
 {
+    // ---------------- Passive Ability Event Hub ----------------
+    /// <summary>
+    /// Event hub for this hero that passive abilities can subscribe to.
+    /// </summary>
+    public HeroCombatEvents Events { get; private set; }
+
+    [Header("Passive Abilities")]
+    [Tooltip("Always-on passives. These are NOT shown in the Ability Menu.")]
+    [SerializeField] private List<PassiveAbilitySO> passiveAbilities = new List<PassiveAbilitySO>();
+
+    [Header("Passive Runtime")]
+    [Tooltip("If true, logs passive triggers and temporary bonuses.")]
+    [SerializeField] private bool logPassives = false;
+
+    // We track what we registered so we can cleanly unregister (and support classDef-based passives too).
+    private readonly List<PassiveAbilitySO> _registeredPassives = new List<PassiveAbilitySO>();
+
+    // Temporary combat bonuses (consumed automatically when used)
+    [SerializeField] private int bonusDamageNextAttack = 0;
+
+    // ---------------- Progression ----------------
     [Header("Progression")]
     [SerializeField] private int level = 1;
     [SerializeField] private int maxLevel = 5;
@@ -20,12 +37,14 @@ public class HeroStats : MonoBehaviour
     [Tooltip("How many level-ups are queued to be resolved at the campfire.")]
     [SerializeField] private int pendingLevelUps = 0;
 
+    // ---------------- Core Stats ----------------
     [Header("Core Stats")]
     [SerializeField] private int maxHp = 100;
     [SerializeField] private int attack = 3;
     [SerializeField] private int defense = 0;
     [SerializeField] private int speed = 10;
 
+    // ---------------- Stamina ----------------
     [Header("Stamina")]
     [SerializeField] private int maxStamina = 100;
     [SerializeField] private float staminaRegenPerSecond = 45f;
@@ -40,6 +59,7 @@ public class HeroStats : MonoBehaviour
     [Tooltip("One-time stamina cost paid when a monster attack is successfully blocked (impact).")]
     [SerializeField] private float staminaCostOnBlockImpact = 8f;
 
+    // ---------------- Resources ----------------
     [Header("Resources")]
     [SerializeField] private long gold = 0;
 
@@ -47,11 +67,12 @@ public class HeroStats : MonoBehaviour
     [SerializeField] private int smallKeys = 0;
     [SerializeField] private int largeKeys = 0;
 
+    // ---------------- Runtime ----------------
     [Header("Runtime")]
     [SerializeField] private int currentHp = 100;
     [SerializeField] private float currentStamina = 100f;
 
-    // ---------------- Combat Runtime Status (NEW) ----------------
+    // ---------------- Combat Runtime Status ----------------
     [Header("Combat Status")]
     [SerializeField] private int currentShield = 0;
     [SerializeField] private bool isHidden = false;
@@ -62,7 +83,6 @@ public class HeroStats : MonoBehaviour
 
     [Tooltip("The PlayerTurnNumber when Bleed was most recently applied. Used to prevent same-turn ticking.")]
     [SerializeField] private int bleedAppliedOnPlayerTurn = -999;
-
 
     [SerializeField] private bool isStunned = false;
 
@@ -119,8 +139,8 @@ public class HeroStats : MonoBehaviour
     public ClassDefinitionSO BaseClassDef => baseClassDef;
     public ClassDefinitionSO AdvancedClassDef => advancedClassDef;
 
-    // ✅ NEW: Reel strip + portrait come from the hero prefab
-        [Header("Startup / Ability Selection")]
+    // ---------------- Startup / Ability Selection ----------------
+    [Header("Startup / Ability Selection")]
     [Tooltip("Optional: selected on the startup class selection panel. If set to a starter-choice ability, this will be the one available at Level 1.\nStarter-choice abilities are ONLY available if they match this selection.")]
     [SerializeField] private AbilityDefinitionSO startingAbilityOverride;
 
@@ -220,6 +240,7 @@ public class HeroStats : MonoBehaviour
             {
                 AbilityDefinitionSO a = classDef.abilities[i];
                 if (a == null) continue;
+                if (a.kind == AbilityKind.Passive) continue;
                 if (IsAbilityUnlocked(a) && !results.Contains(a))
                     results.Add(a);
             }
@@ -230,6 +251,7 @@ public class HeroStats : MonoBehaviour
         {
             AbilityDefinitionSO a = permanentlyUnlockedAbilities[i];
             if (a == null) continue;
+            if (a.kind == AbilityKind.Passive) continue;
             if (IsAbilityUnlocked(a) && !results.Contains(a))
                 results.Add(a);
         }
@@ -237,22 +259,23 @@ public class HeroStats : MonoBehaviour
         return results;
     }
 
-
-[Header("Reels / UI (Prefab Data)")]
+    // ---------------- Reels / UI (Prefab Data) ----------------
+    [Header("Reels / UI (Prefab Data)")]
     [Tooltip("Reel strip used for this hero's reel.")]
     [SerializeField] private ReelStripSO reelStrip;
 
-    [Tooltip("Portrait sprite used for this hero's reel picker button / UI.") ]
+    [Tooltip("Portrait sprite used for this hero's reel picker button / UI.")]
     [SerializeField] private Sprite portrait;
 
+    // ---------------- Reel Upgrade (Level Up) ----------------
     [Header("Reel Upgrade (Level Up)")]
     [Tooltip("If true, leveling up queues a reel symbol upgrade to be resolved via the Reel Upgrade Minigame.")]
     [SerializeField] private bool upgradeReelOnLevelUp = true;
 
-    [Tooltip("Upgrade mapping rules (e.g., Attack->DoubleAttack, Null->Wild).") ]
+    [Tooltip("Upgrade mapping rules (e.g., Attack->DoubleAttack, Null->Wild).")]
     [SerializeField] private ReelUpgradeRulesSO reelUpgradeRules;
 
-    [Tooltip("How many reel upgrades are pending for this hero (usually equals number of level-ups gained).") ]
+    [Tooltip("How many reel upgrades are pending for this hero (usually equals number of level-ups gained).")]
     [SerializeField] private int pendingReelUpgrades = 0;
 
     public ReelStripSO ReelStrip => reelStrip;
@@ -260,14 +283,15 @@ public class HeroStats : MonoBehaviour
 
     public int PendingReelUpgrades => pendingReelUpgrades;
     public bool HasPendingReelUpgrades => pendingReelUpgrades > 0;
-    // ---------------- Equipment (NEW) ----------------
+
+    // ---------------- Equipment (UI only, no effects yet) ----------------
     [Header("Equipment (UI only, no effects yet)")]
     public int equipmentSlotSize = 1;
     [SerializeField] public InventorySlot[] equipmentSlots = new InventorySlot[1];
 
     public int EquipmentSlotCount => equipmentSlots != null ? equipmentSlots.Length : 0;
 
-    // ---------------- Equipment Change Events (NEW) ----------------
+    // ---------------- Equipment Change Events ----------------
     [Header("Equipment Debug Events")]
     [Tooltip("If true, logs whenever an item is placed into an equipment slot under this hero's EquipGrid.")]
     [SerializeField] private bool logOnEquipItemPlaced = true;
@@ -309,9 +333,10 @@ public class HeroStats : MonoBehaviour
     public bool IsBleeding => bleedStacks > 0;
     public int BleedAppliedOnPlayerTurn => bleedAppliedOnPlayerTurn;
 
-
     public bool IsStunned => isStunned;
     public bool IsTripleBladeEmpoweredThisTurn => tripleBladeEmpoweredThisTurn;
+
+    public int BonusDamageNextAttack => Mathf.Max(0, bonusDamageNextAttack);
 
     public float ClassAttackModifier => Mathf.Max(0f, attackMultiplier) * Mathf.Max(0f, turnAttackMultiplier);
 
@@ -323,11 +348,12 @@ public class HeroStats : MonoBehaviour
 
     private void Awake()
     {
+        Events = new HeroCombatEvents(this);
+
         currentHp = Mathf.Clamp(currentHp, 0, maxHp);
         currentStamina = Mathf.Clamp(currentStamina, 0f, maxStamina);
         currentShield = Mathf.Max(0, currentShield);
 
-        
         // Ensure reel upgrades are per-hero (do not mutate shared ScriptableObject assets).
         if (Application.isPlaying && reelStrip != null)
             reelStrip = Instantiate(reelStrip);
@@ -335,6 +361,163 @@ public class HeroStats : MonoBehaviour
         InitEquipmentWatcher();      // legacy array watcher (safe to keep)
         RefreshEquipSlotsFromGrid(); // runtime EquipGrid watcher
         NotifyChanged();
+    }
+
+    private void OnEnable()
+    {
+        RegisterPassiveAbilities();
+    }
+
+    private void OnDisable()
+    {
+        UnregisterPassiveAbilities();
+    }
+
+    // ---------------- Passive registration helpers ----------------
+    private List<PassiveAbilitySO> CollectPassiveAbilityDefs()
+    {
+        // Passives can be configured either directly on the prefab (HeroStats.passiveAbilities)
+        // or on the active ClassDefinitionSO (ClassDefinitionSO.passiveAbilities).
+        var results = new List<PassiveAbilitySO>();
+        var seen = new HashSet<PassiveAbilitySO>();
+
+        void AddRangeSafe(List<PassiveAbilitySO> list)
+        {
+            if (list == null) return;
+            for (int i = 0; i < list.Count; i++)
+            {
+                var p = list[i];
+                if (p == null) continue;
+                if (seen.Add(p)) results.Add(p);
+            }
+        }
+
+        AddRangeSafe(passiveAbilities);
+
+        var activeDef = GetActiveClassDefinition();
+        if (activeDef != null)
+            AddRangeSafe(activeDef.passiveAbilities);
+
+        // Also consider the base class definition (if different from active) for safety.
+        if (baseClassDef != null && baseClassDef != activeDef)
+            AddRangeSafe(baseClassDef.passiveAbilities);
+
+        return results;
+    }
+
+    private void RegisterPassiveAbilities()
+    {
+        UnregisterPassiveAbilities(); // prevent double-register if OnEnable fires multiple times
+
+        var defs = CollectPassiveAbilityDefs();
+        if (defs == null || defs.Count == 0)
+        {
+            if (logPassives) Debug.Log($"[Hero][Passive] No passive abilities configured for hero='{name}'.", this);
+            return;
+        }
+
+        for (int i = 0; i < defs.Count; i++)
+        {
+            var p = defs[i];
+            if (p == null) continue;
+
+            try
+            {
+                // Your PassiveAbilitySO is expected to own the subscription logic (Events hub, etc.)
+                p.Register(this);
+
+                _registeredPassives.Add(p);
+
+                if (logPassives)
+                    Debug.Log($"[Hero][Passive] Registered '{p.abilityName}' for hero='{name}'.", this);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[Hero][Passive] Register failed for passive='{p.name}' hero='{name}'. {e}", this);
+            }
+        }
+    }
+
+    private void UnregisterPassiveAbilities()
+    {
+        if (_registeredPassives.Count == 0) return;
+
+        for (int i = 0; i < _registeredPassives.Count; i++)
+        {
+            var p = _registeredPassives[i];
+            if (p == null) continue;
+
+            try
+            {
+                p.Unregister(this);
+
+                if (logPassives)
+                    Debug.Log($"[Hero][Passive] Unregistered '{p.abilityName}' for hero='{name}'.", this);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[Hero][Passive] Unregister failed for passive='{p.name}' hero='{name}'. {e}", this);
+            }
+        }
+
+        _registeredPassives.Clear();
+    }
+
+    /// <summary>
+    /// Called by BattleManager when this hero's reel lands on a symbol (including after Reelcraft updates).
+    /// This is the main bridge between reels and passive ability triggers.
+    /// </summary>
+    public void NotifyReelSymbolLanded(ReelSymbolSO symbol, ReelSpinSystem.ResourceType resourceType, int amount, int multiplier)
+    {
+        // NOTE: This should fire at reel-stop time (not cashout). BattleManager is responsible for calling this.
+        string symName = symbol != null ? symbol.name : "NULL";
+
+        // Always log this bridge when passives logging is enabled, so we can diagnose missing procs.
+        if (logPassives)
+        {
+            Debug.Log($"[Hero][PassiveBridge] ReelSymbolLanded hero='{name}' symbol='{symName}' type={resourceType} amount={amount} mult={multiplier} eventsNull={(Events == null)}", this);
+        }
+
+        if (Events == null)
+        {
+            // This is a hard stop for passives; surface loudly even if logPassives is off.
+            Debug.LogWarning($"[Hero][PassiveBridge] Events is NULL. Passives will NOT trigger for hero='{name}'. (symbol='{symName}' type={resourceType})", this);
+            return;
+        }
+
+        Events.RaiseReelSymbolLanded(symbol, resourceType, amount, multiplier);
+
+        if (logPassives)
+        {
+            Debug.Log($"[Hero][PassiveBridge] Raised OnReelSymbolLanded hero='{name}'", this);
+        }
+    }
+
+    // -------- Temporary Bonus Damage (Next Attack) --------
+    public void AddBonusDamageNextAttack(int amount)
+    {
+        if (amount <= 0) return;
+        bonusDamageNextAttack += amount;
+        if (logPassives) Debug.Log($"[Passives] hero='{name}' gained +{amount} bonus damage on next attack. totalNextAttackBonus={bonusDamageNextAttack}", this);
+    }
+
+    /// <summary>
+    /// Consumes and returns any bonus damage that should apply to a damaging ability.
+    /// </summary>
+    public int ConsumeBonusDamageNextAttackIfDamaging(AbilityDefinitionSO ability)
+    {
+        if (ability == null) return 0;
+        if (bonusDamageNextAttack <= 0) return 0;
+
+        // Only consume on damaging enemy-targeted abilities.
+        bool isDamaging = (ability.baseDamage > 0 && ability.targetType == AbilityTargetType.Enemy) || ability.isDamaging;
+        if (!isDamaging) return 0;
+
+        int value = bonusDamageNextAttack;
+        bonusDamageNextAttack = 0;
+
+        if (logPassives) Debug.Log($"[Passives] hero='{name}' consumed +{value} bonus damage (next attack).", this);
+        return value;
     }
 
     // ---------------- Ability Per-Turn Limits ----------------
@@ -477,12 +660,6 @@ public class HeroStats : MonoBehaviour
     }
 
     // ---------------- Bleeding ----------------
-
-    /// <summary>
-    /// Adds Bleeding stacks.
-    /// Bleeding deals 1 HP per stack at the start of each Player Phase,
-    /// then reduces stacks by 1.
-    /// </summary>
     public void AddBleedStacks(int stacks)
     {
         if (stacks <= 0) return;
@@ -495,11 +672,6 @@ public class HeroStats : MonoBehaviour
         NotifyChanged();
     }
 
-    /// <summary>
-    /// Ticks Bleeding once for this turn.
-    /// Returns the HP damage applied.
-    /// NOTE: Bleed damage bypasses Shield and Defense (direct HP loss).
-    /// </summary>
     public int TickBleedingAtTurnStart()
     {
         // Backwards-compat wrapper. Bleed now ticks at END of the player's turn.
@@ -507,13 +679,6 @@ public class HeroStats : MonoBehaviour
         return TickBleedingAtEndOfPlayerTurn(turn);
     }
 
-    /// <summary>
-    /// Ticks Bleeding at the END of the player's turn.
-    /// - Deals HP damage equal to current stacks
-    /// - Then reduces stacks by 1
-    /// - Does NOT tick on the same player turn it was applied
-    /// Returns the HP damage applied (bypasses Shield/Defense).
-    /// </summary>
     public int TickBleedingAtEndOfPlayerTurn(int currentPlayerTurnNumber)
     {
         if (bleedStacks <= 0)
@@ -534,10 +699,6 @@ public class HeroStats : MonoBehaviour
         return Mathf.Max(0, before - currentHp);
     }
 
-    /// <summary>
-    /// Removes all Bleeding stacks immediately.
-    /// Returns true if a change was made.
-    /// </summary>
     public bool ClearBleeding()
     {
         if (bleedStacks <= 0)
@@ -549,15 +710,7 @@ public class HeroStats : MonoBehaviour
         return true;
     }
 
-
-
     // ---------------- Stun ----------------
-
-    /// <summary>
-    /// Clears any "remainder of current player phase" stun and consumes any queued stun (from enemy abilities)
-    /// so it applies to this player phase.
-    /// Call this once at the start of Player Phase.
-    /// </summary>
     public void StartPlayerPhaseStatuses()
     {
         // Clear any leftover immediate stun from last phase.
@@ -573,9 +726,6 @@ public class HeroStats : MonoBehaviour
         NotifyChanged();
     }
 
-    /// <summary>
-    /// Stun this hero immediately for the remainder of the current player phase.
-    /// </summary>
     public void StunForRemainderOfPlayerPhase()
     {
         if (isStunned) return;
@@ -583,10 +733,6 @@ public class HeroStats : MonoBehaviour
         NotifyChanged();
     }
 
-    /// <summary>
-    /// Queue a stun so the hero is unable to act for upcoming Player Phases.
-    /// Use this when an enemy stuns the hero during Enemy Phase.
-    /// </summary>
     public void StunForNextPlayerPhases(int playerPhases = 1)
     {
         if (playerPhases <= 0) return;
@@ -594,10 +740,6 @@ public class HeroStats : MonoBehaviour
         NotifyChanged();
     }
 
-    /// <summary>
-    /// Clears any current stun and any queued upcoming stunned player phases.
-    /// Returns true if a change was made.
-    /// </summary>
     public bool ClearStun()
     {
         bool changed = false;
@@ -621,7 +763,6 @@ public class HeroStats : MonoBehaviour
     }
 
     // ---------------- Triple Blade flag ----------------
-
     public void SetTripleBladeEmpoweredThisTurn(bool empowered)
     {
         if (tripleBladeEmpoweredThisTurn == empowered) return;
@@ -700,29 +841,13 @@ public class HeroStats : MonoBehaviour
         return level < maxLevel;
     }
 
-
-
     // ---------------- Reel Upgrade Minigame Support ----------------
-    /// <summary>
-    /// Applies ONE pending reel upgrade using the symbol located at the provided quad index.
-    /// 
-    /// IMPORTANT: This method must never allow PendingReelUpgrades to get "stuck".
-    /// If the landed symbol cannot be upgraded, we will search forward (wrapping) for the nearest
-    /// upgradeable symbol and upgrade that instead.
-    /// 
-    /// Returns true only if an upgrade was actually applied.
-    /// PendingReelUpgrades is decremented whenever we attempt to resolve one upgrade (even if nothing is upgradeable).
-    /// </summary>
     public bool TryApplyPendingReelUpgradeFromQuadIndex(int quadIndex, out ReelSymbolSO from, out ReelSymbolSO to)
     {
         int _;
         return TryApplyPendingReelUpgradeFromQuadIndex(quadIndex, out from, out to, out _);
     }
 
-    /// <summary>
-    /// Same as <see cref="TryApplyPendingReelUpgradeFromQuadIndex(int,out ReelSymbolSO,out ReelSymbolSO)"/>,
-    /// but also returns the strip index that was actually upgraded.
-    /// </summary>
     public bool TryApplyPendingReelUpgradeFromQuadIndex(int quadIndex, out ReelSymbolSO from, out ReelSymbolSO to, out int appliedStripIndex)
     {
         from = null;
@@ -926,6 +1051,7 @@ public class HeroStats : MonoBehaviour
         }
     }
 
+    // ---------------- EquipGrid runtime watcher ----------------
     [SerializeField] private Transform equipGridRoot; // assign EquipGrid1
     private InventorySlot[] _equipSlotsRuntime = new InventorySlot[0];
     private InventoryItem[] _lastEquipItems = new InventoryItem[0];
@@ -935,7 +1061,7 @@ public class HeroStats : MonoBehaviour
     {
         if (equipGridRoot == null)
         {
-            Debug.LogWarning($"[EquipGrid] {name}: equipGridRoot not set.");
+            // Keep this warning mild; some prefabs may not use the grid.
             _equipSlotsRuntime = new InventorySlot[0];
             _lastEquipItems = new InventoryItem[0];
             _lastEquipGridChildCount = -1;
@@ -1219,16 +1345,11 @@ public class HeroStats : MonoBehaviour
         // Portrait (optional)
         portrait = src.portrait;
 
-        // Inventory/equipment references
-        // IMPORTANT: Do NOT copy scene/prefab object references such as equipmentSlots / equip grid roots.
-        // The evolved prefab should keep its own references wired via inspector.
-
         // Per-turn ability usage tracker is runtime and can be reset safely.
         _abilityLastUsedOnPlayerTurn = null;
 
         NotifyChanged();
     }
-
 
     /// <summary>
     /// Adds abilities from the provided class definition into the permanently-unlocked list.
@@ -1258,6 +1379,4 @@ public class HeroStats : MonoBehaviour
         Debug.Log($"[Evolution][HeroStats] ForceUnlockAllAbilitiesFromClassDef def='{def.className}' added={added} totalUnlocked={permanentlyUnlockedAbilities.Count}", this);
         NotifyChanged();
     }
-
-
 }

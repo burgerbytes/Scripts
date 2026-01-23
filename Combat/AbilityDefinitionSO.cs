@@ -29,6 +29,17 @@ public enum RemovableStatusEffect
     Stunned
 }
 
+/// <summary>
+/// High-level ability type.
+/// Active abilities appear in the Ability Menu and are clicked to execute.
+/// Passive abilities are always-on listeners that react to gameplay events.
+/// </summary>
+public enum AbilityKind
+{
+    Active,
+    Passive
+}
+
 [CreateAssetMenu(menuName = "Combat/Ability Definition")]
 public class AbilityDefinitionSO : ScriptableObject
 {
@@ -36,6 +47,11 @@ public class AbilityDefinitionSO : ScriptableObject
     public string abilityName;
     [TextArea(2, 6)] public string description;
     public Sprite icon;
+
+    [Header("Type")]
+    [Tooltip("Active abilities are executed by the player. Passive abilities are always-on event listeners.")]
+    public AbilityKind kind = AbilityKind.Active;
+    public bool isDamaging;
 
     [Header("Targeting")]
     public AbilityTargetType targetType = AbilityTargetType.Enemy;
@@ -90,3 +106,5 @@ public class AbilityDefinitionSO : ScriptableObject
 
 
 ////////////////////////////////////////////////////////////
+
+
