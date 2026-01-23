@@ -33,7 +33,7 @@ public class ReelSpinSystem : MonoBehaviour
         public int amount = 1;
     }
 
-    public enum ResourceType { Attack, Defend, Magic, Wild }
+    public enum ResourceType { Attack, Defend, Magic, Wild, Null }
 
     [Header("Reels")]
     [SerializeField] private List<ReelEntry> reels = new List<ReelEntry>();
@@ -80,6 +80,9 @@ public class ReelSpinSystem : MonoBehaviour
 
     [Header("Symbol -> Resource Mapping")]
     [SerializeField] private List<SymbolResourceMapEntry> symbolToResourceMap = new List<SymbolResourceMapEntry>();
+
+    [Header("Heal VFX Spawner")]
+    [SerializeField] private SlotsAndSorcery.VFX.HealVFXSpawner healVfxSpawner;
 
     [Header("Debug / Randomness")]
     [SerializeField] private bool useFixedSeed = false;
@@ -129,6 +132,17 @@ public class ReelSpinSystem : MonoBehaviour
     /// Useful for UI that previews what will be collected on cashout.
     /// </summary>
     public event Action<int, int, int, int> OnPendingPayoutChanged;
+
+    // --- Cashout hooks (BattleManager can inject passive logic without modifying core spin flow elsewhere) ---
+    [Tooltip("If true, StopSpinningAndCollect will attempt to apply the 'Substitution' (NULL -> WILD) mutation before collecting payout.")]
+    [SerializeField] private bool enableSubstitutionOnCashout = true;
+
+    /// <summary>
+    /// Optional gate per reel index (0..2) to decide whether Substitution may apply.
+    /// BattleManager should set this each encounter/turn based on hero unlocks.
+    /// If null, Substitution applies to any NULL midrow.
+    /// </summary>
+    public Func<int, bool> CanApplySubstitutionForReelIndex;
 
     [Serializable]
     public struct SpinLandedInfo
@@ -451,6 +465,17 @@ public class ReelSpinSystem : MonoBehaviour
         foreach (var e in symbolToResourceMap)
         {
             if (e != null && e.symbol != null && e.resourceType == ResourceType.Magic)
+                return e.symbol;
+        }
+        return null;
+    }
+
+    public ReelSymbolSO GetDefaultWildSymbol()
+    {
+        if (symbolToResourceMap == null) return null;
+        foreach (var e in symbolToResourceMap)
+        {
+            if (e != null && e.symbol != null && e.resourceType == ResourceType.Wild)
                 return e.symbol;
         }
         return null;
@@ -972,24 +997,164 @@ public class ReelSpinSystem : MonoBehaviour
         spinning = false;
     }
 
+    
+    private IEnumerator DoTwofoldShadowTransmuteRoutine(ReelEntry entry, GameObject midrowPlane, ReelSymbolSO wild)
+    {
+        if (entry != null && entry.reel3d != null && midrowPlane != null)
+        {
+            int qi;
+            int mult;
+            ReelSymbolSO currentMid = entry.reel3d.GetMidrowSymbolAndMultiplier(midrowPlane, out qi, out mult);
+            entry.reel3d.SetQuadTemporarilyTransmutedTo(wild, qi);
+
+            int idx = FindReelIndexForColumn(entry.reel3d);
+            if (idx >= 0) TryNudgeReel(idx, 0);
+            else
+            {
+                TryNudgeReel(0, 0);
+                TryNudgeReel(1, 0);
+                TryNudgeReel(2, 0);
+            }
+            entry.reel3d.ShakeIconRoutine(qi);
+            entry.reel3d.SpawnTwofoldShadowSmoke(qi);
+
+            // THIS actually delays continuation
+            yield return new WaitForSeconds(1f);
+        }
+    }
+
+    private IEnumerator ApplySubstitutionBeforeCashoutRoutine()
+    {
+        if (!InReelPhase) yield break;
+        if (spinning) yield break;
+        if (!HasCurrentLandedSymbols) yield break;
+
+        ReelSymbolSO wild = GetDefaultWildSymbol();
+        if (wild == null) yield break;
+
+        int count = Mathf.Min(3, _currentLandedSymbols.Count);
+        bool anyChanged = false;
+
+        int running = 0;
+
+        for (int i = 0; i < count; i++)
+        {
+            ReelSymbolSO sym = _currentLandedSymbols[i];
+            if (sym == null) continue;
+
+            if (CanApplySubstitutionForReelIndex != null && !CanApplySubstitutionForReelIndex(i))
+                continue;
+
+            var entry = GetReelEntryAt(i);
+
+            // Start the VFX coroutine, but track completion
+            running++;
+            StartCoroutine(DoTwofoldShadowTransmuteRoutine_WithDone(entry, midrowPlane, wild, () => running--));
+
+            // Update data immediately so UI/payout preview reflects substitution
+            _currentLandedSymbols[i] = wild;
+            anyChanged = true;
+        }
+
+        if (!anyChanged) yield break;
+
+        // Recompute pending + notify listeners BEFORE payout is collected.
+        SetPendingFromSymbols(_currentLandedSymbols, _currentLandedMultipliers);
+
+        SpinLandedInfo info = BuildSpinLandedInfo(_currentLandedSymbols);
+        OnCurrentLandedChanged?.Invoke(info);
+
+        // Wait for all VFX routines to report done
+        while (running > 0)
+            yield return null;
+    }
+
+    private IEnumerator DoTwofoldShadowTransmuteRoutine_WithDone(
+        ReelEntry entry, GameObject midrowPlane, ReelSymbolSO wild, System.Action onDone)
+    {
+        yield return StartCoroutine(DoTwofoldShadowTransmuteRoutine(entry, midrowPlane, wild));
+        onDone?.Invoke();
+    }
+
+
+    // public void StopSpinningAndCollect()
+    // {
+    //     bool canApplySubstitution = false;
+    //     Debug.Log($"[ReelSpinSystem] StopSpinningAndCollect landedListNull={_currentLandedSymbols == null} gateNull={CanApplySubstitutionForReelIndex == null}", this);
+    //     if (_currentLandedSymbols != null)
+    //         Debug.Log($"[ReelSpinSystem] landedCount={_currentLandedSymbols.Count}", this);
+    //     if (_currentLandedSymbols != null)
+    //     {
+    //         int count = Mathf.Min(3, _currentLandedSymbols.Count);
+    //         for (int i = 0; i < count; i++)
+    //         {
+    //             // If there's no gate delegate, treat it as allowed.
+    //             bool allowed = (CanApplySubstitutionForReelIndex == null) || CanApplySubstitutionForReelIndex(i);
+    //             if (allowed)
+    //             {
+    //                 canApplySubstitution = true;
+    //                 break; // we only need one eligible reel
+    //             }
+    //         }
+    //     }
+
+    //     if (canApplySubstitution)
+    //         ApplySubstitutionBeforeCashout();
+
+    //     Set3DReelsActive(false);
+    //     SetReelPhase(false);
+    //     CollectPendingPayout();
+
+    //     if (stopSpinningButton != null)
+    //         stopSpinningButton.interactable = false;
+
+    //     if (shutterController != null)
+    //         shutterController.CloseShutters();
+    // }
     public void StopSpinningAndCollect()
     {
-        // In reward mode, payouts happen immediately on stop; nothing to collect.
-        if (_rewardModeActive) return;
-
-        SetReelPhase(false);
-
-        CollectPendingPayout();
-
-        // After cashout, close shutters and disable reels/buttons so the "post-spin" space can be used.
-        Set3DReelsActive(false);
         if (stopSpinningButton != null)
             stopSpinningButton.interactable = false;
+
+        StartCoroutine(StopSpinningAndCollectRoutine());
+    }
+
+    private IEnumerator StopSpinningAndCollectRoutine()
+    {
+        bool canApplySubstitution = CanApplySubstitutionNow();
+
+        if (canApplySubstitution)
+            yield return StartCoroutine(ApplySubstitutionBeforeCashoutRoutine());
+
+        Set3DReelsActive(false);
+        SetReelPhase(false);
+        CollectPendingPayout();
 
         if (shutterController != null)
             shutterController.CloseShutters();
     }
 
+    private IEnumerator WaitForParticleSystem(ParticleSystem ps)
+    {
+        // If it was destroyed or missing, just continue
+        if (ps == null) yield break;
+
+        // Wait until it stops emitting AND all particles are gone
+        while (ps != null && ps.IsAlive(true))
+            yield return null;
+    }
+    private bool CanApplySubstitutionNow()
+    {
+        if (_currentLandedSymbols == null) return false;
+
+        int count = Mathf.Min(3, _currentLandedSymbols.Count);
+        for (int i = 0; i < count; i++)
+        {
+            bool allowed = (CanApplySubstitutionForReelIndex == null) || CanApplySubstitutionForReelIndex(i);
+            if (allowed) return true;
+        }
+        return false;
+    }
     private void Set3DReelsActive(bool active)
     {
         if (reels == null) return;
@@ -1035,6 +1200,37 @@ public class ReelSpinSystem : MonoBehaviour
         if (m <= 0) return 0;
         int r = x % m;
         return r < 0 ? r + m : r;
+    }
+
+
+    private string DebugSymbols(List<ReelSymbolSO> syms)
+    {
+        if (syms == null) return "null";
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        for (int i = 0; i < syms.Count; i++)
+        {
+            var s = syms[i];
+            sb.Append(i).Append(":").Append(s != null ? s.name : "NULL");
+            if (i < syms.Count - 1) sb.Append(" | ");
+        }
+        return sb.ToString();
+    }
+    private Coroutine _sleepRoutine;
+
+    private void SleepTemporarily(float duration)
+    {
+        if (_sleepRoutine != null)
+            StopCoroutine(_sleepRoutine);
+
+        _sleepRoutine = StartCoroutine(SleepRoutine(duration));
+    }
+
+    private IEnumerator SleepRoutine(float duration)
+    {
+
+        yield return new WaitForSeconds(duration);
+
+        _sleepRoutine = null;
     }
 }
 ////////////////////////////////////////////////////////////

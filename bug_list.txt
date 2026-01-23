@@ -1,8 +1,7 @@
 bugs
 - status and ability menus should be hidden during reel phase
-- after reel phase ability and stats panels should be disabled
-- fighter reelcraft doesnt work properly (needs throrough debugging)
-- upgrade reel spin shouldnt choose another random symbol to upgrade if the symbol landed on is already upgraded
+- disable combat reels on ability selection screen
+- change upgrade reel to allow player to select what to upgrade. 
 
 features
 - add some type of indictor (arrow, glow) to enemy unit being targeted

@@ -261,6 +261,9 @@ public class BattleManager : MonoBehaviour
     [SerializeField] private ReelSpinSystem reelSpinSystem;
     [Tooltip("Log passive bridge events (symbol landed notifications).")]
     [SerializeField] private bool logPassiveBridge = true;
+    [SerializeField] private Button stopSpinningButton;
+    [SerializeField] private bool _spinResolvedAndLocked;
+
     [Header("Input / Targeting")]
     [SerializeField] private bool allowClickToSelectMonsterTarget = true;
     [SerializeField] private bool ignoreClicksOverUI = true;
@@ -473,7 +476,7 @@ public class BattleManager : MonoBehaviour
 
         if (confirmText != null)
             confirmText.gameObject.SetActive(false); // disabled by default
-
+        if (stopSpinningButton != null) stopSpinningButton.onClick.AddListener(OnStopSpinningPressed);
     }
 
     private void Start()
@@ -625,6 +628,7 @@ if (reelSpinSystem != null)
             }
 
             reelSpinSystem.ConfigureFromParty(heroes);
+        ConfigureReelSpinSystemCashoutHooks();
         }
 
         _activePartyIndex = GetFirstAlivePartyIndex();
@@ -3574,6 +3578,10 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
     {
         if (reelSpinSystem == null) return;
         if (info.symbols == null || info.symbols.Count == 0) return;
+        // New spin landed -> allow Stop button passive to trigger once for this spin.
+        _spinResolvedAndLocked = false;
+        if (logFlow) Debug.Log($"[Battle][SpinLanded] Reset _spinResolvedAndLocked=false. symbols={info.symbols.Count} A={info.attackCount} D={info.defendCount} M={info.magicCount} W={info.wildCount}", this);
+
         if (_party == null || _party.Count == 0) return;
 
         int count = Mathf.Min(_party.Count, info.symbols.Count);
@@ -3583,44 +3591,38 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
             var hero = _party[i]?.stats;
             if (hero == null) continue;
 
-            // Only care about Fighters.    
-            string baseClassName = hero.BaseClassDef != null ? hero.BaseClassDef.className : string.Empty;
-            if (!string.Equals(baseClassName, "Fighter", StringComparison.OrdinalIgnoreCase))
-                continue;
-
             var sym = info.symbols[i];
             if (sym == null) continue;
 
-            // Use the existing mapping helper.
+            // Use the ReelSpinSystem mapping so symbol values (e.g. DEF2) are respected.
             if (!reelSpinSystem.TryMapSymbolPublic(sym, out var rt, out int amount))
                 continue;
 
+            // Passive procs that happen immediately on land:
             if (rt == ReelSpinSystem.ResourceType.Attack)
             {
                 if (hero.HasAbilityUnlocked("Battle Rhythm"))
                 {
                     DimScreenTemporarily(0.5f);
-                    healVfxSpawner.PlayBRVfx(hero.transform);
-                    hero.AddBonusDamageNextAttack(1);    
+                    if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(hero.transform);
+                    hero.AddBonusDamageNextAttack(Mathf.Max(1, amount));
                 }
             }
-            if (rt == ReelSpinSystem.ResourceType.Defend)
+            else if (rt == ReelSpinSystem.ResourceType.Defend)
             {
                 if (hero.HasAbilityUnlocked("Iron Guard"))
                 {
                     DimScreenTemporarily(0.5f);
-                    healVfxSpawner.PlayBRVfx(hero.transform);
-                    hero.AddBonusDamageNextAttack(1);    
+                    if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(hero.transform);
+                    hero.AddShield(Mathf.Max(1, amount));
                 }
             }
+
+            // NOTE: "Substitution" (NULL -> WILD) is applied on Cashout inside ReelSpinSystem.StopSpinningAndCollect()
+            // via ApplySubstitutionBeforeCashout(). BattleManager only provides the per-reel gating delegate.
         }
     }
-
-    /// <summary>
-    /// Distributes per-reel landed symbols to the corresponding hero so passive abilities can react.
-    /// This fires on initial spin land AND after any Reelcraft modifications.
-    /// </summary>
-    private void HandleCurrentLandedChanged(ReelSpinSystem.SpinLandedInfo info)
+private void HandleCurrentLandedChanged(ReelSpinSystem.SpinLandedInfo info)
     {
         if (reelSpinSystem == null) return;
         if (info.symbols == null || info.symbols.Count == 0) return;
@@ -3678,6 +3680,46 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
         screenDimmer.DimScreenTo(0.0f);
 
         _dimRoutine = null;
+    }
+
+    
+
+    private void ConfigureReelSpinSystemCashoutHooks()
+    {
+        if (reelSpinSystem == null) return;
+
+        if (logFlow) Debug.Log("[Battle][SubstitutionHook] Installing CanApplySubstitutionForReelIndex delegate.", this);
+
+        // Gate Substitution per reel index based on each hero's unlock.
+        reelSpinSystem.CanApplySubstitutionForReelIndex = (reelIndex) =>
+        {
+            if (logFlow) Debug.Log($"[Battle][SubstitutionHook] Query reelIndex={reelIndex} partyCount={(_party != null ? _party.Count : 0)}", this);
+            if (_party == null) return false;
+            if (reelIndex < 0 || reelIndex >= _party.Count) return false;
+            var hero = _party[reelIndex]?.stats;
+            if (hero == null) return false;
+            bool unlocked = hero.HasAbilityUnlocked("Substitution");
+            if (logFlow) Debug.Log($"[Battle][SubstitutionHook] reelIndex={reelIndex} hero={(hero!=null?hero.name:"null")} unlocked={unlocked}", this);
+            return unlocked;
+        };
+    }
+
+private void OnStopSpinningPressed()
+    {
+        if (logFlow) Debug.Log($"[Battle][StopPressed] Click. _spinResolvedAndLocked={_spinResolvedAndLocked}", this);
+
+        // Defensive: prevent re-trigger spam
+        if (_spinResolvedAndLocked)
+        {
+            if (logFlow) Debug.Log("[Battle][StopPressed] Ignored (already locked for this spin).", this);
+            return;
+        }
+
+        _spinResolvedAndLocked = true;
+
+        // NOTE: Actual NULL->WILD substitution happens inside ReelSpinSystem.StopSpinningAndCollect(),
+        // before CollectPendingPayout(), gated by CanApplySubstitutionForReelIndex.
+        if (logFlow) Debug.Log("[Battle][StopPressed] Locked=true. Waiting for ReelSpinSystem cashout to apply substitution + payout.", this);
     }
 }
 

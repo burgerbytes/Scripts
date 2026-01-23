@@ -11,6 +11,9 @@ namespace SlotsAndSorcery.VFX
         [Header("Battle Rhythm VFX Prefab")]
         [SerializeField] private GameObject brVfxPrefab;
 
+        [Header("Smoke Poof VFX Prefab")]
+        [SerializeField] private GameObject smokeVfxPrefab;
+
         [Header("Placement")]
         [Tooltip("If set, VFX will spawn at this transform. If null, spawns at targetRoot.")]
         [SerializeField] private Transform defaultAnchor;
@@ -45,6 +48,24 @@ namespace SlotsAndSorcery.VFX
         public void PlayBRVfx(Transform targetRoot, Transform optionalAnchorOverride = null)
         {
             if (brVfxPrefab == null || targetRoot == null) return;
+
+            Transform anchor = optionalAnchorOverride != null ? optionalAnchorOverride :
+                               (defaultAnchor != null ? defaultAnchor : targetRoot);
+
+            var go = Instantiate(brVfxPrefab, anchor);
+            go.transform.localPosition += localOffset;
+            go.transform.localRotation = Quaternion.identity;
+
+            if (!autoDestroyWhenFinished)
+                return;
+
+            float life = ComputeLifetimeSeconds(go);
+            Destroy(go, life);
+        }
+
+        public void PlaySmokeVfx(Transform targetRoot, Transform optionalAnchorOverride = null)
+        {
+            if (smokeVfxPrefab == null || targetRoot == null) return;
 
             Transform anchor = optionalAnchorOverride != null ? optionalAnchorOverride :
                                (defaultAnchor != null ? defaultAnchor : targetRoot);
