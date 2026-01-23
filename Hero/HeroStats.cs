@@ -147,6 +147,9 @@ public class HeroStats : MonoBehaviour
     [Tooltip("Abilities that have been unlocked/earned by this hero and should remain available (even if the hero later changes class definitions).")]
     [SerializeField] private List<AbilityDefinitionSO> permanentlyUnlockedAbilities = new List<AbilityDefinitionSO>();
 
+    [Tooltip("Pending ability choice levels to resolve post-battle. Each level >= 2 adds one entry.")]
+    [SerializeField] private List<int> pendingAbilityChoiceLevels = new List<int>();
+
     public AbilityDefinitionSO StartingAbilityOverride => startingAbilityOverride;
 
     /// <summary>
@@ -179,9 +182,107 @@ public class HeroStats : MonoBehaviour
             if (a.starterChoice) continue; // starter-choice is handled by startingAbilityOverride
 
             int req = Mathf.Max(1, a.unlockAtLevel);
-            if (level >= req && !permanentlyUnlockedAbilities.Contains(a))
+            if (a.unlockAtLevel <= 1 && level >= req && !permanentlyUnlockedAbilities.Contains(a))
                 permanentlyUnlockedAbilities.Add(a);
         }
+    }
+
+
+    // ---------------- Ability Choice (Post-Battle) ----------------
+    public bool HasPendingAbilityChoices => pendingAbilityChoiceLevels != null && pendingAbilityChoiceLevels.Count > 0;
+    public int PendingAbilityChoices => (pendingAbilityChoiceLevels != null) ? pendingAbilityChoiceLevels.Count : 0;
+    public int NextPendingAbilityChoiceLevel => HasPendingAbilityChoices ? pendingAbilityChoiceLevels[0] : -1;
+
+    /// <summary>
+    /// Returns up to <paramref name="count"/> ability options for the specified unlock level.
+    /// Options are pulled from the hero's base class and (if present) advanced class definitions.
+    /// Starter-choice abilities are excluded; this panel is for learned abilities.
+    /// </summary>
+    public List<AbilityDefinitionSO> GetAbilityChoiceOptionsForLevel(int unlockLevel, int count = 2)
+    {
+        Debug.Log($"[Hero][AbilityUpgrade] GetAbilityChoiceOptionsForLevel hero='{name}' unlockLevel={unlockLevel} count={count}");
+        List<AbilityDefinitionSO> options = new List<AbilityDefinitionSO>();
+        if (count <= 0) return options;
+
+        AddAbilityOptionsFromClassDef(baseClassDef, unlockLevel, count, options);
+        AddAbilityOptionsFromClassDef(advancedClassDef, unlockLevel, count, options);
+        Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlockLevel} optionsCount={options.Count} first={(options.Count>0?options[0].abilityName:"<none>")} second={(options.Count>1?options[1].abilityName:"<none>")}");
+
+        return options;
+    }
+
+        private IEnumerable<AbilityDefinitionSO> EnumerateClassAbilities(ClassDefinitionSO classDef)
+    {
+        if (classDef == null) yield break;
+
+        // Legacy 2-slot fields (still used in some data)
+        if (classDef.ability1 != null) yield return classDef.ability1;
+        if (classDef.ability2 != null) yield return classDef.ability2;
+
+        // New list
+        if (classDef.abilities != null)
+        {
+            for (int i = 0; i < classDef.abilities.Count; i++)
+            {
+                if (classDef.abilities[i] != null)
+                    yield return classDef.abilities[i];
+            }
+        }
+    }
+
+    private void AddAbilityOptionsFromClassDef(ClassDefinitionSO classDef, int unlockLevel, int maxCount, List<AbilityDefinitionSO> options)
+    {
+        if (classDef == null) return;
+        if (options == null) return;
+
+        foreach (AbilityDefinitionSO a in EnumerateClassAbilities(classDef))
+        {
+            if (options.Count >= maxCount) break;
+            if (a == null) continue;
+
+            if (a.starterChoice) continue;
+
+            int req = Mathf.Max(1, a.unlockAtLevel);
+            if (req != unlockLevel) continue;
+
+            if (permanentlyUnlockedAbilities.Contains(a)) continue;
+
+            if (!options.Contains(a))
+                options.Add(a);
+        }
+    }
+
+    /// <summary>
+    /// Accepts the chosen ability for the next pending choice level (if any), permanently unlocking it.
+    /// Returns true if applied.
+    /// </summary>
+    public bool TryAcceptAbilityChoice(AbilityDefinitionSO chosen)
+    {
+        if (!HasPendingAbilityChoices)
+        {
+            Debug.LogWarning($"[Hero][AbilityUpgrade] TryAcceptAbilityChoice called but no pending choices hero='{name}'");
+            return false;
+        }
+        if (chosen == null)
+        {
+            Debug.LogWarning($"[Hero][AbilityUpgrade] TryAcceptAbilityChoice called with null ability hero='{name}'");
+            return false;
+        }
+
+        int expectedLevel = pendingAbilityChoiceLevels[0];
+        Debug.Log($"[Hero][AbilityUpgrade] Accepting ability choice hero='{name}' expectedUnlockLevel={expectedLevel} chosen='{chosen.abilityName}' unlockAt={chosen.unlockAtLevel}");
+        int req = Mathf.Max(1, chosen.unlockAtLevel);
+        if (req != expectedLevel) return false;
+
+        if (!permanentlyUnlockedAbilities.Contains(chosen))
+            permanentlyUnlockedAbilities.Add(chosen);
+
+        // consume the pending choice
+        pendingAbilityChoiceLevels.RemoveAt(0);
+        Debug.Log($"[Hero][AbilityUpgrade] Ability permanently unlocked hero='{name}' chosen='{chosen.abilityName}' remainingPending={pendingAbilityChoiceLevels.Count}");
+
+        NotifyChanged();
+        return true;
     }
 
     /// <summary>
@@ -234,17 +335,17 @@ public class HeroStats : MonoBehaviour
         List<AbilityDefinitionSO> results = new List<AbilityDefinitionSO>();
 
         // 1) Add abilities from the provided class definition (filtered)
-        if (classDef != null && classDef.abilities != null)
+    // Note: supports both legacy (ability1/ability2) and new (abilities list) class data.
+    if (classDef != null)
+    {
+        foreach (AbilityDefinitionSO a in EnumerateClassAbilities(classDef))
         {
-            for (int i = 0; i < classDef.abilities.Count; i++)
-            {
-                AbilityDefinitionSO a = classDef.abilities[i];
-                if (a == null) continue;
-                if (a.kind == AbilityKind.Passive) continue;
-                if (IsAbilityUnlocked(a) && !results.Contains(a))
-                    results.Add(a);
-            }
+            if (a == null) continue;
+            if (a.kind == AbilityKind.Passive) continue;
+            if (IsAbilityUnlocked(a) && !results.Contains(a))
+                results.Add(a);
         }
+    }
 
         // 2) Add any permanently unlocked abilities (filtered) so they persist across level ups/class changes
         for (int i = 0; i < permanentlyUnlockedAbilities.Count; i++)
@@ -916,6 +1017,13 @@ public class HeroStats : MonoBehaviour
 
         xpToNextLevel = Mathf.RoundToInt(xpToNextLevel * 1.25f) + 5;
 
+        // Queue an ability choice for this level (starting at level 2).
+        if (level >= 2)
+        {
+            pendingAbilityChoiceLevels.Add(level);
+            Debug.Log($"[Hero][AbilityUpgrade] Queued ability choice hero='{name}' reachedLevel={level} pendingChoices={pendingAbilityChoiceLevels.Count}");
+        }
+
         // Queue a reel upgrade to be resolved via the Reel Upgrade Minigame.
         // Don't queue upgrades past the max level.
         if (level <= maxLevel && upgradeReelOnLevelUp && reelUpgradeRules != null && reelStrip != null)
@@ -1379,4 +1487,19 @@ public class HeroStats : MonoBehaviour
         Debug.Log($"[Evolution][HeroStats] ForceUnlockAllAbilitiesFromClassDef def='{def.className}' added={added} totalUnlocked={permanentlyUnlockedAbilities.Count}", this);
         NotifyChanged();
     }
+
+    public bool HasAbilityUnlocked(string abilityName)
+    {
+        if (permanentlyUnlockedAbilities == null) return false;
+
+        for (int i = 0; i < permanentlyUnlockedAbilities.Count; i++)
+        {
+            var a = permanentlyUnlockedAbilities[i];
+            if (a != null && a.abilityName == abilityName) 
+                return true;
+        }
+        return false;
+    }
 }
+
+

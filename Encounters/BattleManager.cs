@@ -243,6 +243,10 @@ public class BattleManager : MonoBehaviour
     [Tooltip("Optional: shown after Results (and before reward reels) to let the player spin to upgrade a reel symbol for each level up.")]
     [SerializeField] private PostBattleReelUpgradeMinigamePanel postBattleReelUpgradeMinigamePanel;
 
+    [Header("Post-Battle Ability Upgrade")]
+    [Tooltip("Optional: shown after Reel Upgrade Minigame to let the player choose one of two abilities to permanently unlock for each level gained (starting at level 2).")]
+    [SerializeField] private PostBattleAbilityUpgradePanel postBattleAbilityUpgradePanel;
+
     [Tooltip("Optional: tracks in-battle performance for bonus XP awards.")]
     [SerializeField] private BattlePerformanceTracker performanceTracker;
 
@@ -2728,6 +2732,53 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
                     postBattleReelUpgradeMinigamePanel.Hide();
                 }
             }
+
+
+        // Ability choice (starts at level 2). Resolve AFTER reel upgrades so the hero stays consistent with existing flow.
+        if (_party != null && _party.Count > 0)
+        {
+            if (postBattleAbilityUpgradePanel != null)
+            {
+                postBattleAbilityUpgradePanel.gameObject.SetActive(true);
+
+                for (int i = 0; i < _party.Count; i++)
+                {
+                    HeroStats hs = _party[i] != null ? _party[i].stats : null;
+                    if (hs == null) continue;
+
+                    while (hs.HasPendingAbilityChoices)
+                    {
+                        Debug.Log($"[PostBattle][AbilityUpgrade] Pending choices for hero='{hs.name}' pendingCount={hs.PendingAbilityChoices} nextUnlockLevel={hs.NextPendingAbilityChoiceLevel}");
+
+                        // If no options exist for this level (misconfigured ability data), consume it to avoid soft-lock.
+                        int unlockLevel = hs.NextPendingAbilityChoiceLevel;
+                        List<AbilityDefinitionSO> options = hs.GetAbilityChoiceOptionsForLevel(unlockLevel, 2);
+                        if (options == null || options.Count == 0)
+                        {
+                            Debug.LogWarning($"[PostBattle][AbilityUpgrade] No ability options for hero='{hs.name}' unlockLevel={unlockLevel}. Consuming pending choice to avoid soft-lock.");
+                            continue;
+                        }
+
+                        bool done = false;
+                        Debug.Log($"[PostBattle][AbilityUpgrade] Showing panel for hero='{hs.name}' unlockLevel={unlockLevel} options={options.Count}");
+                        postBattleAbilityUpgradePanel.Show(hs, () => done = true);
+                        yield return new WaitUntil(() => done);
+                        Debug.Log($"[PostBattle][AbilityUpgrade] Panel completed for hero='{hs.name}' unlockLevel={unlockLevel} remainingPending={hs.PendingAbilityChoices}");
+                        postBattleAbilityUpgradePanel.Hide();
+                    }
+                }
+            }
+            else
+            {
+                // Safety: if the panel isn't wired, consume pending choices so the run can continue.
+                Debug.LogWarning("[PostBattle][AbilityUpgrade] postBattleAbilityUpgradePanel is not assigned in BattleManager inspector. Skipping/consuming pending ability choices.");
+                for (int i = 0; i < _party.Count; i++)
+                {
+                    HeroStats hs = _party[i] != null ? _party[i].stats : null;
+                    if (hs == null) continue;
+                }
+            }
+        }
         }
 
         List<ItemOptionSO> pool =
@@ -3546,7 +3597,7 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
 
             if (rt == ReelSpinSystem.ResourceType.Attack)
             {
-                if (hero.name == "Fighter(Clone)")
+                if (hero.HasAbilityUnlocked("Battle Rhythm"))
                 {
                     DimScreenTemporarily(0.5f);
                     healVfxSpawner.PlayBRVfx(hero.transform);
@@ -3555,7 +3606,7 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
             }
             if (rt == ReelSpinSystem.ResourceType.Defend)
             {
-                if (hero.name == "Fighter(Clone)")
+                if (hero.HasAbilityUnlocked("Iron Guard"))
                 {
                     DimScreenTemporarily(0.5f);
                     healVfxSpawner.PlayBRVfx(hero.transform);
@@ -3629,3 +3680,5 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
         _dimRoutine = null;
     }
 }
+
+

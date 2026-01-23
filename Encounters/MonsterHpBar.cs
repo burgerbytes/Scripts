@@ -20,7 +20,7 @@ public class MonsterHpBar : MonoBehaviour
     [SerializeField] private Color previewColor = new Color(1f, 0.92f, 0.1f, 1f);
 
     [Header("Debug")]
-    [SerializeField] private bool debugHpBarLogs = false;
+    [SerializeField] private bool logDebug = false;
 
     private float _baseFillWidth = -1f;
     private Vector3 _baseFillScale = Vector3.one;
@@ -208,7 +208,7 @@ public class MonsterHpBar : MonoBehaviour
 
         _fillCandidates = list.ToArray();
 
-        if (debugHpBarLogs)
+        if (logDebug)
         {
             string names = "";
             for (int i = 0; i < _fillCandidates.Length; i++)
@@ -377,17 +377,17 @@ public class MonsterHpBar : MonoBehaviour
             }
         }
 
-        if (debugHpBarLogs && monster != null)
+        if (logDebug && monster != null)
             Debug.Log($"[MonsterHpBar] SetFill01 applied value01={value01:0.###} monster={monster.name} hp={monster.CurrentHp}/{monster.MaxHp}", this);
     }
 
     private void DebugDumpVisualInternal(string tag, bool force)
     {
-        if (!force && !debugHpBarLogs) return;
+        if (!force && !logDebug) return;
 
         TryAutoBind();
 
-        if (fillImage == null)
+        if (fillImage == null & logDebug)
         {
             Debug.LogWarning($"[MonsterHpBar] DebugDumpVisual tag={tag} no fillImage. barObj={name}", this);
             return;
@@ -397,13 +397,16 @@ public class MonsterHpBar : MonoBehaviour
         string m = (monster != null)
             ? $"monster={monster.name} hp={monster.CurrentHp}/{monster.MaxHp} monsterInstance={monster.GetInstanceID()}"
             : "monster=NULL";
-
-        Debug.Log(
-            $"[MonsterHpBar] DebugDumpVisual tag={tag} {m} barObj={name} barInstance={GetInstanceID()} " +
-            $"imgType={fillImage.type} fillAmt={fillImage.fillAmount:0.###} rectW={rt.rect.width:0.###} rectH={rt.rect.height:0.###} " +
-            $"anchors=({rt.anchorMin.x:0.###},{rt.anchorMin.y:0.###})-({rt.anchorMax.x:0.###},{rt.anchorMax.y:0.###}) " +
-            $"sizeDelta=({rt.sizeDelta.x:0.###},{rt.sizeDelta.y:0.###}) localScale=({rt.localScale.x:0.###},{rt.localScale.y:0.###},{rt.localScale.z:0.###})",
-            this);
+        
+        if (logDebug)
+        {
+            Debug.Log(
+                $"[MonsterHpBar] DebugDumpVisual tag={tag} {m} barObj={name} barInstance={GetInstanceID()} " +
+                $"imgType={fillImage.type} fillAmt={fillImage.fillAmount:0.###} rectW={rt.rect.width:0.###} rectH={rt.rect.height:0.###} " +
+                $"anchors=({rt.anchorMin.x:0.###},{rt.anchorMin.y:0.###})-({rt.anchorMax.x:0.###},{rt.anchorMax.y:0.###}) " +
+                $"sizeDelta=({rt.sizeDelta.x:0.###},{rt.sizeDelta.y:0.###}) localScale=({rt.localScale.x:0.###},{rt.localScale.y:0.###},{rt.localScale.z:0.###})",
+                this);
+        }
 
         // Also dump all filled candidates (helps diagnose "stomped"/wrong-image cases).
         if (_fillCandidates != null)
@@ -414,10 +417,12 @@ public class MonsterHpBar : MonoBehaviour
                 if (img == null) continue;
                 if (img.gameObject != null && img.gameObject.name == "HPDamagePreview") continue;
                 if (img.type != Image.Type.Filled) continue;
-
-                Debug.Log(
+                if (logDebug)
+                {
+                    Debug.Log(
                     $"[MonsterHpBar] CandidateFilled tag={tag} name={img.name} enabled={img.enabled} fillAmt={img.fillAmount:0.###} colorA={img.color.a:0.###} goActive={img.gameObject.activeInHierarchy}",
                     this);
+                }
             }
         }
     }
@@ -430,7 +435,7 @@ public class MonsterHpBar : MonoBehaviour
         _lastHp = current;
         _lastMaxHp = max;
 
-        if (debugHpBarLogs && monster != null)
+        if (logDebug && monster != null)
             Debug.Log($"[MonsterHpBar] HandleHpChanged monster={monster.name} hp={current}/{max} barObj={name} monsterInstance={monster.GetInstanceID()} barInstance={GetInstanceID()}", this);
 
         int safeMax = Mathf.Max(1, max);
@@ -457,7 +462,7 @@ public class MonsterHpBar : MonoBehaviour
         CacheBaseFillGeometry();
 
         int currentHP = monster.CurrentHp;
-        if (debugHpBarLogs)
+        if (logDebug)
             Debug.Log($"[MonsterHpBar] SetDamagePreview monster={monster.name} hpNow={currentHP}/{monster.MaxHp} predictedAfter={predictedHpAfterDamage} barObj={name} monsterInstance={monster.GetInstanceID()} barInstance={GetInstanceID()}", this);
         int maxHP = Mathf.Max(1, monster.MaxHp);
 
@@ -503,11 +508,11 @@ public class MonsterHpBar : MonoBehaviour
         TryAutoBind();
         if (monster == null)
         {
-            if (debugHpBarLogs) Debug.LogWarning($"[MonsterHpBar] RefreshNow: no monster bound. reason={reason} this={name}", this);
+            if (logDebug) Debug.LogWarning($"[MonsterHpBar] RefreshNow: no monster bound. reason={reason} this={name}", this);
             return;
         }
 
-        if (debugHpBarLogs)
+        if (logDebug)
             Debug.Log($"[MonsterHpBar] RefreshNow reason={reason} monster={monster.name} hp={monster.CurrentHp}/{monster.MaxHp} barObj={name} monsterInstance={monster.GetInstanceID()} barInstance={GetInstanceID()}", this);
 
         HandleHpChanged(monster.CurrentHp, monster.MaxHp);
@@ -522,7 +527,7 @@ public class MonsterHpBar : MonoBehaviour
             hpDamagePreviewRect.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, 0f);
 
         // Restore fill to current HP
-        if (debugHpBarLogs && monster != null)
+        if (logDebug && monster != null)
             Debug.Log($"[MonsterHpBar] ClearPreview monster={monster.name} hp={monster.CurrentHp}/{monster.MaxHp} barObj={name} monsterInstance={monster.GetInstanceID()} barInstance={GetInstanceID()}", this);
 
         if (monster != null)
