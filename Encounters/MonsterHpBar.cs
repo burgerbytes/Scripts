@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.UI;
+using TMPro;
 
 public class MonsterHpBar : MonoBehaviour
 {
@@ -18,6 +19,32 @@ public class MonsterHpBar : MonoBehaviour
 
     [Tooltip("Color used for the damage preview segment.")]
     [SerializeField] private Color previewColor = new Color(1f, 0.92f, 0.1f, 1f);
+
+    
+    [Header("Status Icons (Under HP Bar)")]
+    [Tooltip("Optional container. If null, one is created under the HP bar.")]
+    [SerializeField] private RectTransform statusIconsContainer;
+
+    [Tooltip("Sprite shown when the monster has Focus Rune.")]
+    [SerializeField] private Sprite focusRuneStatusSprite;
+
+    [Tooltip("Sprite shown when the monster has Ignition.")]
+    [SerializeField] private Sprite ignitionStatusSprite;
+
+    [Tooltip("Sprite shown when the monster has Stasis.")]
+    [SerializeField] private Sprite stasisStatusSprite;
+    
+    [Tooltip("Sprite shown when the monster is Bleeding (stacks > 0).")]
+    [SerializeField] private Sprite bleedingStatusSprite;
+
+    [Tooltip("Pixel size of each status icon (UI units).")]
+    [SerializeField] private float statusIconSize = 18f;
+
+    [Tooltip("Spacing between status icons.")]
+    [SerializeField] private float statusIconSpacing = 2f;
+
+    [Tooltip("How far below the HP bar the status row sits (UI units).")]
+    [SerializeField] private float statusRowYOffset = 2f;
 
     [Header("Debug")]
     [SerializeField] private bool logDebug = false;
@@ -39,6 +66,15 @@ public class MonsterHpBar : MonoBehaviour
     // IMPORTANT: we update ALL plausible "fill" candidates (in case we auto-bound the wrong Image).
     private Image[] _fillCandidates;
 
+    // Status icon instances
+    private Image _statusIconFocus;
+    private Image _statusIconBleed;
+    private Image _statusIconIgnition;
+    private Image _statusIconStasis;
+    private TMP_Text _statusBleedStacksText;
+    private TMP_Text _statusIgnitionStacksText;
+    private TMP_Text _statusStasisStacksText;
+
     private void Reset()
     {
         monster = GetComponentInParent<Monster>();
@@ -54,8 +90,11 @@ public class MonsterHpBar : MonoBehaviour
 
         DisableLegacyGhostFill();
         EnsurePreviewObjects();
+        EnsureStatusIcons();
 
         ClearPreview();
+        RefreshStatusIcons();
+        RefreshStatusIcons();
 
         if (monster != null)
             HandleHpChanged(monster.CurrentHp, monster.MaxHp);
@@ -66,18 +105,25 @@ public class MonsterHpBar : MonoBehaviour
         TryAutoBind();
 
         if (monster != null)
+        {
             monster.OnHpChanged += HandleHpChanged;
+            monster.OnStatusChanged += HandleStatusChanged;
+        }
 
         if (monster != null)
             HandleHpChanged(monster.CurrentHp, monster.MaxHp);
 
         ClearPreview();
+        RefreshStatusIcons();
     }
 
     private void OnDisable()
     {
         if (monster != null)
+        {
             monster.OnHpChanged -= HandleHpChanged;
+            monster.OnStatusChanged -= HandleStatusChanged;
+        }
     }
 
     private void TryAutoBind()
@@ -575,6 +621,214 @@ public class MonsterHpBar : MonoBehaviour
 
         float newRenderedW = rt.rect.width * newScaleX;
         rt.anchoredPosition = new Vector2(left + newRenderedW * rt.pivot.x, rt.anchoredPosition.y);
+    }
+
+
+    // =======================
+    // Status Icons
+    // =======================
+
+    /// <summary>
+    /// Allows BattleManager (or prefab wiring) to provide sprites at runtime.
+    /// </summary>
+    public void ConfigureStatusSprites(Sprite bleedingSprite, 
+                                       Sprite focusRuneSprite,
+                                       Sprite ignitionSprite,
+                                       Sprite stasisSprite)
+    {
+        bleedingStatusSprite = bleedingSprite;
+        focusRuneStatusSprite = focusRuneSprite;
+        ignitionStatusSprite = ignitionSprite;
+        stasisStatusSprite = stasisSprite;
+        RefreshStatusIcons();
+    }
+
+    private void HandleStatusChanged()
+    {
+        RefreshStatusIcons();
+    }
+
+    private void EnsureStatusIcons()
+    {
+        if (hpBarFullRect == null && fillImage != null)
+            hpBarFullRect = fillImage.rectTransform;
+
+        if (statusIconsContainer == null && hpBarFullRect != null)
+        {
+            // Create a child container under the HP bar parent so it sits "under" the bar.
+            GameObject go = new GameObject("StatusIcons", typeof(RectTransform));
+            go.transform.SetParent(hpBarFullRect.parent, false);
+
+            statusIconsContainer = go.GetComponent<RectTransform>();
+            statusIconsContainer.anchorMin = new Vector2(0f, 0f);
+            statusIconsContainer.anchorMax = new Vector2(0f, 0f);
+            statusIconsContainer.pivot = new Vector2(0f, 1f);
+
+            // Position: bottom-left of the full bar, slightly below.
+            statusIconsContainer.anchoredPosition = new Vector2(hpBarFullRect.anchoredPosition.x, hpBarFullRect.anchoredPosition.y - statusRowYOffset);
+            statusIconsContainer.sizeDelta = new Vector2(200f, statusIconSize);
+
+            // Add layout group so icons flow left->right.
+            var layout = go.AddComponent<HorizontalLayoutGroup>();
+            layout.childAlignment = TextAnchor.UpperLeft;
+            layout.childControlHeight = false;
+            layout.childControlWidth = false;
+            layout.childForceExpandHeight = false;
+            layout.childForceExpandWidth = false;
+            layout.spacing = statusIconSpacing;
+
+            var fitter = go.AddComponent<ContentSizeFitter>();
+            fitter.horizontalFit = ContentSizeFitter.FitMode.PreferredSize;
+            fitter.verticalFit = ContentSizeFitter.FitMode.Unconstrained;
+        }
+
+        if (statusIconsContainer == null)
+            return;
+
+        // Ensure Focus icon
+        if (_statusIconFocus == null)
+            _statusIconFocus = CreateStatusImage("FocusRuneIcon", statusIconsContainer);
+
+        // Ensure Ignition icon
+        if (_statusIconIgnition == null)
+        {
+            _statusIconIgnition = CreateStatusImage("IgnitionIcon", statusIconsContainer);
+            // Add stacks text overlay (child)
+            var tgo = new GameObject("Stacks", typeof(RectTransform));
+            tgo.transform.SetParent(_statusIconIgnition.transform, false);
+
+            var tr = tgo.GetComponent<RectTransform>();
+            tr.anchorMin = Vector2.zero;
+            tr.anchorMax = Vector2.one;
+            tr.offsetMin = Vector2.zero;
+            tr.offsetMax = Vector2.zero;
+
+            _statusIgnitionStacksText = tgo.AddComponent<TextMeshProUGUI>();
+            _statusIgnitionStacksText.alignment = TextAlignmentOptions.BottomRight;
+            _statusIgnitionStacksText.fontSize = 14;
+            _statusIgnitionStacksText.raycastTarget = false;
+            _statusIgnitionStacksText.text = "";
+        }
+        
+        // Ensure Bleed icon
+        if (_statusIconBleed == null)
+        {
+            _statusIconBleed = CreateStatusImage("BleedIcon", statusIconsContainer);
+            // Add stacks text overlay (child)
+            var tgo = new GameObject("Stacks", typeof(RectTransform));
+            tgo.transform.SetParent(_statusIconBleed.transform, false);
+
+            var tr = tgo.GetComponent<RectTransform>();
+            tr.anchorMin = Vector2.zero;
+            tr.anchorMax = Vector2.one;
+            tr.offsetMin = Vector2.zero;
+            tr.offsetMax = Vector2.zero;
+
+            _statusBleedStacksText = tgo.AddComponent<TextMeshProUGUI>();
+            _statusBleedStacksText.alignment = TextAlignmentOptions.BottomRight;
+            _statusBleedStacksText.fontSize = 14;
+            _statusBleedStacksText.raycastTarget = false;
+            _statusBleedStacksText.text = "";
+        }
+    }
+
+    private Image CreateStatusImage(string name, RectTransform parent)
+    {
+        GameObject go = new GameObject(name, typeof(RectTransform), typeof(Image));
+        go.transform.SetParent(parent, false);
+
+        var rt = go.GetComponent<RectTransform>();
+        rt.anchorMin = new Vector2(0f, 1f);
+        rt.anchorMax = new Vector2(0f, 1f);
+        rt.pivot = new Vector2(0f, 1f);
+        rt.sizeDelta = new Vector2(statusIconSize, statusIconSize);
+
+        var img = go.GetComponent<Image>();
+        img.raycastTarget = false;
+        img.preserveAspect = true;
+
+        return img;
+    }
+
+    private void RefreshStatusIcons()
+    {
+        EnsureStatusIcons();
+
+        if (monster == null)
+            monster = GetComponentInParent<Monster>();
+
+        if (monster == null)
+        {
+            if (_statusIconFocus != null) _statusIconFocus.enabled = false;
+            if (_statusIconIgnition != null) _statusIconIgnition.enabled = false;
+            if (_statusIgnitionStacksText != null) _statusIgnitionStacksText.text = "";
+            if (_statusIconStasis != null) _statusIconStasis.enabled = false;
+            if (_statusStasisStacksText != null) _statusStasisStacksText.text = "";
+            if (_statusIconBleed != null) _statusIconBleed.enabled = false;
+            if (_statusBleedStacksText != null) _statusBleedStacksText.text = "";
+            return;
+        }
+
+        // Focus Rune
+        bool hasFocus = false;
+        try { hasFocus = monster.HasFocusRune; } catch { hasFocus = false; }
+
+        if (_statusIconFocus != null)
+        {
+            _statusIconFocus.sprite = focusRuneStatusSprite;
+            _statusIconFocus.enabled = hasFocus && focusRuneStatusSprite != null;
+        }
+        // Ignition
+        int ignitionStacks = 0;
+        try { ignitionStacks = monster.IgnitionStacks; } catch { ignitionStacks = 0; }
+
+        bool hasIgnition = ignitionStacks > 0 && ignitionStatusSprite != null;
+
+        if (_statusIconIgnition != null)
+        {
+            _statusIconIgnition.sprite = ignitionStatusSprite;
+            _statusIconIgnition.enabled = hasIgnition;
+        }
+
+        if (_statusIgnitionStacksText != null)
+        {
+            _statusIgnitionStacksText.text = hasIgnition ? ignitionStacks.ToString() : "";
+            _statusIgnitionStacksText.enabled = hasIgnition;
+        }
+        // Stasis
+        int stasisStacks = 0;
+        try { stasisStacks = monster.StasisStacks; } catch { stasisStacks = 0; }
+
+        bool hasStasis = stasisStacks > 0 && stasisStatusSprite != null;
+
+        if (_statusIconStasis != null)
+        {
+            _statusIconStasis.sprite = stasisStatusSprite;
+            _statusIconStasis.enabled = hasStasis;
+        }
+
+        if (_statusStasisStacksText != null)
+        {
+            _statusStasisStacksText.text = hasStasis ? stasisStacks.ToString() : "";
+            _statusStasisStacksText.enabled = hasStasis;
+        }
+        // Bleeding
+        int bleedStacks = 0;
+        try { bleedStacks = monster.BleedStacks; } catch { bleedStacks = 0; }
+
+        bool hasBleed = bleedStacks > 0 && bleedingStatusSprite != null;
+
+        if (_statusIconBleed != null)
+        {
+            _statusIconBleed.sprite = bleedingStatusSprite;
+            _statusIconBleed.enabled = hasBleed;
+        }
+
+        if (_statusBleedStacksText != null)
+        {
+            _statusBleedStacksText.text = hasBleed ? bleedStacks.ToString() : "";
+            _statusBleedStacksText.enabled = hasBleed;
+        }
     }
 
 }

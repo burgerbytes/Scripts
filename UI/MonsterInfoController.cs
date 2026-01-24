@@ -12,6 +12,22 @@ public class MonsterInfoController : MonoBehaviour
     [Tooltip("Root panel GameObject (the one you want enabled/disabled).")]
     [SerializeField] private GameObject monsterInfoPanel;
 
+    [Header("Positioning")]
+    [Tooltip("Optional. If null, we use monsterInfoPanel's RectTransform.")]
+    [SerializeField] private RectTransform panelRect;
+
+    [Tooltip("Canvas containing the panel (used for ScreenPoint->UI conversion). If null, will search parents.")]
+    [SerializeField] private Canvas rootCanvas;
+
+    [Tooltip("If true, the panel will follow the monster each frame while open.")]
+    [SerializeField] private bool followMonster = true;
+
+    [Tooltip("Padding in pixels between the monster and the panel.")]
+    [SerializeField] private float screenPadding = 16f;
+
+    [Tooltip("If true, always place the panel to the LEFT of the monster.")]
+    [SerializeField] private bool forceLeftOfMonster = true;
+
     [SerializeField] private TMP_Text monsterNameText;
     [SerializeField] private TMP_Text monsterStatsText;
     [SerializeField] private TMP_Text monsterDescriptionText;
@@ -25,6 +41,11 @@ public class MonsterInfoController : MonoBehaviour
 
     private void Awake()
     {
+        if (panelRect == null && monsterInfoPanel != null)
+            panelRect = monsterInfoPanel.GetComponent<RectTransform>();
+
+        if (rootCanvas == null)
+            rootCanvas = GetComponentInParent<Canvas>();
         // Initially disabled
         if (monsterInfoPanel != null)
             monsterInfoPanel.SetActive(false);
@@ -57,9 +78,70 @@ public class MonsterInfoController : MonoBehaviour
 
         if (monsterDescriptionText != null)
             monsterDescriptionText.text = monster.Description;
+
+        UpdatePanelPosition();
     }
 
-    public void Hide()
+    
+    private void LateUpdate()
+    {
+        if (!followMonster) return;
+        if (_currentMonster == null) return;
+        if (monsterInfoPanel == null || !monsterInfoPanel.activeSelf) return;
+
+        UpdatePanelPosition();
+    }
+
+    private void UpdatePanelPosition()
+    {
+        if (_currentMonster == null) return;
+        if (panelRect == null) return;
+
+        Camera cam = Camera.main;
+        if (cam == null) cam = FindFirstObjectByType<Camera>();
+        if (cam == null) return;
+
+        Vector3 world = _currentMonster.transform.position;
+
+        // Use a slight upward bias so the panel centers around the HP bar area.
+        Vector3 screen = cam.WorldToScreenPoint(world);
+
+        // Convert screen -> local point in canvas space.
+        Canvas canvas = rootCanvas != null ? rootCanvas : GetComponentInParent<Canvas>();
+        if (canvas == null) return;
+
+        RectTransform canvasRect = canvas.transform as RectTransform;
+        if (canvasRect == null) return;
+
+        Camera uiCam = null;
+        if (canvas.renderMode != RenderMode.ScreenSpaceOverlay)
+            uiCam = canvas.worldCamera;
+
+        Vector2 localPoint;
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRect, screen, uiCam, out localPoint))
+            return;
+
+        float panelHalfW = panelRect.rect.width * 0.5f;
+        Vector2 offset = Vector2.zero;
+
+        if (forceLeftOfMonster)
+            offset.x = -(panelHalfW + screenPadding);
+        else
+            offset.x = (panelHalfW + screenPadding);
+
+        Vector2 desired = localPoint + offset;
+
+        // Clamp to canvas bounds so it doesn't go offscreen.
+        Vector2 min = canvasRect.rect.min + new Vector2(panelHalfW, panelRect.rect.height * 0.5f);
+        Vector2 max = canvasRect.rect.max - new Vector2(panelHalfW, panelRect.rect.height * 0.5f);
+
+        desired.x = Mathf.Clamp(desired.x, min.x, max.x);
+        desired.y = Mathf.Clamp(desired.y, min.y, max.y);
+
+        panelRect.anchoredPosition = desired;
+    }
+
+public void Hide()
     {
         _currentMonster = null;
 

@@ -3,6 +3,9 @@ bugs
 - disable combat reels on ability selection screen
 - change upgrade reel to allow player to select what to upgrade. 
 - when iron guard triggers, block doesn't appear until reel phase has ended
-
+- focus rune shows a damage preview even though it is a non damaging ability
 features
 - add some type of indictor (arrow, glow) to enemy unit being targeted
+
+
+flame sigil 

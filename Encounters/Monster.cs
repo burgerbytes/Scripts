@@ -37,6 +37,7 @@ public class Monster : MonoBehaviour
     }
 
     public event Action<int, int> OnHpChanged;
+    public event Action OnStatusChanged;
 
     
     public enum MonsterTag
@@ -153,7 +154,22 @@ public class Monster : MonoBehaviour
     public int BleedStacks => _bleedStacks;
     public bool IsBleeding => _bleedStacks > 0;
     public int BleedAppliedOnPlayerTurn => _bleedAppliedOnPlayerTurn;
-    // ✅ These are required by MonsterHpBar.cs
+
+    [Header("Status: Focus Rune")]
+    [SerializeField] private bool _focusRune = false;
+    public bool HasFocusRune => _focusRune;
+
+    [Header("Status: Ignition")]
+    [SerializeField] private int _ignitionStacks = 0;
+    public int IgnitionStacks => _ignitionStacks;
+    [SerializeField] public int maxIgnitionStacks;
+
+    [Header("Status: Stasis")]
+    [SerializeField] private int _stasisStacks = 0;
+    public int StasisStacks => _stasisStacks;
+    [SerializeField] public int maxStasisStacks;
+
+    // These are required by MonsterHpBar.cs
     public int MaxHp => maxHp;
     public int CurrentHp => _currentHp;
     public int Defense => defense;
@@ -397,6 +413,7 @@ public class Monster : MonoBehaviour
 
         if (BattleManager.Instance != null)
             _bleedAppliedOnPlayerTurn = BattleManager.Instance.PlayerTurnNumber;
+    OnStatusChanged?.Invoke();
     }
 
     public void SetBleedStacks(int stacks)
@@ -404,6 +421,7 @@ public class Monster : MonoBehaviour
         _bleedStacks = Mathf.Max(0, stacks);
         if (_bleedStacks <= 0)
             _bleedAppliedOnPlayerTurn = -999;
+    OnStatusChanged?.Invoke();
     }
 
     public void SetBleedStacks(int stacks, int appliedOnPlayerTurn)
@@ -412,6 +430,7 @@ public class Monster : MonoBehaviour
         _bleedAppliedOnPlayerTurn = appliedOnPlayerTurn;
         if (_bleedStacks <= 0)
             _bleedAppliedOnPlayerTurn = -999;
+    OnStatusChanged?.Invoke();
     }
 
     /// <summary>
@@ -444,13 +463,120 @@ public class Monster : MonoBehaviour
         if (_bleedStacks <= 0)
             _bleedAppliedOnPlayerTurn = -999;
 
+        OnStatusChanged?.Invoke();
+
         return dealt;
     }
 
     /// <summary>
     /// Used by BattleManager Undo. Sets current HP directly and refreshes UI events.
     /// </summary>
-    public void SetCurrentHp(int hp)
+    
+    // =======================
+    // Status: Focus Rune
+    // =======================
+    public void SetFocusRune(bool has)
+    {
+        if (_focusRune == has) return;
+        _focusRune = has;
+        OnStatusChanged?.Invoke();
+    }
+
+    public void ApplyFocusRune()
+    {
+        SetFocusRune(true);
+    }
+
+    public void ClearFocusRune()
+    {
+        SetFocusRune(false);
+    }
+
+    // =======================
+    // Status: Ignition
+    // =======================
+    public void SetIgnition(int stacks)
+    {
+        _ignitionStacks = stacks;
+        OnStatusChanged?.Invoke();
+    }
+
+    public void AddIgnition(int stacks)
+    {
+        if (stacks <= 0) return;
+
+        int cap = (maxIgnitionStacks <= 0) ? int.MaxValue : maxIgnitionStacks;
+
+        if (_ignitionStacks + stacks >= cap)
+        {
+            // Trigger bomb
+            int explosionBaseDamage = 5; // TODO: tune this (or make it serialized/configurable)
+
+            // Apply as an "ability" hit so tag-vs-monster-tag multipliers work.
+            // Note: Monster resistances in this class are currently only Physical/Electric.
+            // The FireElemental interaction is handled by GetDamageMultiplierForAbilityTags().
+            var tags = new AbilityTag[] { AbilityTag.FireElemental };
+
+            TakeDamageFromAbility(
+                abilityBaseDamage: explosionBaseDamage,
+                classAttackModifier: 1f,
+                element: ElementType.Physical,
+                abilityTags: tags
+            );
+
+            if (IsDead)
+            {
+                if (_battleManager == null)
+                    _battleManager = BattleManager.Instance != null ? BattleManager.Instance : FindFirstObjectByType<BattleManager>();
+
+                _battleManager?.HandleMonsterKilled(this);
+            }
+
+            ClearIgnition();
+            return;
+        }
+
+        _ignitionStacks += stacks;
+        OnStatusChanged?.Invoke();
+    }
+
+    public void ClearIgnition()
+    {
+        SetIgnition(0);
+    }
+
+     // =======================
+    // Status: Stasis
+    // =======================
+    public void SetStasis(int stacks)
+    {
+        _stasisStacks = stacks;
+        OnStatusChanged?.Invoke();
+    }
+
+    public void AddStasis(int stacks)
+    {
+        if (stacks <= 0) return;
+
+        int cap = (maxStasisStacks <= 0) ? int.MaxValue : maxStasisStacks;
+
+        if (_stasisStacks + stacks >= cap)
+        {
+            // Trigger bomb
+            ClearStasis();
+            return;
+        }
+
+        _stasisStacks += stacks;
+        OnStatusChanged?.Invoke();
+    }
+
+    public void ClearStasis()
+    {
+        SetStasis(0);
+    }
+
+public void SetCurrentHp(int hp)
     {
         _currentHp = Mathf.Clamp(hp, 0, maxHp);
         OnHpChanged?.Invoke(_currentHp, maxHp);

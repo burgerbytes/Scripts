@@ -1076,41 +1076,6 @@ public class ReelSpinSystem : MonoBehaviour
         onDone?.Invoke();
     }
 
-
-    // public void StopSpinningAndCollect()
-    // {
-    //     bool canApplySubstitution = false;
-    //     Debug.Log($"[ReelSpinSystem] StopSpinningAndCollect landedListNull={_currentLandedSymbols == null} gateNull={CanApplySubstitutionForReelIndex == null}", this);
-    //     if (_currentLandedSymbols != null)
-    //         Debug.Log($"[ReelSpinSystem] landedCount={_currentLandedSymbols.Count}", this);
-    //     if (_currentLandedSymbols != null)
-    //     {
-    //         int count = Mathf.Min(3, _currentLandedSymbols.Count);
-    //         for (int i = 0; i < count; i++)
-    //         {
-    //             // If there's no gate delegate, treat it as allowed.
-    //             bool allowed = (CanApplySubstitutionForReelIndex == null) || CanApplySubstitutionForReelIndex(i);
-    //             if (allowed)
-    //             {
-    //                 canApplySubstitution = true;
-    //                 break; // we only need one eligible reel
-    //             }
-    //         }
-    //     }
-
-    //     if (canApplySubstitution)
-    //         ApplySubstitutionBeforeCashout();
-
-    //     Set3DReelsActive(false);
-    //     SetReelPhase(false);
-    //     CollectPendingPayout();
-
-    //     if (stopSpinningButton != null)
-    //         stopSpinningButton.interactable = false;
-
-    //     if (shutterController != null)
-    //         shutterController.CloseShutters();
-    // }
     public void StopSpinningAndCollect()
     {
         if (stopSpinningButton != null)

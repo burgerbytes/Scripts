@@ -1,5 +1,3 @@
-// GUID: 30f201f35d336bf4d840162cd6fd1fde
-////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -1005,13 +1003,13 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
         if (actor.IsDead) return;
 
 
-// Ability unlock rules (Starter Choice / level unlock).
-HeroStats gateHero = actor.stats != null ? actor.stats : hero;
-if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
-{
-    if (logFlow) Debug.Log($"[Battle][Ability] Blocked: {actor.name} tried to use locked ability '{ability.abilityName}'.", this);
-    return;
-}
+        // Ability unlock rules (Starter Choice / level unlock).
+        HeroStats gateHero = actor.stats != null ? actor.stats : hero;
+        if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
+        {
+            if (logFlow) Debug.Log($"[Battle][Ability] Blocked: {actor.name} tried to use locked ability '{ability.abilityName}'.", this);
+            return;
+        }
 
         if (_pendingAction != PlayerActionType.None) return;
 
@@ -1563,8 +1561,15 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
         }
 
         AbilityDefinitionSO ability = _pendingAbility;
+        if (ability == null)
+        {
+            if (logFlow) Debug.Log("[Battle][Resolve] Cancel: ability is null.", this);
+            CancelPendingAbility();
+            yield break;
+        }
+
         if (logFlow)
-            Debug.Log($"[Battle][Resolve] Confirmed/casting ability: name={ability.name} abilityName={ability.abilityName} targetType={ability.targetType} shieldAmount={ability.shieldAmount} baseDamage={ability.baseDamage}", this);
+            Debug.Log($"[Battle][Resolve] Confirmed/casting ability: name={ability.name} abilityName={ability.abilityName} targetType={ability.targetType} shieldAmount={ability.shieldAmount} baseDamage={ability.baseDamage} isDamaging={ability.isDamaging} inflictsFocusRune={ability.inflictsFocusRune}", this);
 
         PartyMemberRuntime actor = _party[_pendingActorIndex];
         HeroStats actorStats = actor.stats;
@@ -1575,9 +1580,11 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
             yield break;
         }
 
-        if (performanceTracker != null && ability != null)
+        if (performanceTracker != null)
             performanceTracker.RecordAbilityUse(actorStats, ability);
+
         Monster enemyTarget = _selectedEnemyTarget;
+
         if (ability.targetType == AbilityTargetType.Enemy)
         {
             if (enemyTarget == null || enemyTarget.IsDead)
@@ -1609,8 +1616,7 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
         }
 
         // Mark once-per-turn ability usage only after the cast is truly committed (cost successfully spent).
-        if (actorStats != null)
-            actorStats.RegisterAbilityUsedThisTurn(ability);
+        actorStats.RegisterAbilityUsedThisTurn(ability);
 
         if (logFlow) Debug.Log($"[Battle][Resolve] Resources spent. cost={cost}. Proceeding to apply ability effects.", this);
         _resolving = true;
@@ -1634,20 +1640,18 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
                     useImpactSync = true;
                     stateToPlay = profile != null ? profile.GetAttackStateForAbility("Slash") : null;
                     if (string.IsNullOrWhiteSpace(stateToPlay))
-                        stateToPlay = "fighter_basic_attack"; // fallback
+                        stateToPlay = "fighter_basic_attack";
                     break;
 
                 case "Pyre":
-                    useImpactSync = true; // if you want damage to happen on a specific frame
+                    useImpactSync = true;
                     stateToPlay = profile != null ? profile.GetAttackStateForAbility("Pyre") : null;
                     if (string.IsNullOrWhiteSpace(stateToPlay))
-                        stateToPlay = "mage_basic_attack"; // fallback example
+                        stateToPlay = "mage_basic_attack";
                     break;
 
                 case "Heal":
-                    // Heal uses the same casting animation timing as Pyre.
                     useImpactSync = true;
-                    // Prefer an explicit Heal mapping if provided, otherwise fall back to Pyre mapping, then the mage default.
                     stateToPlay = profile != null ? profile.GetAttackStateForAbility("Heal") : null;
                     if (string.IsNullOrWhiteSpace(stateToPlay))
                         stateToPlay = profile != null ? profile.GetAttackStateForAbility("Pyre") : null;
@@ -1663,10 +1667,10 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
                     break;
 
                 case "Backstab":
-                    useImpactSync = true; // if you want damage to happen on a specific frame
+                    useImpactSync = true;
                     stateToPlay = profile != null ? profile.GetAttackStateForAbility("Backstab") : null;
                     if (string.IsNullOrWhiteSpace(stateToPlay))
-                        stateToPlay = "ninja_backstab"; // fallback example
+                        stateToPlay = "ninja_backstab";
                     break;
 
                 case "Conceal":
@@ -1686,32 +1690,34 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
                     stateToPlay = null;
                     if (logFlow) Debug.Log("[Battle][Resolve] Aegis: no animation and no impact sync.", this);
                     break;
-                
+
                 // Templar Abilities
                 case "Righteous Cut":
                     useImpactSync = true;
                     stateToPlay = profile != null ? profile.GetAttackStateForAbility("Righteous Cut") : null;
                     if (string.IsNullOrWhiteSpace(stateToPlay))
-                        stateToPlay = "templar_basic_attack"; // fallback
+                        stateToPlay = "templar_basic_attack";
                     break;
+
                 case "Verdict & Execution":
                     useImpactSync = true;
                     stateToPlay = profile != null ? profile.GetAttackStateForAbility("Verdict & Execution") : null;
                     if (string.IsNullOrWhiteSpace(stateToPlay))
-                        stateToPlay = "templar_strong_attack"; // fallback
+                        stateToPlay = "templar_strong_attack";
                     break;
+
                 case "Stay the Sentence":
                     useImpactSync = true;
                     stateToPlay = profile != null ? profile.GetAttackStateForAbility("Stay the Sentence") : null;
                     if (string.IsNullOrWhiteSpace(stateToPlay))
-                        stateToPlay = "templar_magic_ability"; // fallback
+                        stateToPlay = "templar_magic_ability";
                     break;
 
                 default:
-                    useImpactSync = false; // default to immediate apply unless you want all abilities synced
+                    useImpactSync = false;
                     stateToPlay = profile != null ? profile.GetAttackStateForAbility(ability.name) : null;
                     if (string.IsNullOrWhiteSpace(stateToPlay))
-                        stateToPlay = "fighter_basic_attack"; // safe default until you add more states
+                        stateToPlay = "fighter_basic_attack";
                     break;
             }
 
@@ -1738,10 +1744,10 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
             if (logFlow) Debug.Log("[Battle][Resolve] No animator found on actor; skipping animation.", this);
         }
 
-        // For ally/self support abilities (heal/shield), we want the effect to occur
-        // on the caster's impact frame if the animation is configured with an AttackImpact event.
-        bool isSupportAbility = (ability.targetType == AbilityTargetType.Self || ability.targetType == AbilityTargetType.Ally)
-                                && (ability.healAmount > 0 || ability.shieldAmount > 0);
+        // Support ability impact sync (heal/shield)
+        bool isSupportAbility =
+            (ability.targetType == AbilityTargetType.Self || ability.targetType == AbilityTargetType.Ally) &&
+            (ability.healAmount > 0 || ability.shieldAmount > 0);
 
         if (isSupportAbility && useImpactSync && anim != null)
         {
@@ -1760,8 +1766,12 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
             if (logFlow) Debug.Log($"[Battle][Resolve] Support impact wait finished. impactFired={_impactFired} elapsed={elapsed:0.000}s", this);
         }
 
+        // ============================
+        // Enemy-target abilities
+        // ============================
         if (ability.targetType == AbilityTargetType.Enemy && enemyTarget != null)
         {
+            // Wait for impact sync for enemy-target abilities too (even if non-damaging)
             if (useImpactSync && anim != null)
             {
                 if (logFlow) Debug.Log("[Battle][Resolve] Waiting for AttackImpact animation event...", this);
@@ -1769,7 +1779,7 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
                 yield return null;
 
                 float elapsed = 0f;
-                const float failSafeSeconds = 3.0f; // prevents a soft-lock if the animation event is missing.
+                const float failSafeSeconds = 3.0f;
                 while (!_impactFired && elapsed < failSafeSeconds)
                 {
                     elapsed += Time.deltaTime;
@@ -1779,54 +1789,81 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
                 if (logFlow) Debug.Log($"[Battle][Resolve] Done waiting for impact. impactFired={_impactFired} elapsed={elapsed:0.000}s", this);
             }
 
-            int passiveBonus = (actorStats != null) ? actorStats.ConsumeBonusDamageNextAttackIfDamaging(ability) : 0;
-            int totalBaseDamage = Mathf.Max(0, actorStats.Attack) + Mathf.Max(0, ability.baseDamage) + Mathf.Max(0, passiveBonus);
+            bool doesDamage = ability.isDamaging;
 
-            // Damage numbers should show the actual damage computed by the attack formula,
-            // not the clamped HP lost (overkill should still show the full hit).
-            int shownDamage = enemyTarget.CalculateDamageFromAbility(
-                abilityBaseDamage: totalBaseDamage,
-                classAttackModifier: 1f,
-                element: ability.element,
-                abilityTags: ability.tags);
+            int shownDamage = 0;
+            int dealt = 0;
+            int totalBaseDamage = 0;
 
-            int dealt = enemyTarget.TakeDamageFromAbility(
-                abilityBaseDamage: totalBaseDamage,
-                classAttackModifier: 1f,
-                element: ability.element,
-                abilityTags: ability.tags);
-
-            if (debugEnemyHpBarDrop && enemyTarget != null)
+            if (doesDamage)
             {
-                Debug.Log($"[Battle][HpBarDrop] After TakeDamageFromAbility target={enemyTarget.name} dealt={dealt} hpNow={enemyTarget.CurrentHp}/{enemyTarget.MaxHp} instance={enemyTarget.GetInstanceID()}", this);
+                int passiveBonus = (actorStats != null) ? actorStats.ConsumeBonusDamageNextAttackIfDamaging(ability) : 0;
 
-                var hpBar = enemyTarget.GetComponentInChildren<MonsterHpBar>(true);
-                if (hpBar == null)
+                totalBaseDamage =
+                    Mathf.Max(0, actorStats.Attack) +
+                    Mathf.Max(0, ability.baseDamage) +
+                    Mathf.Max(0, passiveBonus);
+
+                // Damage numbers should show computed formula damage, not clamped HP lost.
+                shownDamage = enemyTarget.CalculateDamageFromAbility(
+                    abilityBaseDamage: totalBaseDamage,
+                    classAttackModifier: 1f,
+                    element: ability.element,
+                    abilityTags: ability.tags);
+
+                dealt = enemyTarget.TakeDamageFromAbility(
+                    abilityBaseDamage: totalBaseDamage,
+                    classAttackModifier: 1f,
+                    element: ability.element,
+                    abilityTags: ability.tags);
+
+                if (debugEnemyHpBarDrop && enemyTarget != null)
                 {
-                    Debug.LogWarning($"[Battle][HpBarDrop] No MonsterHpBar found under target={enemyTarget.name} instance={enemyTarget.GetInstanceID()}", this);
+                    Debug.Log($"[Battle][HpBarDrop] After TakeDamageFromAbility target={enemyTarget.name} dealt={dealt} hpNow={enemyTarget.CurrentHp}/{enemyTarget.MaxHp} instance={enemyTarget.GetInstanceID()}", this);
+
+                    var hpBar = enemyTarget.GetComponentInChildren<MonsterHpBar>(true);
+                    if (hpBar == null)
+                    {
+                        Debug.LogWarning($"[Battle][HpBarDrop] No MonsterHpBar found under target={enemyTarget.name} instance={enemyTarget.GetInstanceID()}", this);
+                    }
+                    else
+                    {
+                        Debug.Log($"[Battle][HpBarDrop] Found hpBar={hpBar.name} barInstance={hpBar.GetInstanceID()} barBoundMonster={(hpBar != null ? (hpBar.GetComponentInParent<Monster>() != null ? hpBar.GetComponentInParent<Monster>().GetInstanceID().ToString() : "none") : "none")}", this);
+
+                        hpBar.ForceDebugDumpVisual("BattleManager BEFORE ClearPreview/Refresh");
+                        hpBar.ClearPreview();
+
+                        hpBar.ForceDebugDumpVisual("BattleManager AFTER ClearPreview");
+                        hpBar.RefreshNow("BattleManager post-damage");
+
+                        hpBar.ForceDebugDumpVisual("BattleManager AFTER RefreshNow");
+                    }
                 }
-                else
-                {
-                    Debug.Log($"[Battle][HpBarDrop] Found hpBar={hpBar.name} barInstance={hpBar.GetInstanceID()} barBoundMonster={(hpBar != null ? (hpBar.GetComponentInParent<Monster>() != null ? hpBar.GetComponentInParent<Monster>().GetInstanceID().ToString() : "none") : "none")}", this);
 
-                    hpBar.ForceDebugDumpVisual("BattleManager BEFORE ClearPreview/Refresh");
-                    hpBar.ClearPreview();
+                if (performanceTracker != null)
+                    performanceTracker.RecordDamageDealt(actorStats, dealt);
 
-                    hpBar.ForceDebugDumpVisual("BattleManager AFTER ClearPreview");
-                    hpBar.RefreshNow("BattleManager post-damage");
+                if (shownDamage > 0)
+                    SpawnDamageNumber(enemyTarget.transform.position, shownDamage);
 
-                    hpBar.ForceDebugDumpVisual("BattleManager AFTER RefreshNow");
-                }
+                actorStats.ApplyOnHitEffectsTo(enemyTarget);
+
+                if (totalBaseDamage > 0)
+                    actorStats.RegisterDamageAttackCommitted();
             }
-            if (performanceTracker != null)
-                performanceTracker.RecordDamageDealt(actorStats, dealt);
+            else
+            {
+                if (logFlow) Debug.Log($"[Battle][Resolve] Non-damaging enemy ability '{ability.abilityName}': skipping damage math.", this);
+            }
 
-            SpawnDamageNumber(enemyTarget.transform.position, shownDamage);
-            actorStats.ApplyOnHitEffectsTo(enemyTarget);
+            // ---------------- Status Infliction (Monster) ----------------
+            if (ability.inflictsFocusRune && enemyTarget != null && !enemyTarget.IsDead)
+            {
+                if (logFlow) Debug.Log($"[Battle][Status] Applying FocusRune via ability='{ability.abilityName}' to monster='{enemyTarget.name}'", this);
+                enemyTarget.SetFocusRune(true);
+            }
 
-            if (totalBaseDamage > 0)
-                actorStats.RegisterDamageAttackCommitted();
-
+            // Death check ALWAYS (not gated)
             if (enemyTarget.IsDead)
             {
                 int xpAward = (enemyTarget != null) ? enemyTarget.XpReward : 5;
@@ -1834,10 +1871,14 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
                     performanceTracker.RecordBaseXpGained(actorStats, xpAward);
                 else
                     actorStats.GainXP(xpAward);
+
                 RemoveMonster(enemyTarget);
             }
         }
 
+        // ============================
+        // Shield (Self/Ally)
+        // ============================
         if (ability.shieldAmount > 0 && (ability.targetType == AbilityTargetType.Self || ability.targetType == AbilityTargetType.Ally))
         {
             HeroStats targetStats = actorStats;
@@ -1860,6 +1901,9 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
             }
         }
 
+        // ============================
+        // Heal (Self/Ally)
+        // ============================
         if (ability.healAmount > 0 && (ability.targetType == AbilityTargetType.Self || ability.targetType == AbilityTargetType.Ally))
         {
             HeroStats targetStats = actorStats;
@@ -1894,9 +1938,6 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
         }
 
         // ---------------- Status Cleansing (Bleeding / Stunned) ----------------
-        // Support abilities can optionally remove certain status effects from the Hero target.
-        // This is data-driven via AbilityDefinitionSO.removesStatusEffects, with a safety
-        // special-case so that "First Aid" always clears Bleeding.
         if (ability.targetType == AbilityTargetType.Self || ability.targetType == AbilityTargetType.Ally)
         {
             bool hasConfiguredCleansing = (ability.removesStatusEffects != null && ability.removesStatusEffects.Count > 0);
@@ -1953,7 +1994,6 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
 
         if (_saveStates != null && _saveStates.Count > 1)
             SetUndoButtonEnabled(true);
-
     }
 
     private void ApplyStatusCleansingToHero(
@@ -2646,6 +2686,21 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
         }
     }
 
+    public void HandleMonsterKilled(Monster m)
+    {
+        if (m == null) return;
+
+        // Prevent double-processing if something calls this twice.
+        if (!_activeMonsters.Contains(m))
+            return;
+
+        // Optionally play death FX here if you want.
+        // (Your RemoveMonster currently just deactivates.)
+        // m.PlayDeathEffects();
+
+        RemoveMonster(m);
+    }
+
     private IEnumerator HandleEncounterVictoryRoutine()
     {
         Debug.Log($"[Battle] Victory detected. Starting post-battle flow. time={Time.time:0.00}", this);
@@ -2984,6 +3039,9 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
     [SerializeField] private Sprite statusIconStunnedSprite;
     [SerializeField] private Sprite statusIconTripleBladeEmpoweredSprite;
     [SerializeField] private Sprite statusIconBleedingSprite;
+    [SerializeField] private Sprite statusIconFocusRuneSprite;
+    [SerializeField] private Sprite statusIconIgnitionSprite;
+    [SerializeField] private Sprite statusIconStasisSprite;
 
     private void ApplyPartyHiddenVisuals()
     {
@@ -3065,6 +3123,7 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
 
     private void ApplyMonsterStatusVisuals()
     {
+
         if (_activeMonsters == null) return;
 
         for (int i = 0; i < _activeMonsters.Count; i++)
@@ -3072,6 +3131,21 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
             var m = _activeMonsters[i];
             if (m == null) continue;
 
+            // Preferred: show status icons under the monster's HP bar.
+            var hpBar = m.GetComponentInChildren<MonsterHpBar>(true);
+            if (hpBar != null)
+            {
+                hpBar.ConfigureStatusSprites(statusIconBleedingSprite, 
+                                             statusIconFocusRuneSprite,
+                                             statusIconIgnitionSprite,
+                                             statusIconStasisSprite);
+                // MonsterHpBar subscribes to status changes and will refresh automatically,
+                // but do an initial refresh so newly-spawned monsters show correct icons immediately.
+                // (The call above already refreshes.)
+                continue;
+            }
+
+            // Fallback (legacy): world-space icon above the monster.
             Transform iconTf = m.transform.Find("_StatusIcon");
             if (iconTf == null)
             {
@@ -3092,6 +3166,7 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
             try { stacks = m.BleedStacks; } catch { stacks = 0; }
             ctrl.SetBleedStacks(stacks);
         }
+
     }
 
     public void RefreshStatusVisuals()
@@ -3578,13 +3653,26 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
     {
         if (reelSpinSystem == null) return;
         if (info.symbols == null || info.symbols.Count == 0) return;
-        // New spin landed -> allow Stop button passive to trigger once for this spin.
+
         _spinResolvedAndLocked = false;
         if (logFlow) Debug.Log($"[Battle][SpinLanded] Reset _spinResolvedAndLocked=false. symbols={info.symbols.Count} A={info.attackCount} D={info.defendCount} M={info.magicCount} W={info.wildCount}", this);
 
         if (_party == null || _party.Count == 0) return;
 
         int count = Mathf.Min(_party.Count, info.symbols.Count);
+
+        // ANY-hero checks (OR accumulate)
+        bool flameSigilActive = false;
+        bool waterSigilActive = false;
+
+        for (int i = 0; i < count; i++)
+        {
+            var heroStats = _party[i]?.stats;
+            if (heroStats == null) continue;
+
+            flameSigilActive |= heroStats.HasAbilityUnlocked("Flame Sigil");
+            waterSigilActive |= heroStats.HasAbilityUnlocked("Water Sigil");
+        }
 
         for (int i = 0; i < count; i++)
         {
@@ -3594,11 +3682,9 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
             var sym = info.symbols[i];
             if (sym == null) continue;
 
-            // Use the ReelSpinSystem mapping so symbol values (e.g. DEF2) are respected.
             if (!reelSpinSystem.TryMapSymbolPublic(sym, out var rt, out int amount))
                 continue;
 
-            // Passive procs that happen immediately on land:
             if (rt == ReelSpinSystem.ResourceType.Attack)
             {
                 if (hero.HasAbilityUnlocked("Battle Rhythm"))
@@ -3617,12 +3703,38 @@ if (gateHero != null && !gateHero.IsAbilityUnlocked(ability))
                     hero.AddShield(Mathf.Max(1, amount));
                 }
             }
+            else if (rt == ReelSpinSystem.ResourceType.Magic)
+            {
+                // Only do work if any sigil exists
+                if (!flameSigilActive && !waterSigilActive) continue;
+                if (_activeMonsters != null)
+                {
+                    foreach (var enemyMonster in _activeMonsters)
+                    {
+                        if (enemyMonster == null) continue;
+                        if (!enemyMonster.HasFocusRune) continue;
 
-            // NOTE: "Substitution" (NULL -> WILD) is applied on Cashout inside ReelSpinSystem.StopSpinningAndCollect()
-            // via ApplySubstitutionBeforeCashout(). BattleManager only provides the per-reel gating delegate.
+                        DimScreenTemporarily(0.5f);
+
+                        if (flameSigilActive)
+                        {
+                            if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
+                            enemyMonster.AddIgnition(1);
+                        }
+
+                        if (waterSigilActive)
+                        {
+                            if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
+                            enemyMonster.AddStasis(1);
+                        }
+                    }
+                }
+            }
         }
     }
-private void HandleCurrentLandedChanged(ReelSpinSystem.SpinLandedInfo info)
+
+
+    private void HandleCurrentLandedChanged(ReelSpinSystem.SpinLandedInfo info)
     {
         if (reelSpinSystem == null) return;
         if (info.symbols == null || info.symbols.Count == 0) return;
@@ -3704,23 +3816,21 @@ private void HandleCurrentLandedChanged(ReelSpinSystem.SpinLandedInfo info)
         };
     }
 
-private void OnStopSpinningPressed()
-    {
-        if (logFlow) Debug.Log($"[Battle][StopPressed] Click. _spinResolvedAndLocked={_spinResolvedAndLocked}", this);
-
-        // Defensive: prevent re-trigger spam
-        if (_spinResolvedAndLocked)
+    private void OnStopSpinningPressed()
         {
-            if (logFlow) Debug.Log("[Battle][StopPressed] Ignored (already locked for this spin).", this);
-            return;
+            if (logFlow) Debug.Log($"[Battle][StopPressed] Click. _spinResolvedAndLocked={_spinResolvedAndLocked}", this);
+
+            // Defensive: prevent re-trigger spam
+            if (_spinResolvedAndLocked)
+            {
+                if (logFlow) Debug.Log("[Battle][StopPressed] Ignored (already locked for this spin).", this);
+                return;
+            }
+
+            _spinResolvedAndLocked = true;
+
+            // NOTE: Actual NULL->WILD substitution happens inside ReelSpinSystem.StopSpinningAndCollect(),
+            // before CollectPendingPayout(), gated by CanApplySubstitutionForReelIndex.
+            if (logFlow) Debug.Log("[Battle][StopPressed] Locked=true. Waiting for ReelSpinSystem cashout to apply substitution + payout.", this);
         }
-
-        _spinResolvedAndLocked = true;
-
-        // NOTE: Actual NULL->WILD substitution happens inside ReelSpinSystem.StopSpinningAndCollect(),
-        // before CollectPendingPayout(), gated by CanApplySubstitutionForReelIndex.
-        if (logFlow) Debug.Log("[Battle][StopPressed] Locked=true. Waiting for ReelSpinSystem cashout to apply substitution + payout.", this);
-    }
 }
-
-

@@ -99,6 +99,11 @@ public class AbilityDefinitionSO : ScriptableObject
 
     [Tooltip("If true, this ability can only be used once per player turn per hero. The UI will gray it out after use.")]
     public bool usableOncePerTurn = false;
+
+    [Header("Status Effects")]
+    public bool inflictsFocusRune = false;
+    public bool inflictsBurn = false;
+    public bool inflictsFreeze = false;
 }
 
 
