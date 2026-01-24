@@ -2,10 +2,21 @@ bugs
 - status and ability menus should be hidden during reel phase
 - disable combat reels on ability selection screen
 - change upgrade reel to allow player to select what to upgrade. 
+- change so that nulls dont upgrade to wilds
 - when iron guard triggers, block doesn't appear until reel phase has ended
 - focus rune shows a damage preview even though it is a non damaging ability
+- on the learn ability panel, both ability buttons should be enabled the entire time to check both descriptions
+- steel nudge needs to proc battle rhythm and iron guard
+- ninja substitution incorrectly procs on all tokens rather than just null. it also procs every cashout rather than just the first
+- transmute shoud proc sigils
+- move vfx to CenterPoint and align all hero status icons with hp like monsters'
+- make sure canceling hero abilities works
+
 features
+- create ninja lv2 passive abilities 
 - add some type of indictor (arrow, glow) to enemy unit being targeted
-
-
-flame sigil 
+- add status icon for fighter's battle rhythm with stack count
+- add tooltips for status icons
+- make all info/status panels open into a single panel and dim the screen
+- award same xp to all heroes. dead heroes get 0 xp
+ 
