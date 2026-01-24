@@ -2071,23 +2071,46 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
         var actor = _party[_pendingActorIndex];
         if (actor == null || actor.stats == null || actor.IsDead) return;
 
+        // NEW: Non-damaging abilities should show 0 predicted damage (no preview drop).
+        // Also: don't preview-consume or include "next attack" bonus for non-damaging abilities.
+        if (_pendingAbility.targetType == AbilityTargetType.Enemy && !_pendingAbility.isDamaging)
+        {
+            var bar0 = target.GetComponentInChildren<MonsterHpBar>(true);
+            if (bar0 != null)
+                bar0.SetDamagePreview(target.CurrentHp); // no change
+
+            UpdateEnemyTargetIndicators();
+            NotifyPartyChanged();
+            return;
+        }
+
         int previewPassiveBonus = 0;
         if (actor.stats != null && _pendingAbility != null && _pendingAbility.targetType == AbilityTargetType.Enemy)
         {
             // Preview should include the "next attack" bonus even when baseDamage is 0,
             // because your runtime damage model is: Attack + baseDamage (+ bonus).
+            // BUT only if the ability is damaging (handled above).
             int baseNoBonus = Mathf.Max(0, actor.stats.Attack) + Mathf.Max(0, _pendingAbility.baseDamage);
             if (baseNoBonus > 0)
                 previewPassiveBonus = actor.stats.BonusDamageNextAttack;
         }
 
-        int totalBaseDamage = Mathf.Max(0, actor.stats.Attack) + Mathf.Max(0, _pendingAbility.baseDamage) + Mathf.Max(0, previewPassiveBonus);
+        int totalBaseDamage =
+            Mathf.Max(0, actor.stats.Attack) +
+            Mathf.Max(0, _pendingAbility.baseDamage) +
+            Mathf.Max(0, previewPassiveBonus);
 
-        int predictedDamage = target.CalculateDamageFromAbility(
-            abilityBaseDamage: totalBaseDamage,
-            classAttackModifier: 1f,
-            element: _pendingAbility.element,
-            abilityTags: _pendingAbility.tags);
+        int predictedDamage = 0;
+
+        // Optional micro-optimization: if total base is 0, skip CalculateDamageFromAbility.
+        if (totalBaseDamage > 0)
+        {
+            predictedDamage = target.CalculateDamageFromAbility(
+                abilityBaseDamage: totalBaseDamage,
+                classAttackModifier: 1f,
+                element: _pendingAbility.element,
+                abilityTags: _pendingAbility.tags);
+        }
 
         int previewHp = Mathf.Max(0, target.CurrentHp - predictedDamage);
 
