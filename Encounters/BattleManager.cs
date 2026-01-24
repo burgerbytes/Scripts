@@ -245,6 +245,10 @@ public class BattleManager : MonoBehaviour
     [Tooltip("Optional: shown after Reel Upgrade Minigame to let the player choose one of two abilities to permanently unlock for each level gained (starting at level 2).")]
     [SerializeField] private PostBattleAbilityUpgradePanel postBattleAbilityUpgradePanel;
 
+    [Header("Post-Battle Rewards Table")]
+    [Tooltip("Optional: shown after Results/Ability choice. Lets the player choose ONE reward type (Reelforging or Treasure Reels).")]
+    [SerializeField] private RewardsTablePanel rewardsTablePanel;
+
     [Tooltip("Optional: tracks in-battle performance for bonus XP awards.")]
     [SerializeField] private BattlePerformanceTracker performanceTracker;
 
@@ -2796,26 +2800,6 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
             postBattleResultsPanel.Hide();
         }
 
-        if (postBattleReelUpgradeMinigamePanel != null && _party != null)
-        {
-            if (!postBattleReelUpgradeMinigamePanel.gameObject.activeSelf)
-                postBattleReelUpgradeMinigamePanel.gameObject.SetActive(true);
-
-            for (int i = 0; i < _party.Count; i++)
-            {
-                HeroStats hs = _party[i] != null ? _party[i].stats : null;
-                if (hs == null) continue;
-
-                while (hs.PendingReelUpgrades > 0)
-                {
-                    bool done = false;
-                    postBattleReelUpgradeMinigamePanel.Show(hs, () => done = true);
-                    yield return new WaitUntil(() => done);
-                    postBattleReelUpgradeMinigamePanel.Hide();
-                }
-            }
-
-
         // Ability choice (starts at level 2). Resolve AFTER reel upgrades so the hero stays consistent with existing flow.
         if (_party != null && _party.Count > 0)
         {
@@ -2861,83 +2845,129 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
                 }
             }
         }
-        }
 
+        // --- Rewards choice (choose ONE): Reelforging OR Treasure Reels ---
         List<ItemOptionSO> pool =
             (_activeLootOverride != null && _activeLootOverride.Count > 0)
                 ? _activeLootOverride
                 : (postBattleFlow != null ? postBattleFlow.GetItemOptionPool() : null);
 
-        if (enablePostBattleRewards && postBattleChestPanel != null && pool != null && pool.Count > 0)
+        RewardsTablePanel.RewardsTableChoice rewardChoice = RewardsTablePanel.RewardsTableChoice.Skip;
+        int selectedReelforgeHeroIndex = -1;
+
+        if (rewardsTablePanel != null)
         {
-            if (reelSpinSystem != null && _activeEnemyParty != null && _activeEnemyParty.rewardReelConfig != null)
-                reelSpinSystem.EnterRewardMode(_activeEnemyParty.rewardReelConfig, goldOwner);
+            if (!rewardsTablePanel.gameObject.activeSelf)
+                rewardsTablePanel.gameObject.SetActive(true);
 
-            bool done = false;
-
-            int smallCount = _activeEnemyParty != null ? Mathf.Max(0, _activeEnemyParty.smallChestCount) : 0;
-            int largeCount = _activeEnemyParty != null ? Mathf.Max(0, _activeEnemyParty.largeChestCount) : 0;
-
-            postBattleChestPanel.Show(
-                goldOwner,
-                smallCount,
-                largeCount,
-                pool,
-                inventory,
-                (postBattleRewardPanel != null ? postBattleRewardPanel : startRewardPanel),
-                () => done = true
-            );
-
-            yield return new WaitUntil(() => done);
-
-            postBattleChestPanel.Hide();
-
-            if (reelSpinSystem != null)
+            bool chosen = false;
+                        // Build HeroStats[] for the rewards table (panel works with hero stats, not PartyMemberRuntime).
+            var partyStatsArr = BuildPartyStatsArray(_party);
+            rewardsTablePanel.Show(partyStatsArr, (choice, heroIdx) =>
             {
-                var partyStats = new List<HeroStats>(_party != null ? _party.Count : 0);
-                if (_party != null)
-                    for (int i = 0; i < _party.Count; i++)
-                        if (_party[i]?.stats != null) partyStats.Add(_party[i].stats);
+                rewardChoice = choice;
+                selectedReelforgeHeroIndex = heroIdx;
+                chosen = true;
+            });
+            yield return new WaitUntil(() => chosen);
 
-                reelSpinSystem.ExitRewardMode(partyStats);
-            }
+            rewardsTablePanel.Hide();
         }
         else
         {
-            if (enablePostBattleRewards)
+            // If the table isn't wired, fall back to the old behavior: Treasure Reels (if enabled) else skip.
+            rewardChoice = enablePostBattleRewards ? RewardsTablePanel.RewardsTableChoice.TreasureReels : RewardsTablePanel.RewardsTableChoice.Skip;
+        }
+
+        if (rewardChoice == RewardsTablePanel.RewardsTableChoice.Reelforging)
+        {
+            // Reelforging: grant exactly ONE reel upgrade, applied to the hero selected on the RewardsTablePanel.
+            HeroStats reelforgeHero = null;
+
+            if (_party != null && selectedReelforgeHeroIndex >= 0 && selectedReelforgeHeroIndex < _party.Count)
+                reelforgeHero = _party[selectedReelforgeHeroIndex] != null ? _party[selectedReelforgeHeroIndex].stats : null;
+
+            // Fallback (shouldn't happen if dropdown is populated correctly)
+            if (reelforgeHero == null)
+                reelforgeHero = GetPartyGoldReceiver();
+
+            if (postBattleReelUpgradeMinigamePanel != null && reelforgeHero != null)
             {
-                PostBattleRewardPanel panel = postBattleRewardPanel != null ? postBattleRewardPanel : startRewardPanel;
+                if (!postBattleReelUpgradeMinigamePanel.gameObject.activeSelf)
+                    postBattleReelUpgradeMinigamePanel.gameObject.SetActive(true);
 
-                if (pool != null && pool.Count > 0 && panel != null)
+                reelforgeHero.AddPendingReelUpgrades(1);
+
+                while (reelforgeHero.PendingReelUpgrades > 0)
                 {
-                    int min = Mathf.Clamp(postBattleRewardChoicesRange.x, 1, pool.Count);
-                    int max = Mathf.Clamp(postBattleRewardChoicesRange.y, min, pool.Count);
-                    int desired = UnityEngine.Random.Range(min, max + 1);
-
-                    List<ItemOptionSO> rolled = RollUnique(pool, desired);
-                    if (includeSkipOptionPostBattle)
-                        rolled.Add(BuildRuntimeSkipOption());
-
-                    ItemOptionSO chosen = null;
-                    bool picked = false;
-
-                    panel.Show(rolled, opt =>
-                    {
-                        chosen = opt;
-                        picked = true;
-                    });
-
-                    yield return new WaitUntil(() => picked);
-
-                    panel.Hide();
-
-                    if (chosen != null && chosen.item != null && inventory != null)
-                        inventory.Add(chosen.item, chosen.quantity);
+                    bool done = false;
+                    postBattleReelUpgradeMinigamePanel.Show(reelforgeHero, () => done = true);
+                    yield return new WaitUntil(() => done);
+                    postBattleReelUpgradeMinigamePanel.Hide();
                 }
+                // IMPORTANT: The upgrade panel updates the hero's reel strip data, but the in-battle reels
+                // may still be showing a cached strip. Reconfigure the ReelSpinSystem so the upgrade is visible.
+                if (reelSpinSystem != null)
+                {
+                    var partyStats = new List<HeroStats>(_party != null ? _party.Count : 0);
+                    if (_party != null)
+                        for (int i = 0; i < _party.Count; i++)
+                            if (_party[i]?.stats != null) partyStats.Add(_party[i].stats);
+
+                    reelSpinSystem.ConfigureFromParty(partyStats);
+                }
+            }
+            else
+            {
+                Debug.LogWarning("[PostBattle][RewardsTable] Reelforging chosen but ReelUpgradeMinigamePanel or selected hero is missing. Skipping reel upgrade.");
+            }
+        }
+else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
+        {
+            if (enablePostBattleRewards && postBattleChestPanel != null && pool != null && pool.Count > 0)
+            {
+                if (reelSpinSystem != null && _activeEnemyParty != null && _activeEnemyParty.rewardReelConfig != null)
+                    reelSpinSystem.EnterRewardMode(_activeEnemyParty.rewardReelConfig, GetPartyGoldReceiver());
+
+                bool done = false;
+
+                int smallCount = _activeEnemyParty != null ? Mathf.Max(0, _activeEnemyParty.smallChestCount) : 0;
+                int largeCount = _activeEnemyParty != null ? Mathf.Max(0, _activeEnemyParty.largeChestCount) : 0;
+
+                postBattleChestPanel.Show(
+                    GetPartyGoldReceiver(),
+                    smallCount,
+                    largeCount,
+                    pool,
+                    inventory,
+                    (postBattleRewardPanel != null ? postBattleRewardPanel : startRewardPanel),
+                    () => done = true
+                );
+
+                yield return new WaitUntil(() => done);
+
+                postBattleChestPanel.Hide();
+
+                if (reelSpinSystem != null)
+                {
+                    var partyStats = new List<HeroStats>(_party != null ? _party.Count : 0);
+                    if (_party != null)
+                        for (int i = 0; i < _party.Count; i++)
+                            if (_party[i]?.stats != null) partyStats.Add(_party[i].stats);
+
+                    reelSpinSystem.ExitRewardMode(partyStats);
+                }
+            }
+            else
+            {
+                // If Treasure Reels is chosen but the panel/pool isn't wired, we simply skip rewards.
+                if (enablePostBattleRewards)
+                    Debug.LogWarning("[PostBattle][RewardsTable] Treasure Reels chosen but postBattleChestPanel or item pool is missing. Skipping treasure rewards.");
             }
         }
 
         if (postBattlePrepPanel != null)
+
         {
             bool cont = false;
 
@@ -3856,4 +3886,28 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
             // before CollectPendingPayout(), gated by CanApplySubstitutionForReelIndex.
             if (logFlow) Debug.Log("[Battle][StopPressed] Locked=true. Waiting for ReelSpinSystem cashout to apply substitution + payout.", this);
         }
+    // --- Rewards / Party helpers ---
+    private static HeroStats[] BuildPartyStatsArray(List<PartyMemberRuntime> party)
+    {
+        if (party == null || party.Count == 0) return System.Array.Empty<HeroStats>();
+
+        var list = new List<HeroStats>(party.Count);
+        for (int i = 0; i < party.Count; i++)
+        {
+            var hs = party[i] != null ? party[i].stats : null;
+            if (hs != null) list.Add(hs);
+        }
+        return list.ToArray();
+    }
+
+    private HeroStats GetPartyGoldReceiver()
+    {
+        // Gold receiver / reward-mode owner: for now use party slot 0 if available.
+        if (_party != null && _party.Count > 0 && _party[0] != null)
+            return _party[0].stats;
+        return null;
+    }
+
 }
+
+////////////////////////////////////////////////////////////

@@ -117,13 +117,52 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
 
     private float _baseReelSpinSpeed;
 
+    // Persistent trace logging (helps when the editor hard-freezes before Console can be read).
+    // Writes to: Application.persistentDataPath/levelup_reel_trace.txt
+    private string _tracePath;
+
+    private void Trace(string msg)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(_tracePath))
+                _tracePath = System.IO.Path.Combine(Application.persistentDataPath, "levelup_reel_trace.txt");
+
+            // Include realtime timestamp so we can see where it stopped.
+            string line = $"[{Time.realtimeSinceStartup:F3}] {msg}";
+            System.IO.File.AppendAllText(_tracePath, line + "\n");
+        }
+        catch
+        {
+            // Never let tracing break gameplay.
+        }
+    }
+
     private void Awake()
     {
         if (battleManager == null)
             battleManager = FindFirstObjectByType<BattleManager>();
         if (root == null) root = gameObject;
-        if (spinButton != null) spinButton.onClick.AddListener(OnSpinPressed);
-        if (nextButton != null) nextButton.onClick.AddListener(OnNextPressed);
+
+        // Defensive: the Button may also have inspector-assigned listeners.
+        // If any of those listeners contain an accidental infinite loop (or a heavy synchronous call),
+        // the editor can appear to hard-freeze as soon as the button is pressed.
+        // We explicitly own these buttons while this panel is active.
+        if (spinButton != null)
+        {
+            spinButton.onClick.RemoveAllListeners();
+            spinButton.onClick.AddListener(OnSpinPressed);
+        }
+
+        if (nextButton != null)
+        {
+            nextButton.onClick.RemoveAllListeners();
+            nextButton.onClick.AddListener(OnNextPressed);
+        }
+
+        // Init trace path early.
+        _tracePath = System.IO.Path.Combine(Application.persistentDataPath, "levelup_reel_trace.txt");
+        Trace($"Awake panel='{name}' persistentDataPath='{Application.persistentDataPath}'");
 
         if (_rng == null)
             _rng = new System.Random(unchecked(Environment.TickCount * 31 + (int)(Time.realtimeSinceStartup * 1000f)));
@@ -312,6 +351,8 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         if (_hero == null || !_hero.HasPendingReelUpgrades) return;
         if (reel3d == null) return;
 
+        Trace($"SpinPressed hero='{_hero.name}' level={_hero.Level} eligible={_evolutionEligible} pending={_hero.PendingReelUpgrades}");
+
         Debug.Log(
             $"[Evolution] SpinPressed hero='{_hero.name}' level={_hero.Level} eligible={_evolutionEligible} pendingReelUpgrades={_hero.PendingReelUpgrades}",
             this
@@ -325,6 +366,8 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         _spun = true;
         if (spinButton != null) spinButton.interactable = false;
 
+        Trace($"SpinRoutine begin hero='{(_hero != null ? _hero.name : "NULL")}' evoEligible={_evolutionEligible} minFullRot={minFullRotations3D}");
+
         Debug.Log($"[LevelUpReel] Spin start hero='{_hero.name}' minFullRotations3D={minFullRotations3D} evolveEligible={_evolutionEligible}");
 
         // Spin (normal or evolving)
@@ -335,8 +378,24 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         }
         else
         {
+            Trace("SpinRoutine normal spin -> reel3d.SpinRandom");
             reel3d.SpinRandom(_rng, minFullRotations3D);
-            yield return new WaitUntil(() => !reel3d.IsSpinning);
+
+            // Safety: if something prevents the reel spin coroutine from completing (timescale issues,
+            // disabled component, etc.), don't hang the minigame forever.
+            float startRt = Time.realtimeSinceStartup;
+            while (reel3d != null && reel3d.IsSpinning)
+            {
+                if (Time.realtimeSinceStartup - startRt > 10f)
+                {
+                    Trace("SpinRoutine TIMEOUT waiting for reel3d.IsSpinning=false (10s). Forcing continue.");
+                    Debug.LogWarning("[LevelUpReel] TIMEOUT waiting for reel to stop spinning. Forcing continue.", this);
+                    break;
+                }
+                yield return null;
+            }
+
+            Trace($"SpinRoutine normal spin done. IsSpinning={(reel3d != null ? reel3d.IsSpinning : false)}");
         }
 
         // Let any final snap/settle complete before sampling intersection.
@@ -723,9 +782,14 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         if (_evolutionEligible && fighterPreviewPrefab != null)
             prefab = fighterPreviewPrefab;
 
-        // If we didn't get a prefab, clone the in-scene hero avatar root (safe for visuals).
+        // IMPORTANT: Never clone transform.root here.
+        // In many scenes the hero's transform.root is the *entire battle scene* (e.g., a parent with
+        // BattleManager, UI, reels, enemies, etc.). Instantiating that as a "preview" can hang/freeeze
+        // Unity (massive hierarchy clone) and/or cause extreme stalls when we later Destroy() it.
+        //
+        // We only want the hero avatar itself for the preview.
         if (prefab == null && _hero != null)
-            prefab = _hero.transform.root.gameObject;
+            prefab = _hero.gameObject;
 
         if (prefab == null) return;
 
@@ -742,11 +806,17 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         _previewGO.transform.localScale = heroPreviewLocalScale;
 
         // Disable gameplay-affecting scripts on the preview copy.
-        foreach (var hs in _previewGO.GetComponentsInChildren<HeroStats>(true))
-            hs.enabled = false;
+        // (We keep renderers/animators intact, but prevent any Update/OnEnable loops from running.)
+        var mbs = _previewGO.GetComponentsInChildren<MonoBehaviour>(true);
+        for (int i = 0; i < mbs.Length; i++)
+        {
+            var mb = mbs[i];
+            if (mb == null) continue;
+            if (mb is PostBattleReelUpgradeMinigamePanel) continue;
 
-        foreach (var m in _previewGO.GetComponentsInChildren<Monster>(true))
-            m.enabled = false;
+            // Allow Animators to run (not a MonoBehaviour), everything else gets disabled.
+            mb.enabled = false;
+        }
 
         // Collect renderers for glow tinting.
         _previewRenderers.Clear();
@@ -815,3 +885,6 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         }
     }
 }
+
+
+////////////////////////////////////////////////////////////

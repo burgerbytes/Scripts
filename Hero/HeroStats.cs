@@ -371,7 +371,7 @@ public class HeroStats : MonoBehaviour
     // ---------------- Reel Upgrade (Level Up) ----------------
     [Header("Reel Upgrade (Level Up)")]
     [Tooltip("If true, leveling up queues a reel symbol upgrade to be resolved via the Reel Upgrade Minigame.")]
-    [SerializeField] private bool upgradeReelOnLevelUp = true;
+    [SerializeField] private bool upgradeReelOnLevelUp = false; // deprecated (no longer auto-queues upgrades on level-up)
 
     [Tooltip("Upgrade mapping rules (e.g., Attack->DoubleAttack, Null->Wild).")]
     [SerializeField] private ReelUpgradeRulesSO reelUpgradeRules;
@@ -383,6 +383,16 @@ public class HeroStats : MonoBehaviour
     public Sprite Portrait => portrait;
 
     public int PendingReelUpgrades => pendingReelUpgrades;
+
+    /// <summary>
+    /// Adds one or more pending reel upgrades. Used by the post-battle Rewards Table choice (Reelforging).
+    /// </summary>
+    public void AddPendingReelUpgrades(int count = 1)
+    {
+        if (count <= 0) return;
+        pendingReelUpgrades += count;
+    }
+
     public bool HasPendingReelUpgrades => pendingReelUpgrades > 0;
 
     // ---------------- Equipment (UI only, no effects yet) ----------------
@@ -956,8 +966,24 @@ public class HeroStats : MonoBehaviour
         appliedStripIndex = -1;
 
         if (pendingReelUpgrades <= 0) return false;
-        if (reelStrip == null || reelStrip.symbols == null || reelStrip.symbols.Count == 0) return false;
-        if (reelUpgradeRules == null) return false;
+
+        // Safety: if reel upgrade data is misconfigured, still consume 1 pending upgrade
+        // so the post-battle loop can't soft-lock forever.
+        if (reelStrip == null || reelStrip.symbols == null || reelStrip.symbols.Count == 0)
+        {
+            pendingReelUpgrades -= 1;
+            NotifyChanged();
+            Debug.LogWarning($"[HeroStats] Reel upgrade failed: reelStrip is missing/empty for hero '{name}'. Consuming 1 PendingReelUpgrades to avoid soft-lock.");
+            return false;
+        }
+
+        if (reelUpgradeRules == null)
+        {
+            pendingReelUpgrades -= 1;
+            NotifyChanged();
+            Debug.LogWarning($"[HeroStats] Reel upgrade failed: reelUpgradeRules is NULL for hero '{name}'. Consuming 1 PendingReelUpgrades to avoid soft-lock.");
+            return false;
+        }
 
         int n = reelStrip.symbols.Count;
         int startStripIndex = ((quadIndex % n) + n) % n;
@@ -1503,3 +1529,9 @@ public class HeroStats : MonoBehaviour
 }
 
 
+
+
+////////////////////////////////////////////////////////////
+
+
+////////////////////////////////////////////////////////////
