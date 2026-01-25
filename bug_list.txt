@@ -19,4 +19,5 @@ features
 - add tooltips for status icons
 - make all info/status panels open into a single panel and dim the screen
 - award same xp to all heroes. dead heroes get 0 xp
+- add reel locking
  

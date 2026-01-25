@@ -2,17 +2,14 @@
 // GUID: d48595d4376ce4e4d86910f04e87d7e3
 ////////////////////////////////////////////////////////////
 using System;
+using System.Collections;
 using UnityEngine;
 
 /// <summary>
-/// Boots the game into a simple class selection menu BEFORE BattleManager starts the run.
+/// Boots the game into a class selection menu BEFORE BattleManager starts the run.
 ///
-/// Flow:
-/// - Show StartupClassSelectionPanel
-/// - When confirmed: call BattleManager.SetPartyMemberPrefabs(chosen)
-///
-/// Note: BattleManager defers starting a run until partyMemberPrefabs are set,
-/// so we don't need to rely on disabling BattleManager to control Awake().
+/// Updated to use NewStartupClassSelectionPanel and to call Show() one frame later
+/// (so all UI + reels are active and Awake() has run).
 /// </summary>
 [DefaultExecutionOrder(-1000)]
 public class StartupClassSelectionBootstrapper : MonoBehaviour
@@ -22,7 +19,7 @@ public class StartupClassSelectionBootstrapper : MonoBehaviour
     [SerializeField] private GameObject[] availablePartyPrefabs;
 
     [Header("Scene Refs (optional)")]
-    [SerializeField] private StartupClassSelectionPanel selectionPanel;
+    [SerializeField] private NewStartupClassSelectionPanel selectionPanel;
 
     [Tooltip("If null, the first BattleManager found in-scene will be used.")]
     [SerializeField] private BattleManager battleManager;
@@ -34,38 +31,64 @@ public class StartupClassSelectionBootstrapper : MonoBehaviour
     [Tooltip("Party size for selection (defaults to BattleManager.partySize if possible).")]
     [SerializeField] private int partySize = 0;
 
-    private bool _started;
+    private static bool s_started; // protects against duplicate bootstrappers
+    private bool _startedThisInstance;
 
     private void Awake()
     {
-        if (_started) return;
-        _started = true;
+        if (s_started)
+        {
+            // If another bootstrapper already ran, kill this one.
+            Destroy(gameObject);
+            return;
+        }
+
+        s_started = true;
+        _startedThisInstance = true;
 
         // Auto-find references if not wired.
         if (battleManager == null)
             battleManager = FindInSceneIncludingInactive<BattleManager>();
+
         if (selectionPanel == null)
-            selectionPanel = FindInSceneIncludingInactive<StartupClassSelectionPanel>();
+            selectionPanel = FindInSceneIncludingInactive<NewStartupClassSelectionPanel>();
 
         if (battleManager == null)
         {
             Debug.LogError("[StartupClassSelectionBootstrapper] No BattleManager found in scene. Cannot run class selection.");
             return;
         }
+
         if (selectionPanel == null)
         {
-            Debug.LogError("[StartupClassSelectionBootstrapper] No StartupClassSelectionPanel found in scene. Cannot run class selection.");
+            Debug.LogError("[StartupClassSelectionBootstrapper] No NewStartupClassSelectionPanel found in scene. Cannot run class selection.");
             return;
         }
 
         // Hide reels during class selection
         if (reels3DRoot != null)
             reels3DRoot.SetActive(false);
+    }
+
+    private void Start()
+    {
+        // Ensure we only proceed if we were the instance that won the singleton gate.
+        if (!_startedThisInstance) return;
+
+        // Call Show one frame later to avoid Awake order issues (panel/reels might not be active yet).
+        StartCoroutine(ShowNextFrame());
+    }
+
+    private IEnumerator ShowNextFrame()
+    {
+        yield return null;
+
+        if (battleManager == null || selectionPanel == null)
+            yield break;
 
         // Prefer BattleManager.partySize if inspector value not set.
         int size = partySize > 0 ? partySize : battleManager.PartySize;
 
-        // Show selection UI.
         selectionPanel.Show(availablePartyPrefabs, size, OnConfirmed);
     }
 
@@ -83,8 +106,6 @@ public class StartupClassSelectionBootstrapper : MonoBehaviour
         // Destroy bootstrapper so it doesn't run again if you return to this scene.
         Destroy(gameObject);
     }
-
-    // Reflection helpers removed — we now use BattleManager.SetPartyMemberPrefabs().
 
     // IMPORTANT: finds inactive objects too
     private static T FindInSceneIncludingInactive<T>() where T : UnityEngine.Object
@@ -109,7 +130,4 @@ public class StartupClassSelectionBootstrapper : MonoBehaviour
         return null;
     }
 }
-
-
-////////////////////////////////////////////////////////////
-// PATH: Assets/Scripts/UI/Startup/StartupClassSelectionPanel.cs
+//////////////////////////////////////////////////////////
