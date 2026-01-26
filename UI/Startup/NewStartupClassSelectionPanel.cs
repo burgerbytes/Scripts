@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Reflection;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -47,17 +48,21 @@ public class NewStartupClassSelectionPanel : MonoBehaviour
     [Tooltip("Randomize nudges this many steps maximum per spin pass.")]
     [SerializeField] private int randomizeMaxSteps = 18;
 
-    [Tooltip("Max attempts per reel to avoid landing on a null symbol.")]
+    [Tooltip("Max attempts per reel to avoid landing on a null character quad.")]
     [SerializeField] private int randomizeMaxAttemptsPerReel = 10;
 
-    [Header("Null Hero Symbol (exclude from Randomize)")]
-    [Tooltip("If set, Randomize will keep spinning until the midrow symbol is NOT this symbol.")]
-    [SerializeField] private ReelSymbolSO nullHeroSymbol;
+    [Header("Null Character Detection")]
+    [Tooltip("Material name that indicates a 'null character' quad. Example: Null_Char_Reel_Icon")]
+    [SerializeField] private string nullCharacterMaterialName = "Null_Char_Reel_Icon";
 
     [Header("Hero Summary UI")]
     [SerializeField] private TMP_Text heroNameText;
     [SerializeField] private TMP_Text reelcraftNameText;
     [SerializeField] private TMP_Text reelcraftDescText;
+
+    // You said you already added this variable:
+    [SerializeField] private Image reelcraftIcon;
+
     [SerializeField] private TMP_Text startingAbilityHeaderText;
     [SerializeField] private TMP_Text startingAbilityDescText;
 
@@ -294,7 +299,7 @@ public class NewStartupClassSelectionPanel : MonoBehaviour
             if (!IsReelReady(i))
                 continue;
 
-            yield return SpinOneReelToNonNull(i);
+            yield return SpinOneReelAvoidNullCharacter(i);
         }
 
         _activeReelIndex = 0;
@@ -310,7 +315,7 @@ public class NewStartupClassSelectionPanel : MonoBehaviour
         _randomizeRoutine = null;
     }
 
-    private IEnumerator SpinOneReelToNonNull(int reelIndex)
+    private IEnumerator SpinOneReelAvoidNullCharacter(int reelIndex)
     {
         var r = reels[reelIndex];
         if (r == null) yield break;
@@ -327,7 +332,6 @@ public class NewStartupClassSelectionPanel : MonoBehaviour
 
             if (logFlow) Debug.Log($"[NewStartupClassSelectionPanel] Randomize reel={reelIndex} attempt={attempts} steps={steps}", this);
 
-            // Use the same speed scaling, but randomize should feel a bit longer than a single step.
             float dur = Mathf.Max(0.2f, GetScrollDurationSeconds() * 2f);
 
             if (!r.TryNudgeStepsAnimated(steps, dur, nudgeEase))
@@ -339,18 +343,107 @@ public class NewStartupClassSelectionPanel : MonoBehaviour
             while (r.IsNudging)
                 yield return null;
 
-            string id = GetMidrowSymbolIdSafe(reelIndex, out var sym);
+            // Determine what landed.
+            int qi, mult;
+            ReelSymbolSO sym = r.GetMidrowSymbolAndMultiplier(midrowPlane, out qi, out mult);
+            string id = (sym != null) ? sym.id : null;
 
-            bool isNull = (nullHeroSymbol != null && sym == nullHeroSymbol);
             bool emptyId = string.IsNullOrEmpty(id);
+            bool isNullChar = IsMidrowQuadNullCharacterByMaterial(reelIndex);
 
-            if (logFlow) Debug.Log($"[NewStartupClassSelectionPanel] Randomize reel={reelIndex} landed id='{id}' sym='{(sym != null ? sym.name : "<null>")}' isNull={isNull} emptyId={emptyId}", this);
+            if (logFlow)
+            {
+                Debug.Log(
+                    $"[NewStartupClassSelectionPanel] Randomize reel={reelIndex} landed id='{id}' sym='{(sym != null ? sym.name : "<null>")}' emptyId={emptyId} isNullChar={isNullChar}",
+                    this);
+            }
 
-            if (!emptyId && !isNull)
+            // Reject if: (a) no id, or (b) midrow quad is flagged as Null Character by material.
+            if (!emptyId && !isNullChar)
                 yield break;
         }
 
         if (logFlow) Debug.LogWarning($"[NewStartupClassSelectionPanel] Randomize reel={reelIndex}: max attempts reached; leaving current midrow.", this);
+    }
+
+    /// <summary>
+    /// Returns true if the currently-midrow quad (for this reel) has a material whose name matches nullCharacterMaterialName.
+    /// We find the midrow quad renderer by selecting the reel child renderer whose bounds intersects the midrowPlane bounds
+    /// and is closest to the midrowPlane center.
+    /// </summary>
+    private bool IsMidrowQuadNullCharacterByMaterial(int reelIndex)
+    {
+        if (string.IsNullOrWhiteSpace(nullCharacterMaterialName)) return false;
+        if (midrowPlane == null) return false;
+        if (reels == null || reelIndex < 0 || reelIndex >= reels.Length) return false;
+
+        var reel = reels[reelIndex];
+        if (reel == null) return false;
+
+        // Midrow bounds from plane (prefer renderer, fallback to collider).
+        Bounds planeBounds;
+        var planeRenderer = midrowPlane.GetComponent<Renderer>();
+        if (planeRenderer != null)
+        {
+            planeBounds = planeRenderer.bounds;
+        }
+        else
+        {
+            var planeCollider = midrowPlane.GetComponent<Collider>();
+            if (planeCollider != null) planeBounds = planeCollider.bounds;
+            else
+            {
+                // last resort: tiny bounds at position
+                planeBounds = new Bounds(midrowPlane.transform.position, Vector3.one * 0.01f);
+            }
+        }
+
+        Vector3 planeCenter = planeBounds.center;
+
+        Renderer best = null;
+        float bestDist = float.MaxValue;
+
+        // Search all renderers under the reel.
+        var renderers = reel.GetComponentsInChildren<Renderer>(true);
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            var rr = renderers[i];
+            if (rr == null) continue;
+
+            // Ignore the reel itself if it has a renderer, we want quads.
+            if (rr.gameObject == reel.gameObject) continue;
+
+            // Must intersect the midrow plane bounds (i.e., the current midrow quad).
+            if (!rr.bounds.Intersects(planeBounds)) continue;
+
+            float d = (rr.bounds.center - planeCenter).sqrMagnitude;
+            if (d < bestDist)
+            {
+                bestDist = d;
+                best = rr;
+            }
+        }
+
+        if (best == null) return false;
+
+        // Check all materials (Unity may use "Name (Instance)").
+        var mats = best.sharedMaterials;
+        if (mats == null || mats.Length == 0) return false;
+
+        for (int i = 0; i < mats.Length; i++)
+        {
+            var m = mats[i];
+            if (m == null) continue;
+
+            string matName = m.name ?? "";
+            if (matName.Equals(nullCharacterMaterialName, StringComparison.Ordinal) ||
+                matName.StartsWith(nullCharacterMaterialName, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void OnStartPressed()
@@ -525,6 +618,9 @@ public class NewStartupClassSelectionPanel : MonoBehaviour
         if (reelcraftDescText != null)
             reelcraftDescText.text = (classDef != null) ? classDef.reelcraftDescription : "";
 
+        // ✅ NEW: reelcraft icon
+        ApplyReelcraftIcon(classDef);
+
         if (startingAbilityHeaderText != null)
             startingAbilityHeaderText.text = "Starting Ability";
 
@@ -551,6 +647,68 @@ public class NewStartupClassSelectionPanel : MonoBehaviour
             startingAbilityDescText.text = (starter != null) ? starter.description : "";
 
         RefreshReelSymbols(hs);
+    }
+
+    /// <summary>
+    /// Pulls reelcraft icon sprite from the classDef via common field/property names, and updates UI image.
+    /// This avoids hard-coding a specific member name on your BaseClassDef type.
+    /// </summary>
+    private void ApplyReelcraftIcon(object classDef)
+    {
+        if (reelcraftIcon == null) return;
+
+        Sprite spr = TryGetSpriteFromClassDef(classDef);
+
+        if (spr != null)
+        {
+            reelcraftIcon.sprite = spr;
+            reelcraftIcon.enabled = true;
+            reelcraftIcon.preserveAspect = true;
+        }
+        else
+        {
+            reelcraftIcon.sprite = null;
+            reelcraftIcon.enabled = false;
+        }
+    }
+
+    private static Sprite TryGetSpriteFromClassDef(object classDef)
+    {
+        if (classDef == null) return null;
+
+        // Try common names first (fields or properties).
+        // Add/remove names here to match your actual BaseClassDef.
+        string[] names =
+        {
+            "reelcraftIcon",
+            "reelcraftSprite",
+            "reelcraftIconSprite",
+            "reelcraftIconOverride",
+            "reelcraftIconArt",
+            "reelcraftIconImage"
+        };
+
+        Type t = classDef.GetType();
+
+        for (int i = 0; i < names.Length; i++)
+        {
+            string n = names[i];
+
+            // Field?
+            FieldInfo f = t.GetField(n, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (f != null && typeof(Sprite).IsAssignableFrom(f.FieldType))
+                return f.GetValue(classDef) as Sprite;
+
+            // Property?
+            PropertyInfo p = t.GetProperty(n, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (p != null && typeof(Sprite).IsAssignableFrom(p.PropertyType) && p.CanRead)
+            {
+                try { return p.GetValue(classDef, null) as Sprite; }
+                catch { /* ignore */ }
+            }
+        }
+
+        return null;
     }
 
     private void RefreshReelSymbols(HeroStats hs)

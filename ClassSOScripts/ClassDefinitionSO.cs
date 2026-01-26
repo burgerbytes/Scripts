@@ -1,5 +1,3 @@
-// GUID: 29ee3befdcd36de4d8496291abe6a704
-////////////////////////////////////////////////////////////
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -14,17 +12,23 @@ public class ClassDefinitionSO : ScriptableObject
 
     [Header("Identity")]
     public string className;
-    [TextArea(2, 6)] public string description;
+
+    [TextArea(2, 6)]
+    public string description;
 
     [Tooltip("Small icon used in menus, lists, or ability UIs")]
     public Sprite icon;
 
-    
     [Header("Reelcraft (UI)")]
     public string reelcraftName;
-    [TextArea(2, 6)] public string reelcraftDescription;
 
-[Header("UI")]
+    [TextArea(2, 6)]
+    public string reelcraftDescription;
+
+    [Tooltip("Icon representing this class's Reelcraft mechanic")]
+    public Sprite reelcraftIcon;
+
+    [Header("UI")]
     [Tooltip("Larger portrait used on Party HUD buttons")]
     public Sprite portraitSprite;
 
@@ -59,8 +63,4 @@ public class ClassDefinitionSO : ScriptableObject
 
     [Header("Passive Abilities")]
     public List<PassiveAbilitySO> passiveAbilities = new List<PassiveAbilitySO>();
-
 }
-
-
-////////////////////////////////////////////////////////////
