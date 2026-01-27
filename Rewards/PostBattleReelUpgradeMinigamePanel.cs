@@ -110,6 +110,14 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
     private int _partyIndex = -1;
     private bool _evolutionEligible;
     private bool _pendingEvolutionApply;
+    private bool _evolutionApplied;
+    private bool _usingFallbackEvolutionConfig;
+    private GameObject _evolutionBattlePrefab;
+    private ClassDefinitionSO _evolutionAdvancedClassDef;
+    private ReelStripSO _evolutionReelStripTemplate;
+    private Sprite _evolutionPortraitOverride;
+    private Sprite _evolutionWorldSpriteOverride;
+    private GameObject _evolutionPreviewPrefab;
 
     // Preview runtime
     private GameObject _previewGO;
@@ -141,7 +149,7 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
     private void Awake()
     {
         if (battleManager == null)
-            battleManager = FindFirstObjectByType<BattleManager>();
+            battleManager = BattleManager.Instance != null ? BattleManager.Instance : FindFirstObjectByType<BattleManager>();
         if (root == null) root = gameObject;
 
         // Defensive: the Button may also have inspector-assigned listeners.
@@ -163,6 +171,7 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         // Init trace path early.
         _tracePath = System.IO.Path.Combine(Application.persistentDataPath, "levelup_reel_trace.txt");
         Trace($"Awake panel='{name}' persistentDataPath='{Application.persistentDataPath}'");
+        Debug.Log($"[Evolution] Panel Awake battleManager='{(battleManager != null ? battleManager.name : "NULL")}' instanceId={(battleManager != null ? battleManager.GetInstanceID() : 0)} singletonId={(BattleManager.Instance != null ? BattleManager.Instance.GetInstanceID() : 0)}", this);
 
         if (_rng == null)
             _rng = new System.Random(unchecked(Environment.TickCount * 31 + (int)(Time.realtimeSinceStartup * 1000f)));
@@ -205,6 +214,13 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
 
     public void Show(HeroStats hero, Action onDone)
     {
+        _evolutionApplied = false;
+        if (BattleManager.Instance != null && battleManager != BattleManager.Instance)
+        {
+            Debug.LogWarning($"[Evolution] Panel Show using BattleManager.Instance (id={BattleManager.Instance.GetInstanceID()}) instead of cached battleManager id={(battleManager != null ? battleManager.GetInstanceID() : 0)}", this);
+            battleManager = BattleManager.Instance;
+        }
+
         _hero = hero;
         _onDone = onDone;
         _spun = false;
@@ -221,13 +237,22 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
 
         // Determine party index + evolution eligibility
         _partyIndex = (battleManager != null) ? battleManager.GetPartyIndexForHeroStats(hero) : -1;
-        _evolutionEligible = ComputeEvolutionEligible(hero);
+        _evolutionEligible = TryResolveEvolutionConfig(hero);
 
         Debug.Log(
             $"[Evolution] PanelShow hero='{(hero != null ? hero.name : "NULL")}' level={(hero != null ? hero.Level : 0)} " +
             $"baseClass='{(hero != null && hero.BaseClassDef != null ? hero.BaseClassDef.className : "NULL")}' " +
             $"advancedClass='{(hero != null && hero.AdvancedClassDef != null ? hero.AdvancedClassDef.className : "NULL")}' " +
             $"eligible={_evolutionEligible} partyIndex={_partyIndex}",
+            this
+        );
+        Debug.Log(
+            $"[Evolution] PanelShow config pref='{(_evolutionBattlePrefab != null ? _evolutionBattlePrefab.name : "NULL")}' " +
+            $"advDef='{(_evolutionAdvancedClassDef != null ? _evolutionAdvancedClassDef.className : "NULL")}' " +
+            $"strip='{(_evolutionReelStripTemplate != null ? _evolutionReelStripTemplate.name : "NULL")}' " +
+            $"portrait='{(_evolutionPortraitOverride != null ? _evolutionPortraitOverride.name : "NULL")}' " +
+            $"worldSprite='{(_evolutionWorldSpriteOverride != null ? _evolutionWorldSpriteOverride.name : "NULL")}' " +
+            $"usingFallback={_usingFallbackEvolutionConfig}",
             this
         );
 
@@ -263,10 +288,15 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         BuildHeroPreview();
 
         if (spinButton != null)
-            spinButton.interactable = (hero != null && hero.HasPendingReelUpgrades);
+            spinButton.interactable = (hero != null && (hero.HasPendingReelUpgrades || _evolutionEligible));
 
         if (nextButton != null)
-            nextButton.gameObject.SetActive(false);
+        {
+            // If evolution is available, allow skipping the spin and proceed.
+            bool showNext = _evolutionEligible;
+            nextButton.gameObject.SetActive(showNext);
+            nextButton.interactable = showNext;
+        }
 
         Debug.Log($"[LevelUpReel] Show hero='{(hero != null ? hero.name : "NULL")}', pendingUpgrades={(hero != null ? hero.PendingReelUpgrades : 0)}, level={(hero != null ? hero.Level : 0)}, evolveEligible={_evolutionEligible}, partyIndex={_partyIndex}");
     }
@@ -308,10 +338,21 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         gameObject.SetActive(false);
     }
 
-    private bool ComputeEvolutionEligible(HeroStats hero)
+    private bool TryResolveEvolutionConfig(HeroStats hero)
     {
-        if (!enableEvolutionAtLevel5) return false;
-        if (hero == null) return false;
+        _usingFallbackEvolutionConfig = false;
+        _evolutionBattlePrefab = null;
+        _evolutionAdvancedClassDef = null;
+        _evolutionReelStripTemplate = null;
+        _evolutionPortraitOverride = null;
+        _evolutionWorldSpriteOverride = null;
+        _evolutionPreviewPrefab = null;
+
+        if (!enableEvolutionAtLevel5 || hero == null)
+        {
+            Debug.Log($"[Evolution] ResolveConfig blocked: enableEvolutionAtLevel5={enableEvolutionAtLevel5} heroNull={(hero == null)}", this);
+            return false;
+        }
 
         int req = Mathf.Max(1, evolutionLevel);
         if (hero.Level < req)
@@ -326,35 +367,72 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
             return false;
         }
 
-        // For now we only handle Fighter.
+        if (battleManager != null &&
+            battleManager.TryGetLevel5EvolutionData(
+                hero,
+                out _evolutionBattlePrefab,
+                out _evolutionAdvancedClassDef,
+                out _evolutionReelStripTemplate,
+                out _evolutionPortraitOverride,
+                out _evolutionWorldSpriteOverride))
+        {
+            Debug.Log($"[Evolution] ResolveConfig from BattleManager: prefab='{(_evolutionBattlePrefab != null ? _evolutionBattlePrefab.name : "NULL")}' advDef='{(_evolutionAdvancedClassDef != null ? _evolutionAdvancedClassDef.className : "NULL")}'", this);
+            return _evolutionBattlePrefab != null;
+        }
+        Debug.Log("[Evolution] ResolveConfig: BattleManager missing or no mapping match. Trying legacy fallback.", this);
+
+        // Fallback: legacy Fighter -> Templar config (kept for compatibility).
         if (fighterBaseClassDef != null)
         {
             bool ok = hero.BaseClassDef == fighterBaseClassDef;
             Debug.Log($"[Evolution] Eligibility strictBaseDef hero='{hero.name}' ok={ok} base='{(hero.BaseClassDef != null ? hero.BaseClassDef.className : "NULL")}'", this);
-            return ok;
+            if (!ok) return false;
         }
-
-        // Fallback: match by class name if a base def exists.
-        if (hero.BaseClassDef != null && !string.IsNullOrEmpty(hero.BaseClassDef.className))
+        else if (hero.BaseClassDef != null && !string.IsNullOrEmpty(hero.BaseClassDef.className))
         {
             bool ok = string.Equals(hero.BaseClassDef.className, "Fighter", StringComparison.OrdinalIgnoreCase);
             Debug.Log($"[Evolution] Eligibility byName hero='{hero.name}' ok={ok} base='{hero.BaseClassDef.className}'", this);
-            return ok;
+            if (!ok) return false;
+        }
+        else
+        {
+            return false;
         }
 
-        return false;
+        if (templarBattlePrefab == null)
+        {
+            Debug.LogWarning("[Evolution] Legacy evolution config missing templarBattlePrefab. Skipping evolution.", this);
+            return false;
+        }
+
+        _usingFallbackEvolutionConfig = true;
+        _evolutionBattlePrefab = templarBattlePrefab;
+        _evolutionAdvancedClassDef = templarAdvancedClassDef;
+        _evolutionReelStripTemplate = templarReelStripTemplate;
+        _evolutionPortraitOverride = templarPortraitOverride;
+        _evolutionWorldSpriteOverride = templarWorldSpriteOverride;
+        _evolutionPreviewPrefab = templarPreviewPrefab;
+        return true;
     }
 
     private void OnSpinPressed()
     {
         if (_spun) return;
-        if (_hero == null || !_hero.HasPendingReelUpgrades) return;
+        if (_hero == null) return;
+        if (!_hero.HasPendingReelUpgrades && !_evolutionEligible) return;
         if (reel3d == null) return;
+
+        if (nextButton != null)
+            nextButton.interactable = false; // prevent skipping mid-spin
 
         Trace($"SpinPressed hero='{_hero.name}' level={_hero.Level} eligible={_evolutionEligible} pending={_hero.PendingReelUpgrades}");
 
         Debug.Log(
             $"[Evolution] SpinPressed hero='{_hero.name}' level={_hero.Level} eligible={_evolutionEligible} pendingReelUpgrades={_hero.PendingReelUpgrades}",
+            this
+        );
+        Debug.Log(
+            $"[Evolution] SpinPressed config pref='{(_evolutionBattlePrefab != null ? _evolutionBattlePrefab.name : "NULL")}' advDef='{(_evolutionAdvancedClassDef != null ? _evolutionAdvancedClassDef.className : "NULL")}'",
             this
         );
 
@@ -410,10 +488,20 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
             $"quadIndex={quadIndex} landed='{(landedSym != null ? landedSym.name : "NULL")}'"
         );
 
-        // Apply reel upgrade
-        ReelSymbolSO fromSym, toSym;
-        int appliedStripIndex;
-        bool upgraded = _hero.TryApplyPendingReelUpgradeFromQuadIndex(quadIndex, out fromSym, out toSym, out appliedStripIndex);
+        // Apply reel upgrade (if any).
+        ReelSymbolSO fromSym = null;
+        ReelSymbolSO toSym = null;
+        int appliedStripIndex = -1;
+        bool upgraded = false;
+
+        if (_hero.HasPendingReelUpgrades)
+        {
+            upgraded = _hero.TryApplyPendingReelUpgradeFromQuadIndex(quadIndex, out fromSym, out toSym, out appliedStripIndex);
+        }
+        else
+        {
+            Debug.Log($"[LevelUpReel] No pending reel upgrades for hero='{_hero.name}'. Skipping upgrade step.", this);
+        }
 
         // If the landed symbol wasn't upgradeable, HeroStats may have upgraded a different symbol on the strip.
         int appliedQuadIndex = quadIndex;
@@ -464,12 +552,21 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
 
             Debug.Log(
                 $"[Evolution] Evolution visuals complete. pendingEvolutionApply={_pendingEvolutionApply} " +
-                $"nextWillSwapPartyPrefab={(templarBattlePrefab != null)}",
+                $"nextWillSwapPartyPrefab={(_evolutionBattlePrefab != null)}",
                 this
             );
+
+            // Apply the evolution immediately after the spin completes so Next is just a confirm.
+            bool applied = TryApplyEvolutionSwapNow();
+            if (applied)
+                _pendingEvolutionApply = false;
         }
 
-        if (nextButton != null) nextButton.gameObject.SetActive(true);
+        if (nextButton != null)
+        {
+            nextButton.gameObject.SetActive(true);
+            nextButton.interactable = true;
+        }
 
         _spinRoutine = null;
     }
@@ -492,9 +589,16 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         );
 
         float t = 0f;
+        float startRt = Time.realtimeSinceStartup;
         while (reel3d != null && reel3d.IsSpinning)
         {
-            t += Time.deltaTime;
+            if (Time.realtimeSinceStartup - startRt > 10f)
+            {
+                Debug.LogWarning("[Evolution] EvolvingSpin TIMEOUT waiting for reel to stop (10s). Forcing continue.", this);
+                break;
+            }
+
+            t += Time.unscaledDeltaTime;
             float a = Mathf.Clamp01(t / dur);
 
             reel3d.SpinDegreesPerSecond = Mathf.Lerp(baseSpeed, baseSpeed * maxMult, a);
@@ -524,7 +628,7 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         if (reel3d == null) yield break;
 
         Debug.Log(
-            $"[Evolution] EvolutionSwap begin. templarStrip={(templarReelStripTemplate != null ? templarReelStripTemplate.name : "NULL")}",
+            $"[Evolution] EvolutionSwap begin. newStrip={(_evolutionReelStripTemplate != null ? _evolutionReelStripTemplate.name : "NULL")}",
             this
         );
 
@@ -534,17 +638,17 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         Debug.Log("[Evolution] Reel glow forced to white (1.0). Holding before pop.", this);
 
         if (evolvePopHoldSeconds > 0f)
-            yield return new WaitForSeconds(evolvePopHoldSeconds);
+            yield return new WaitForSecondsRealtime(evolvePopHoldSeconds);
 
-        if (templarReelStripTemplate != null)
+        if (_evolutionReelStripTemplate != null)
         {
             // Visual swap: show the advanced strip on the minigame reel.
-            Debug.Log($"[Evolution] Swapping minigame reel strip -> '{templarReelStripTemplate.name}' (rebuildNow=true)", this);
-            reel3d.SetStrip(templarReelStripTemplate, rebuildNow: true);
+            Debug.Log($"[Evolution] Swapping minigame reel strip -> '{_evolutionReelStripTemplate.name}' (rebuildNow=true)", this);
+            reel3d.SetStrip(_evolutionReelStripTemplate, rebuildNow: true);
         }
         else
         {
-            Debug.LogWarning("[Evolution] templarReelStripTemplate is NULL - reel will not swap visually.", this);
+            Debug.LogWarning("[Evolution] No advanced reel strip template provided - reel will not swap visually.", this);
         }
 
         yield return ShakeAndPopRoutine(reel3d.transform);
@@ -559,9 +663,9 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         Debug.Log("[Evolution] Preview glow + swap complete.", this);
 
         // UI: update portrait for the remainder of the panel.
-        Sprite newPortrait = templarPortraitOverride;
-        if (newPortrait == null && templarAdvancedClassDef != null)
-            newPortrait = templarAdvancedClassDef.portraitSprite;
+        Sprite newPortrait = _evolutionPortraitOverride;
+        if (newPortrait == null && _evolutionAdvancedClassDef != null)
+            newPortrait = _evolutionAdvancedClassDef.portraitSprite;
 
         if (newPortrait != null && portraitImage != null)
         {
@@ -589,32 +693,32 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         float t = 0f;
         while (t < dur)
         {
-            t += Time.deltaTime;
+            t += Time.unscaledDeltaTime;
             float a = Mathf.Clamp01(t / dur);
             ApplyPreviewGlow(a);
             yield return null;
         }
 
         // Swap preview prefab
-        GameObject prefab = templarPreviewPrefab != null ? templarPreviewPrefab : templarBattlePrefab;
+        GameObject prefab = _evolutionPreviewPrefab != null ? _evolutionPreviewPrefab : _evolutionBattlePrefab;
         if (prefab != null)
         {
             Debug.Log($"[Evolution] Spawning evolved preview prefab '{prefab.name}'", this);
             DestroyHeroPreview();
             SpawnPreviewPrefab(prefab);
-            if (templarWorldSpriteOverride != null)
-                ApplyWorldSpriteOverride(_previewGO, templarWorldSpriteOverride);
+            if (_evolutionWorldSpriteOverride != null)
+                ApplyWorldSpriteOverride(_previewGO, _evolutionWorldSpriteOverride);
         }
         else
         {
-            Debug.LogWarning("[Evolution] No evolved preview prefab available (templarPreviewPrefab and templarBattlePrefab are NULL).", this);
+            Debug.LogWarning("[Evolution] No evolved preview prefab available (preview/battle prefab is NULL).", this);
         }
 
         // Fade glow back down
         t = 0f;
         while (t < dur)
         {
-            t += Time.deltaTime;
+            t += Time.unscaledDeltaTime;
             float a = 1f - Mathf.Clamp01(t / dur);
             ApplyPreviewGlow(a);
             yield return null;
@@ -638,7 +742,7 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         float st = 0f;
         while (st < shakeDuration)
         {
-            st += Time.deltaTime;
+            st += Time.unscaledDeltaTime;
             float mag = shakeMagnitude;
             float x = UnityEngine.Random.Range(-mag, mag);
             float y = UnityEngine.Random.Range(-mag, mag);
@@ -653,7 +757,7 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
 
         while (tt < half)
         {
-            tt += Time.deltaTime;
+            tt += Time.unscaledDeltaTime;
             float a = Mathf.Clamp01(tt / half);
             t.localScale = Vector3.Lerp(baseScale, up, a);
             yield return null;
@@ -662,7 +766,7 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         tt = 0f;
         while (tt < half)
         {
-            tt += Time.deltaTime;
+            tt += Time.unscaledDeltaTime;
             float a = Mathf.Clamp01(tt / half);
             t.localScale = Vector3.Lerp(up, baseScale, a);
             yield return null;
@@ -674,13 +778,24 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
     private void OnNextPressed()
     {
         Debug.Log($"[LevelUpReel] Next pressed hero='{(_hero != null ? _hero.name : "NULL")}' pendingEvolutionApply={_pendingEvolutionApply} partyIndex={_partyIndex}");
+        Debug.Log($"[LevelUpReel] Next pressed config pref='{(_evolutionBattlePrefab != null ? _evolutionBattlePrefab.name : "NULL")}' advDef='{(_evolutionAdvancedClassDef != null ? _evolutionAdvancedClassDef.className : "NULL")}' strip='{(_evolutionReelStripTemplate != null ? _evolutionReelStripTemplate.name : "NULL")}'", this);
+
+        if (_spinRoutine != null)
+        {
+            Debug.Log("[LevelUpReel] Next pressed while spin is running. Ignored.", this);
+            return;
+        }
+
+        // Option 3: allow skipping the spin WITHOUT evolving.
+        if (_evolutionEligible && !_pendingEvolutionApply && !_evolutionApplied)
+            Debug.Log("[Evolution] NextPressed without spin. Skipping evolution apply.", this);
 
         if (_pendingEvolutionApply)
         {
             Debug.Log(
                 $"[Evolution] NextPressed -> will apply party prefab swap now. partyIndex={_partyIndex} " +
-                $"advancedPrefab='{(templarBattlePrefab != null ? templarBattlePrefab.name : "NULL")}' " +
-                $"advancedClass='{(templarAdvancedClassDef != null ? templarAdvancedClassDef.className : "NULL")}'", 
+                $"advancedPrefab='{(_evolutionBattlePrefab != null ? _evolutionBattlePrefab.name : "NULL")}' " +
+                $"advancedClass='{(_evolutionAdvancedClassDef != null ? _evolutionAdvancedClassDef.className : "NULL")}'", 
                 this
             );
         }
@@ -693,36 +808,49 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         HideOtherReels(false);
 
         // If we did the evolution animation, apply the actual party prefab swap now.
-        if (_pendingEvolutionApply && battleManager != null)
-        {
-            Debug.Log(
-                $"[Evolution] Applying party evolution swap now. partyIndex={_partyIndex} advancedPrefab='{(templarBattlePrefab != null ? templarBattlePrefab.name : "NULL")}' " +
-                $"advancedClassDef='{(templarAdvancedClassDef != null ? templarAdvancedClassDef.className : "NULL")}' advancedStrip='{(templarReelStripTemplate != null ? templarReelStripTemplate.name : "NULL")}'",
-                this
-            );
-
-            Sprite p = templarPortraitOverride;
-            if (p == null && templarAdvancedClassDef != null)
-                p = templarAdvancedClassDef.portraitSprite;
-
-            bool ok = battleManager.EvolvePartyMemberToAdvanced(
-                _partyIndex,
-                templarBattlePrefab,
-                templarAdvancedClassDef,
-                templarReelStripTemplate,
-                p,
-                templarWorldSpriteOverride
-            );
-
-            Debug.Log($"[LevelUpReel] Evolution apply result={ok}");
-
-            if (ok)
-                Debug.Log("[Evolution] Party prefab swap COMPLETE. Hero should now be the advanced prefab for battle.", this);
-            else
-                Debug.LogWarning("[Evolution] Party prefab swap FAILED. Check errors above (missing prefab/stats/partyIndex).", this);
-        }
+        if (_pendingEvolutionApply && !_evolutionApplied)
+            _evolutionApplied = TryApplyEvolutionSwapNow();
 
         _onDone?.Invoke();
+    }
+
+    private bool TryApplyEvolutionSwapNow()
+    {
+        if (_evolutionApplied) return true;
+        var bm = BattleManager.Instance != null ? BattleManager.Instance : battleManager;
+        if (bm == null) return false;
+        if (_partyIndex < 0) return false;
+        if (_evolutionBattlePrefab == null) return false;
+
+        Trace($"ApplyEvolution start partyIndex={_partyIndex} prefab='{_evolutionBattlePrefab.name}'");
+        Debug.Log(
+            $"[Evolution] Applying party evolution swap now. partyIndex={_partyIndex} advancedPrefab='{(_evolutionBattlePrefab != null ? _evolutionBattlePrefab.name : "NULL")}' " +
+            $"advancedClassDef='{(_evolutionAdvancedClassDef != null ? _evolutionAdvancedClassDef.className : "NULL")}' advancedStrip='{(_evolutionReelStripTemplate != null ? _evolutionReelStripTemplate.name : "NULL")}'",
+            this
+        );
+
+        Sprite p = _evolutionPortraitOverride;
+        if (p == null && _evolutionAdvancedClassDef != null)
+            p = _evolutionAdvancedClassDef.portraitSprite;
+
+        bool ok = bm.EvolvePartyMemberToAdvanced(
+            _partyIndex,
+            _evolutionBattlePrefab,
+            _evolutionAdvancedClassDef,
+            _evolutionReelStripTemplate,
+            p,
+            _evolutionWorldSpriteOverride
+        );
+
+        Debug.Log($"[LevelUpReel] Evolution apply result={ok}");
+        Trace($"ApplyEvolution result={ok}");
+
+        if (ok)
+            Debug.Log("[Evolution] Party prefab swap COMPLETE. Hero should now be the advanced prefab for battle.", this);
+        else
+            Debug.LogWarning("[Evolution] Party prefab swap FAILED. Check errors above (missing prefab/stats/partyIndex).", this);
+
+        return ok;
     }
 
     private void HideOtherReels(bool hide)
@@ -779,7 +907,7 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         GameObject prefab = null;
 
         // Prefer explicit preview prefab for Fighter
-        if (_evolutionEligible && fighterPreviewPrefab != null)
+        if (_evolutionEligible && _usingFallbackEvolutionConfig && fighterPreviewPrefab != null)
             prefab = fighterPreviewPrefab;
 
         // IMPORTANT: Never clone transform.root here.

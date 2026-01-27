@@ -688,6 +688,176 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
 
 
     // ---------------- Party Lookup / Evolution ----------------
+
+[Header("Level 5 Evolution")]
+[Tooltip("Optional mappings from a Base class to the Advanced prefab/defs used when a hero reaches Level 5. " +
+         "If multiple entries match, the first match is used. If no entry matches, evolution is skipped (and the run continues).")]
+[SerializeField] private List<EvolutionMapping> level5EvolutionMappings = new List<EvolutionMapping>();
+
+[Serializable]
+private class EvolutionMapping
+{
+    [Header("Match")]
+    public ClassDefinitionSO requiredBaseClass;
+
+    [Header("Evolve To")]
+    public GameObject advancedPrefab;
+    public ClassDefinitionSO advancedClassDef;
+    public ReelStripSO advancedReelStripTemplate;
+    public Sprite advancedPortraitOverride;
+    public Sprite advancedWorldSpriteOverride;
+}
+
+private bool TryRunLevel5EvolutionNow()
+{
+    if (_party == null || _party.Count == 0) return false;
+
+    bool any = false;
+
+    for (int i = 0; i < _party.Count; i++)
+    {
+        var pm = _party[i];
+        var hs = pm != null ? pm.stats : null;
+        if (hs == null)
+        {
+            Debug.LogWarning($"[Evolution] TryRunLevel5EvolutionNow partyIndex={i} heroStats=NULL. Skipping.", this);
+            continue;
+        }
+
+        // Evolve exactly once, when the hero first reaches Level 5+ and has not yet been evolved.
+        if (hs.Level < 5) continue;
+        if (hs.AdvancedClassDef != null) continue;
+
+        if (!TryGetLevel5EvolutionData(hs,
+            out var advancedPrefab,
+            out var advancedClassDef,
+            out var advancedReelStripTemplate,
+            out var advancedPortraitOverride,
+            out var advancedWorldSpriteOverride))
+        {
+            var baseDef = hs.BaseClassDef;
+            Debug.LogWarning($"[Evolution] No level5EvolutionMappings entry found for hero='{hs.name}' baseClass='{(baseDef != null ? baseDef.className : "NULL")}'. Skipping evolution.");
+            continue;
+        }
+
+        var baseClassName = hs.BaseClassDef != null ? hs.BaseClassDef.className : "NULL";
+        Debug.Log($"[Evolution] Level 5 evolution triggered for hero='{hs.name}' baseClass='{baseClassName}' -> advanced='{(advancedClassDef != null ? advancedClassDef.className : "NULL")}' prefab='{(advancedPrefab != null ? advancedPrefab.name : "NULL")}'.", this);
+
+        bool ok = EvolvePartyMemberToAdvanced(
+            partyIndex: i,
+            advancedPrefab: advancedPrefab,
+            advancedClassDef: advancedClassDef,
+            advancedReelStripTemplate: advancedReelStripTemplate,
+            advancedPortraitOverride: advancedPortraitOverride,
+            advancedWorldSpriteOverride: advancedWorldSpriteOverride);
+
+        if (!ok)
+        {
+            Debug.LogError($"[Evolution] Level 5 evolution FAILED for partyIndex={i} hero='{hs.name}'. Continuing run to avoid soft-lock.", this);
+            continue;
+        }
+
+        any = true;
+    }
+
+    return any;
+}
+
+    public bool TryGetLevel5EvolutionData(
+        HeroStats hero,
+        out GameObject advancedPrefab,
+        out ClassDefinitionSO advancedClassDef,
+        out ReelStripSO advancedReelStripTemplate,
+        out Sprite advancedPortraitOverride,
+        out Sprite advancedWorldSpriteOverride)
+    {
+        advancedPrefab = null;
+        advancedClassDef = null;
+        advancedReelStripTemplate = null;
+        advancedPortraitOverride = null;
+        advancedWorldSpriteOverride = null;
+
+        if (hero == null)
+        {
+            Debug.LogWarning("[Evolution][Mapping] hero NULL. Cannot resolve.", this);
+            return false;
+        }
+        if (hero.Level < 5)
+        {
+            Debug.Log($"[Evolution][Mapping] hero='{hero.name}' level={hero.Level} < 5. Not eligible.", this);
+            return false;
+        }
+        if (hero.AdvancedClassDef != null)
+        {
+            Debug.Log($"[Evolution][Mapping] hero='{hero.name}' already advanced='{hero.AdvancedClassDef.className}'.", this);
+            return false;
+        }
+
+        var baseDef = hero.BaseClassDef;
+        if (baseDef == null)
+        {
+            Debug.LogWarning($"[Evolution][Mapping] hero='{hero.name}' BaseClassDef=NULL.", this);
+            return false;
+        }
+
+        EvolutionMapping match = null;
+        if (level5EvolutionMappings != null)
+        {
+            for (int mi = 0; mi < level5EvolutionMappings.Count; mi++)
+            {
+                var m = level5EvolutionMappings[mi];
+                if (m == null) continue;
+                if (m.requiredBaseClass == null) continue;
+
+                if (m.requiredBaseClass == baseDef)
+                {
+                    match = m;
+                    break;
+                }
+            }
+        }
+
+        if (match == null) return false;
+        if (match.advancedPrefab == null)
+        {
+            Debug.LogWarning($"[Evolution][Mapping] hero='{hero.name}' matched base='{baseDef.className}' but advancedPrefab=NULL.", this);
+            return false;
+        }
+
+        advancedPrefab = match.advancedPrefab;
+        advancedClassDef = match.advancedClassDef;
+        advancedReelStripTemplate = match.advancedReelStripTemplate;
+        advancedPortraitOverride = match.advancedPortraitOverride;
+        advancedWorldSpriteOverride = match.advancedWorldSpriteOverride;
+        Debug.Log($"[Evolution][Mapping] hero='{hero.name}' base='{baseDef.className}' -> prefab='{advancedPrefab.name}' advClass='{(advancedClassDef != null ? advancedClassDef.className : "NULL")}' strip='{(advancedReelStripTemplate != null ? advancedReelStripTemplate.name : "NULL")}' portrait='{(advancedPortraitOverride != null ? advancedPortraitOverride.name : "NULL")}' worldSprite='{(advancedWorldSpriteOverride != null ? advancedWorldSpriteOverride.name : "NULL")}'", this);
+        return true;
+    }
+
+    private bool ShouldOfferEvolutionPanel(HeroStats hero)
+    {
+        if (hero == null) return false;
+        if (hero.Level < 5)
+        {
+            Debug.Log($"[Evolution][Gate] hero='{hero.name}' level={hero.Level} < 5 -> false", this);
+            return false;
+        }
+        if (hero.AdvancedClassDef != null)
+        {
+            Debug.Log($"[Evolution][Gate] hero='{hero.name}' already advanced='{hero.AdvancedClassDef.className}' -> false", this);
+            return false;
+        }
+
+        bool ok = TryGetLevel5EvolutionData(
+            hero,
+            out _,
+            out _,
+            out _,
+            out _,
+            out _);
+        Debug.Log($"[Evolution][Gate] hero='{hero.name}' mappingFound={ok}", this);
+        return ok;
+    }
+
     public int GetPartyIndexForHeroStats(HeroStats hero)
     {
         if (hero == null || _party == null) return -1;
@@ -738,6 +908,9 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
         }
 
         HeroStats oldStats = m.stats;
+        List<AbilityDefinitionSO> baseUnlocked = null;
+        if (oldStats != null && oldStats.BaseClassDef != null)
+            baseUnlocked = oldStats.GetUnlockedAbilitiesFromClassDef(oldStats.BaseClassDef);
         Debug.Log(
             $"[Evolution] Old hero instance='{(m.avatarGO != null ? m.avatarGO.name : "NULL")}' stats='{(oldStats != null ? oldStats.name : "NULL")}' level={(oldStats != null ? oldStats.Level : 0)}",
             this
@@ -818,6 +991,16 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
         // Ensure advanced class abilities are available immediately.
         if (advancedClassDef != null)
             newStats.ForceUnlockAllAbilitiesFromClassDef(advancedClassDef, includeStarterChoice: true);
+        if (baseUnlocked != null)
+        {
+            for (int i = 0; i < baseUnlocked.Count; i++)
+            {
+                var a = baseUnlocked[i];
+                if (a == null) continue;
+                newStats.IsAbilityUnlocked(a);
+            }
+        }
+        newStats.MarkEvolutionResolved();
 
 
         // Destroy old avatar
@@ -2730,6 +2913,8 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
 
     private IEnumerator HandleEncounterVictoryRoutine()
     {
+        
+        Debug.Log("[BattleManager] HandleEncounterVictoryRoutine (EVOLUTION-FIRST BUILD)", this);
         Debug.Log($"[Battle] Victory detected. Starting post-battle flow. time={Time.time:0.00}", this);
 
         if (_postBattleRunning)
@@ -2785,6 +2970,8 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
             bool resultsDone = false;
             postBattleResultsPanel.Show(goldGained, summaries, () =>
             {
+                if (logFlow)
+                    Debug.Log($"[PostBattle][Results] Continue clicked. heroes={(heroes != null ? heroes.Count : 0)}", this);
                 if (heroes != null)
                 {
                     for (int hi = 0; hi < heroes.Count; hi++)
@@ -2793,20 +2980,81 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
                 }
 
                 performanceTracker.ApplySummaries(summaries);
+
+                // Resolve any level-ups that were queued while leveling was disabled.
+                if (heroes != null)
+                {
+                    for (int hi = 0; hi < heroes.Count; hi++)
+                    {
+                        var h = heroes[hi];
+                        if (h == null) continue;
+                        if (logFlow)
+                            Debug.Log($"[PostBattle][Results] Before pending resolve hero='{h.name}' level={h.Level} pendingLevelUps={h.PendingLevelUps} allowLevelUps={h.AllowLevelUps}", this);
+                        while (h.PendingLevelUps > 0)
+                            h.SpendOnePendingLevelUp();
+                        if (logFlow)
+                            Debug.Log($"[PostBattle][Results] After pending resolve hero='{h.name}' level={h.Level} pendingLevelUps={h.PendingLevelUps} allowLevelUps={h.AllowLevelUps}", this);
+                    }
+                }
                 resultsDone = true;
             });
             yield return new WaitUntil(() => resultsDone);
 
             postBattleResultsPanel.Hide();
+
+        }
+
+        // Level 5 evolution: show the evolution panel immediately after Results -> Continue,
+        // then resume the normal flow (ability upgrades, rewards, etc.).
+        bool evolutionShown = false;
+        if (_party != null && _party.Count > 0)
+        {
+            Debug.Log($"[Evolution][Flow] Checking evolution panel eligibility. partyCount={_party.Count} postBattleReelUpgradeMinigamePanel={(postBattleReelUpgradeMinigamePanel != null ? postBattleReelUpgradeMinigamePanel.name : "NULL")}", this);
+            if (postBattleReelUpgradeMinigamePanel != null)
+            {
+                for (int i = 0; i < _party.Count; i++)
+                {
+                    HeroStats hs = _party[i] != null ? _party[i].stats : null;
+                    if (hs == null)
+                    {
+                        Debug.LogWarning($"[Evolution][Flow] PartyIndex={i} heroStats=NULL. Skipping.", this);
+                        continue;
+                    }
+
+                    bool offer = ShouldOfferEvolutionPanel(hs);
+                    Debug.Log($"[Evolution][Flow] PartyIndex={i} hero='{hs.name}' level={hs.Level} baseClass='{(hs.BaseClassDef != null ? hs.BaseClassDef.className : "NULL")}' advanced='{(hs.AdvancedClassDef != null ? hs.AdvancedClassDef.className : "NULL")}' offerPanel={offer}", this);
+                    if (!offer) continue;
+
+                    if (!postBattleReelUpgradeMinigamePanel.gameObject.activeSelf)
+                        postBattleReelUpgradeMinigamePanel.gameObject.SetActive(true);
+
+                    bool done = false;
+                    Debug.Log($"[Evolution][Flow] Showing evolution panel for hero='{hs.name}' partyIndex={i}", this);
+                    postBattleReelUpgradeMinigamePanel.Show(hs, () => done = true);
+                    yield return new WaitUntil(() => done);
+                    postBattleReelUpgradeMinigamePanel.Hide();
+
+                    evolutionShown = true;
+                }
+            }
+            else if (TryRunLevel5EvolutionNow())
+            {
+                evolutionShown = true;
+            }
+
+            if (evolutionShown)
+                Debug.Log("[Evolution] Level 5 evolution complete. Resuming normal post-battle flow.", this);
         }
 
         // Ability choice (starts at level 2). Resolve AFTER reel upgrades so the hero stays consistent with existing flow.
         if (_party != null && _party.Count > 0)
         {
-            if (postBattleAbilityUpgradePanel != null)
+            if (evolutionShown)
             {
-                postBattleAbilityUpgradePanel.gameObject.SetActive(true);
-
+                Debug.Log("[PostBattle][AbilityUpgrade] Skipping ability upgrade panel because evolution was shown this battle.", this);
+            }
+            else if (postBattleAbilityUpgradePanel != null)
+            {
                 for (int i = 0; i < _party.Count; i++)
                 {
                     HeroStats hs = _party[i] != null ? _party[i].stats : null;
@@ -2822,8 +3070,12 @@ HasBlockPreview = (shield <= 0) && (_previewPartyTargetIndex == index) && _await
                         if (options == null || options.Count == 0)
                         {
                             Debug.LogWarning($"[PostBattle][AbilityUpgrade] No ability options for hero='{hs.name}' unlockLevel={unlockLevel}. Consuming pending choice to avoid soft-lock.");
+                            hs.TryConsumeNextPendingAbilityChoiceWithoutSelection();
                             continue;
                         }
+
+                        if (!postBattleAbilityUpgradePanel.gameObject.activeSelf)
+                            postBattleAbilityUpgradePanel.gameObject.SetActive(true);
 
                         bool done = false;
                         Debug.Log($"[PostBattle][AbilityUpgrade] Showing panel for hero='{hs.name}' unlockLevel={unlockLevel} options={options.Count}");

@@ -37,7 +37,10 @@ public class HeroStats : MonoBehaviour
     [Tooltip("How many level-ups are queued to be resolved at the campfire.")]
     [SerializeField] private int pendingLevelUps = 0;
 
-    // ---------------- Core Stats ----------------
+    
+    [Tooltip("True when this hero has reached the evolution threshold (Level 5) and should be offered an Advanced class choice post-battle.")]
+    [SerializeField] private bool evolutionPending = false;
+// ---------------- Core Stats ----------------
     [Header("Core Stats")]
     [SerializeField] private int maxHp = 100;
     [SerializeField] private int attack = 3;
@@ -193,7 +196,22 @@ public class HeroStats : MonoBehaviour
     public int PendingAbilityChoices => (pendingAbilityChoiceLevels != null) ? pendingAbilityChoiceLevels.Count : 0;
     public int NextPendingAbilityChoiceLevel => HasPendingAbilityChoices ? pendingAbilityChoiceLevels[0] : -1;
 
+    
+    // ---------------- Evolution (Level 5) ----------------
+    public bool HasPendingEvolution =>
+        evolutionPending && level >= 5 && baseClassDef != null && advancedClassDef == null;
+
     /// <summary>
+    /// Marks evolution as resolved (e.g., after choosing an advanced class, or if you intentionally skip evolution).
+    /// </summary>
+    public void MarkEvolutionResolved()
+    {
+        if (!evolutionPending) return;
+        evolutionPending = false;
+        NotifyChanged();
+    }
+
+/// <summary>
     /// Returns up to <paramref name="count"/> ability options for the specified unlock level.
     /// Options are pulled from the hero's base class and (if present) advanced class definitions.
     /// Starter-choice abilities are excluded; this panel is for learned abilities.
@@ -204,9 +222,31 @@ public class HeroStats : MonoBehaviour
         List<AbilityDefinitionSO> options = new List<AbilityDefinitionSO>();
         if (count <= 0) return options;
 
-        AddAbilityOptionsFromClassDef(baseClassDef, unlockLevel, count, options);
-        AddAbilityOptionsFromClassDef(advancedClassDef, unlockLevel, count, options);
-        Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlockLevel} optionsCount={options.Count} first={(options.Count>0?options[0].abilityName:"<none>")} second={(options.Count>1?options[1].abilityName:"<none>")}");
+        // If advanced class is present, prefer advanced-only options (don't mix base options).
+        if (advancedClassDef != null)
+        {
+            AddAbilityOptionsFromClassDef(advancedClassDef, unlockLevel, count, options);
+        }
+        else
+        {
+            AddAbilityOptionsFromClassDef(baseClassDef, unlockLevel, count, options);
+        }
+        
+        // Level 5 special: if there are no exact-match options at unlockLevel 5,
+        // fall back to offering up to 'count' not-yet-unlocked abilities from the (current) class defs
+        // whose unlockAtLevel <= 5. This supports the "Evolution AND Ability" moment even if data
+        // doesn't have explicit unlockAtLevel=5 entries.
+        if (options.Count == 0 && unlockLevel == 5)
+        {
+            if (advancedClassDef != null)
+                AddFallbackAbilityOptionsFromClassDef(advancedClassDef, unlockLevel, count, options);
+            else
+                AddFallbackAbilityOptionsFromClassDef(baseClassDef, unlockLevel, count, options);
+
+            Debug.Log($"[Hero][AbilityUpgrade] Level5 fallback options hero='{name}' unlockLevel={unlockLevel} optionsCount={options.Count} first={(options.Count>0?options[0].abilityName:"<none>")} second={(options.Count>1?options[1].abilityName:"<none>")}");
+        }
+
+Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlockLevel} optionsCount={options.Count} first={(options.Count>0?options[0].abilityName:"<none>")} second={(options.Count>1?options[1].abilityName:"<none>")}");
 
         return options;
     }
@@ -251,6 +291,28 @@ public class HeroStats : MonoBehaviour
                 options.Add(a);
         }
     }
+    
+    private void AddFallbackAbilityOptionsFromClassDef(ClassDefinitionSO classDef, int unlockLevel, int maxCount, List<AbilityDefinitionSO> options)
+    {
+        if (classDef == null) return;
+        if (options == null) return;
+
+        foreach (AbilityDefinitionSO a in EnumerateClassAbilities(classDef))
+        {
+            if (options.Count >= maxCount) break;
+            if (a == null) continue;
+            if (a.starterChoice) continue;
+
+            // Only offer abilities that should already be unlocked by (or before) this level,
+            // and that are not already permanently unlocked.
+            int req = Mathf.Max(1, a.unlockAtLevel);
+            if (req > unlockLevel) continue;
+            if (permanentlyUnlockedAbilities.Contains(a)) continue;
+
+            if (!options.Contains(a))
+                options.Add(a);
+        }
+    }
 
     /// <summary>
     /// Accepts the chosen ability for the next pending choice level (if any), permanently unlocking it.
@@ -285,7 +347,22 @@ public class HeroStats : MonoBehaviour
         return true;
     }
 
+    
     /// <summary>
+    /// Defensive escape hatch: consumes the next pending ability-choice level without unlocking anything.
+    /// Use this when data is misconfigured (no valid options) so the post-battle flow cannot soft-lock.
+    /// </summary>
+    public bool TryConsumeNextPendingAbilityChoiceWithoutSelection()
+    {
+        if (!HasPendingAbilityChoices) return false;
+        int lvl = pendingAbilityChoiceLevels[0];
+        pendingAbilityChoiceLevels.RemoveAt(0);
+        Debug.LogWarning($"[Hero][AbilityUpgrade] Consumed pending ability choice WITHOUT selection hero='{name}' unlockLevel={lvl} remainingPending={pendingAbilityChoiceLevels.Count}");
+        NotifyChanged();
+        return true;
+    }
+
+/// <summary>
     /// Returns true if this hero should be allowed to use the given ability right now,
     /// based on Starter Choice rules + unlock level gating + persistent unlocks.
     ///
@@ -740,7 +817,9 @@ public class HeroStats : MonoBehaviour
         {
             if (!CanUpgradeTo(def)) return;
             advancedClassDef = def;
-        }
+        
+            evolutionPending = false;
+}
 
         // Apply definition modifiers
         canBlock = def.canBlock;
@@ -1024,7 +1103,10 @@ public class HeroStats : MonoBehaviour
         if (level >= maxLevel) return;
         level += 1;
 
-        // Stat growth is defined by the hero's active class (Advanced if present, else Base).
+        
+        // Level 5 is the evolution threshold.
+        if (level == 5) evolutionPending = true;
+// Stat growth is defined by the hero's active class (Advanced if present, else Base).
         // If no class is assigned yet, fall back to the previous default growth.
         ClassDefinitionSO growthDef = GetActiveClassDefinition();
 
@@ -1414,6 +1496,7 @@ public class HeroStats : MonoBehaviour
         xpToNextLevel = src.xpToNextLevel;
         allowLevelUps = src.allowLevelUps;
         pendingLevelUps = src.pendingLevelUps;
+        evolutionPending = src.evolutionPending;
 
         // Primary stats
         maxHp = src.maxHp;
@@ -1466,6 +1549,9 @@ public class HeroStats : MonoBehaviour
         permanentlyUnlockedAbilities = (src.permanentlyUnlockedAbilities != null)
             ? new List<AbilityDefinitionSO>(src.permanentlyUnlockedAbilities)
             : new List<AbilityDefinitionSO>();
+        pendingAbilityChoiceLevels = (src.pendingAbilityChoiceLevels != null)
+            ? new List<int>(src.pendingAbilityChoiceLevels)
+            : new List<int>();
 
         // Reel upgrades + rules
         upgradeReelOnLevelUp = src.upgradeReelOnLevelUp;

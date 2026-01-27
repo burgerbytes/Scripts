@@ -64,6 +64,17 @@ public class PostBattleAbilityUpgradePanel : MonoBehaviour
         int unlockLevel = (_hero != null) ? _hero.NextPendingAbilityChoiceLevel : -1;
         List<AbilityDefinitionSO> options = (_hero != null) ? _hero.GetAbilityChoiceOptionsForLevel(unlockLevel, 2) : null;
 
+        // Defensive: never allow a misconfigured unlock level to soft-lock the run.
+        if (_hero != null && (options == null || options.Count == 0))
+        {
+            Debug.LogWarning($"[UI][AbilityUpgradePanel] No options for hero='{_hero.name}' unlockLevel={unlockLevel}. Consuming pending choice and continuing.");
+            _hero.TryConsumeNextPendingAbilityChoiceWithoutSelection();
+            Hide();
+            _onDone?.Invoke();
+            return;
+        }
+
+
         _opt1 = (options != null && options.Count > 0) ? options[0] : null;
         _opt2 = (options != null && options.Count > 1) ? options[1] : null;
         Debug.Log($"[UI][AbilityUpgradePanel] Show hero='{(_hero!=null?_hero.name:"<null>")}' unlockLevel={unlockLevel} optionsCount={(options!=null?options.Count:0)} opt1='{(_opt1!=null?_opt1.abilityName:"<none>")}' opt2='{(_opt2!=null?_opt2.abilityName:"<none>")}'");
