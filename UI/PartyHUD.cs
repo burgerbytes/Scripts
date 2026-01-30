@@ -255,7 +255,61 @@ public class PartyHUD : MonoBehaviour
         }
     }
 
-    private void OnSlotClicked(int index)
+    // Called by ReelcraftAbilityButtonForwarder (and potentially other UI) to open Reelcraft for a given party index.
+    // This mirrors the reel-phase click behavior in OnSlotClicked, but does not depend on the portrait button.
+    public void OpenReelcraftForPartyIndex(int index)
+    {
+        if (debugLogs)
+            Debug.Log($"[PartyHUD] OpenReelcraftForPartyIndex(index={index})", this);
+
+        if (battleManager == null)
+        {
+            Debug.LogWarning("[PartyHUD] Missing BattleManager reference.");
+            return;
+        }
+
+        // Ensure we have a ReelSpinSystem ref even if inspector wiring is missing.
+        if (reelSpinSystem == null)
+            reelSpinSystem = FindFirstObjectByType<ReelSpinSystem>();
+
+        if (reelSpinSystem != null && !reelSpinSystem.InReelPhase)
+        {
+            if (debugLogs)
+                Debug.Log("[PartyHUD] Not in reel phase; ignoring OpenReelcraftForPartyIndex.", this);
+            return;
+        }
+
+        EnsureReelcraftPanelRef();
+
+        battleManager.SetActivePartyMember(index);
+        _selectedIndex = index;
+        _panelVisible = false;
+
+        if (abilityMenu != null) abilityMenu.Close();
+        if (statsPanel != null) statsPanel.Hide();
+
+        if (reelcraftPanel != null)
+        {
+            reelcraftPanel.ShowForHero(index);
+            ForceShowReelcraftPanelNow();
+        }
+        else
+        {
+            Debug.LogWarning("[PartyHUD] ReelcraftPanelUI was not found (even including inactive).");
+        }
+
+        // Highlight selection, but do not show the normal action panel.
+        for (int i = 0; i < slots.Length; i++)
+        {
+            if (slots[i] == null) continue;
+            slots[i].SetSelected(i == _selectedIndex);
+            slots[i].SetActionPanelVisible(false);
+        }
+
+        RefreshAllSlots();
+    }
+
+void OnSlotClicked(int index)
     {
         if (debugLogs)
             Debug.Log($"[PartyHUD] OnSlotClicked(index={index})", this);
