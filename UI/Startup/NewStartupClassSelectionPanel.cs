@@ -618,7 +618,7 @@ public class NewStartupClassSelectionPanel : MonoBehaviour
         if (reelcraftDescText != null)
             reelcraftDescText.text = (classDef != null) ? classDef.reelcraftDescription : "";
 
-        // ✅ NEW: reelcraft icon
+        // NEW: reelcraft icon
         ApplyReelcraftIcon(classDef);
 
         if (startingAbilityHeaderText != null)

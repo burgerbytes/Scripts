@@ -1,3 +1,4 @@
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -12,9 +13,15 @@ public class InfoPanelController : MonoBehaviour
     [Tooltip("Background button object (BG). Clicking it closes the panel.")]
     [SerializeField] private Button backgroundButton;
 
+    [Header("Content UI")]
+    [SerializeField] private TMP_Text titleText;
+    [SerializeField] private TMP_Text bodyText;
+    [SerializeField] private Image iconImage;
+
     [Header("Debug")]
     [SerializeField] private bool logFlow = true;
 
+    [SerializeField] private ReelDisableManager reelDisableManager;
     public bool IsOpen => (infoPanelRoot != null ? infoPanelRoot.activeInHierarchy : gameObject.activeInHierarchy);
 
     private void Awake()
@@ -45,33 +52,42 @@ public class InfoPanelController : MonoBehaviour
             backgroundButton.onClick.RemoveListener(OnBackgroundClicked);
     }
 
+    public void Show(InfoPanelData data)
+    {
+        if (titleText != null) titleText.text = data.title ?? "";
+        if (bodyText != null) bodyText.text = data.body ?? "";
+
+        if (iconImage != null)
+        {
+            iconImage.sprite = data.image;
+            iconImage.enabled = (data.image != null);
+            iconImage.preserveAspect = true;
+        }
+
+        Open();
+    }
+
     public void Open()
     {
-        if (infoPanelRoot == null) infoPanelRoot = gameObject;
+        if (infoPanelRoot == null)
+            infoPanelRoot = gameObject;
 
         if (!infoPanelRoot.activeSelf)
         {
             infoPanelRoot.SetActive(true);
-            if (logFlow) Debug.Log($"{TAG} OPEN (root enabled)", this);
-        }
-        else
-        {
-            if (logFlow) Debug.Log($"{TAG} OPEN requested (already open)", this);
+            reelDisableManager?.DisableReels();
         }
     }
 
     public void Close()
     {
-        if (infoPanelRoot == null) infoPanelRoot = gameObject;
+        if (infoPanelRoot == null)
+            infoPanelRoot = gameObject;
 
         if (infoPanelRoot.activeSelf)
         {
             infoPanelRoot.SetActive(false);
-            if (logFlow) Debug.Log($"{TAG} CLOSE (root disabled)", this);
-        }
-        else
-        {
-            if (logFlow) Debug.Log($"{TAG} CLOSE requested (already closed)", this);
+            reelDisableManager?.EnableReels();
         }
     }
 
@@ -79,5 +95,10 @@ public class InfoPanelController : MonoBehaviour
     {
         if (logFlow) Debug.Log($"{TAG} BG CLICK -> close", this);
         Close();
+    }
+
+    private void OnDisable()
+    {
+        reelDisableManager?.EnableReels();
     }
 }

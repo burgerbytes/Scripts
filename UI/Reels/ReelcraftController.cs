@@ -211,6 +211,11 @@ public class ReelcraftController : MonoBehaviour
         _usedThisBattle = (count > 0) ? new bool[count] : Array.Empty<bool>();
         _measuredBashInProgress = (count > 0) ? new bool[count] : Array.Empty<bool>();
 
+        // After party is created/populated:
+        var buttons = GetComponentsInChildren<ReelcraftAbilityButtonForwarder>(true);
+        Debug.Log($"[Reelcraft] ResetForBattle found forwarders={buttons.Length} on '{name}'", this);
+        foreach (var b in buttons)
+            b.ForceResync();
         if (logFlow)
             Debug.Log($"[Reelcraft] ResetForBattle. partyCount={count}", this);
     }

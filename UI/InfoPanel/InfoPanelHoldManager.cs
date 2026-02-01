@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.UI;
 
 public class InfoPanelHoldManager : MonoBehaviour
 {
@@ -24,6 +25,11 @@ public class InfoPanelHoldManager : MonoBehaviour
     private float holdTimer;
     private bool triggered;
 
+    // For "buttons open on click"
+    private bool pendingClickOnButton;
+    private InfoPanelData pendingClickData;
+    private GameObject pendingClickSourceGO;
+
     private void Update()
     {
         HandleHoldInput();
@@ -37,15 +43,44 @@ public class InfoPanelHoldManager : MonoBehaviour
             triggered = false;
             holdTimer = 0f;
 
+            // If we pressed down on a UI Button with InfoPanelContent, allow click-to-open on mouse up.
+            pendingClickOnButton = false;
+            pendingClickSourceGO = null;
+            pendingClickData = default;
+
+            if (TryGetInspectableUnderCursor(out var go, out var data, out var isUIButton) && isUIButton)
+            {
+                pendingClickOnButton = true;
+                pendingClickSourceGO = go;
+                pendingClickData = data;
+
+                if (logFlow)
+                    Debug.Log($"{LOG_TAG} CLICK CANDIDATE (UIButton) '{go.name}'", this);
+            }
+
             if (logFlow)
                 Debug.Log($"{LOG_TAG} HOLD START", this);
         }
 
         if (Input.GetMouseButtonUp(0))
         {
+            // If this was a simple click (hold not triggered) and we pressed on a UI Button, open now.
+            if (!triggered && pendingClickOnButton && pendingClickSourceGO != null)
+            {
+                if (logFlow)
+                    Debug.Log($"{LOG_TAG} CLICK OPEN (UIButton) '{pendingClickSourceGO.name}'", this);
+
+                ShowOrOpenFallback(pendingClickSourceGO, pendingClickData);
+            }
+
             holding = false;
             holdTimer = 0f;
             triggered = false;
+
+            pendingClickOnButton = false;
+            pendingClickSourceGO = null;
+            pendingClickData = default;
+
             return;
         }
 
@@ -67,6 +102,33 @@ public class InfoPanelHoldManager : MonoBehaviour
 
     private void TryOpenInfoPanel()
     {
+        // "Any object can be inspectable":
+        // If anything under cursor has InfoPanelContent, show it.
+        if (TryGetInspectableUnderCursor(out var go, out var data, out var isUIButton))
+        {
+            if (logFlow)
+                Debug.Log($"{LOG_TAG} INSPECT '{go.name}' (isUIButton={isUIButton})", this);
+
+            ShowOrOpenFallback(go, data);
+            return;
+        }
+
+        if (logFlow)
+            Debug.Log($"{LOG_TAG} Nothing inspectable under cursor", this);
+    }
+
+    /// <summary>
+    /// Finds an inspectable under the cursor.
+    /// Priority: UI (EventSystem raycast) -> World 2D collider (Physics2D raycast).
+    /// Inspectable = anything with InfoPanelContent in parents.
+    /// Also returns whether that inspectable is a UI Button (for click-to-open behavior).
+    /// </summary>
+    private bool TryGetInspectableUnderCursor(out GameObject sourceGO, out InfoPanelData data, out bool isUIButton)
+    {
+        sourceGO = null;
+        data = default;
+        isUIButton = false;
+
         // 1) UI raycast first
         if (EventSystem.current != null)
         {
@@ -80,26 +142,19 @@ public class InfoPanelHoldManager : MonoBehaviour
 
             foreach (var result in results)
             {
-                // Ability
-                var abilityBtn = result.gameObject.GetComponentInParent<AbilityButtonUI>();
-                if (abilityBtn != null)
+                if (result.gameObject == null)
+                    continue;
+
+                if (TryGetInfoFromGO(result.gameObject, out var uiData, out var contentGO))
                 {
-                    if (logFlow)
-                        Debug.Log($"{LOG_TAG} UI hit AbilityButtonUI '{abilityBtn.name}'", this);
+                    sourceGO = contentGO;
+                    data = uiData;
 
-                    OpenInfoPanel();
-                    return;
-                }
+                    // "Button" means a Unity UI Button is present on the object or its parents.
+                    var btn = result.gameObject.GetComponentInParent<Button>();
+                    isUIButton = (btn != null);
 
-                // Hero slot
-                var heroSlot = result.gameObject.GetComponentInParent<PartyHUDSlot>();
-                if (heroSlot != null)
-                {
-                    if (logFlow)
-                        Debug.Log($"{LOG_TAG} UI hit PartyHUDSlot index={heroSlot.PartyIndex}", this);
-
-                    OpenInfoPanel();
-                    return;
+                    return true;
                 }
             }
         }
@@ -109,7 +164,7 @@ public class InfoPanelHoldManager : MonoBehaviour
         if (cam == null)
         {
             Debug.LogWarning($"{LOG_TAG} No world camera assigned and Camera.main is null. Cannot raycast 2D world.", this);
-            return;
+            return false;
         }
 
         Vector3 screen = Input.mousePosition;
@@ -120,30 +175,16 @@ public class InfoPanelHoldManager : MonoBehaviour
 
         if (hit2D.collider != null)
         {
-            var monster = hit2D.collider.GetComponentInParent<Monster>();
-            if (monster != null)
+            if (TryGetInfoFromGO(hit2D.collider.gameObject, out var worldData, out var contentGO))
             {
-                if (logFlow)
-                    Debug.Log($"{LOG_TAG} World(2D) hit Monster '{monster.name}' via collider='{hit2D.collider.name}'", this);
-
-                OpenInfoPanel();
-                return;
-            }
-
-            // Hero (world)
-            var heroStats = hit2D.collider.GetComponentInParent<HeroStats>();
-            if (heroStats != null)
-            {
-                if (logFlow)
-                    Debug.Log($"{LOG_TAG} World(2D) hit HeroStats heroGO='{heroStats.gameObject.name}' via collider='{hit2D.collider.name}'", this);
-
-                OpenInfoPanel();
-                return;
+                sourceGO = contentGO;
+                data = worldData;
+                isUIButton = false;
+                return true;
             }
 
             if (logFlow)
-                Debug.Log($"{LOG_TAG} World(2D) hit '{hit2D.collider.name}' but no Monster/Hero found in parents", this);
-
+                Debug.Log($"{LOG_TAG} World(2D) hit '{hit2D.collider.name}' but no InfoPanelContent found in parents", this);
         }
         else
         {
@@ -151,11 +192,37 @@ public class InfoPanelHoldManager : MonoBehaviour
                 Debug.Log($"{LOG_TAG} World(2D) hit nothing", this);
         }
 
-        if (logFlow)
-            Debug.Log($"{LOG_TAG} Nothing inspectable under cursor", this);
+        return false;
     }
 
-    private void OpenInfoPanel()
+    /// <summary>
+    /// Looks for InfoPanelContent in parents and extracts InfoPanelData.
+    /// Returns contentGO as the GameObject that actually owns the InfoPanelContent.
+    /// </summary>
+    private bool TryGetInfoFromGO(GameObject go, out InfoPanelData data, out GameObject contentGO)
+    {
+        data = default;
+        contentGO = null;
+
+        if (go == null)
+            return false;
+
+        var content = go.GetComponentInParent<InfoPanelContent>();
+        if (content == null)
+            return false;
+
+        contentGO = content.gameObject;
+
+        // Assumes your InfoPanelContent has TryGetData(out InfoPanelData)
+        if (content.TryGetData(out data))
+            return true;
+
+        // If it exists but returns false, we still treat it as inspectable,
+        // but will fall back to opening the panel.
+        return true;
+    }
+
+    private void ShowOrOpenFallback(GameObject sourceGO, InfoPanelData data)
     {
         if (infoPanel == null)
         {
@@ -163,9 +230,25 @@ public class InfoPanelHoldManager : MonoBehaviour
             return;
         }
 
-        if (logFlow)
-            Debug.Log($"{LOG_TAG} OPEN InfoPanel", this);
+        // If InfoPanelContent exists but has empty data, fall back to just opening.
+        // (InfoPanelController.Show may also handle empty fine, but this keeps behavior predictable.)
+        bool hasTitle = !string.IsNullOrWhiteSpace(data.title);
+        bool hasBody = !string.IsNullOrWhiteSpace(data.body);
+        bool hasImage = (data.image != null);
 
-        infoPanel.Open();
+        if (hasTitle || hasBody || hasImage)
+        {
+            if (logFlow)
+                Debug.Log($"{LOG_TAG} SHOW InfoPanel data from '{(sourceGO != null ? sourceGO.name : "null")}'", this);
+
+            infoPanel.Show(data);
+        }
+        else
+        {
+            if (logFlow)
+                Debug.Log($"{LOG_TAG} OPEN InfoPanel (no data) source='{(sourceGO != null ? sourceGO.name : "null")}'", this);
+
+            infoPanel.Open();
+        }
     }
 }

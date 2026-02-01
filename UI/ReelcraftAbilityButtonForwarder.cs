@@ -85,44 +85,41 @@ public class ReelcraftAbilityButtonForwarder : MonoBehaviour
 
     private IEnumerator InitAndSyncIcon()
     {
-        // If we don't even know our party index, try resolving again once the hierarchy is stable.
-        if (_partyIndex < 0)
-            _partyIndex = ResolvePartyIndexRobust(_slot, transform);
+    // Re-resolve in case prefab/hierarchy changed or PartyHUDSlot wasn't present at Awake time.
+    if (_partyIndex < 0)
+        _partyIndex = ResolvePartyIndexRobust(_slot, transform);
 
-        if (_partyIndex < 0)
+    float start = Time.unscaledTime;
+    BattleManager bm = null;
+
+    while (Time.unscaledTime - start < initTimeoutSeconds)
+    {
+        if (bm == null)
+            bm = FindFirstObjectByType<BattleManager>(FindObjectsInactive.Include);
+
+        if (bm != null && _partyIndex >= 0)
         {
-            Debug.LogWarning($"[ReelcraftAbilityButtonForwarder] Cannot resolve party index for '{name}'. Icon + click will not work.", this);
-            SyncIconFromHero(null);
-            yield break;
-        }
+            var hero = SafeGetHeroAtPartyIndex(bm, _partyIndex);
 
-        // Keep trying until BattleManager exists and has a hero at this index.
-        float start = Time.unscaledTime;
+            if (debugLogs)
+                Debug.Log($"[ReelcraftAbilityButtonForwarder] InitAndSyncIcon tick. bm={(bm != null)} hero={(hero != null)} partyIndex={_partyIndex}", this);
 
-        BattleManager bm = null;
-        HeroStats hero = null;
-
-        while (Time.unscaledTime - start < Mathf.Max(0.5f, initTimeoutSeconds))
-        {
-            bm = FindFirstObjectByType<BattleManager>();
-            if (bm != null)
+            if (hero != null)
             {
-                hero = SafeGetHeroAtPartyIndex(bm, _partyIndex);
-                if (hero != null)
-                    break;
+                SyncIconFromHero(hero);
+                yield break;
             }
-            yield return null;
         }
 
-        if (debugLogs)
-        {
-            Debug.Log(
-                $"[ReelcraftAbilityButtonForwarder] InitAndSyncIcon done. bm={(bm != null)} hero={(hero != null)} partyIndex={_partyIndex}",
-                this);
-        }
-
-        SyncIconFromHero(hero);
+        yield return null;
     }
+
+    // Timed out: apply fallback (if any) and optionally hide.
+    if (debugLogs)
+        Debug.LogWarning($"[ReelcraftAbilityButtonForwarder] InitAndSyncIcon timed out. bm={(bm != null)} hero=false partyIndex={_partyIndex}", this);
+
+    SyncIconFromHero(null);
+}
 
     private void HandleClicked()
     {
@@ -339,4 +336,15 @@ public class ReelcraftAbilityButtonForwarder : MonoBehaviour
 
         return null;
     }
+
+    public void ForceResync()
+    {
+    if (!isActiveAndEnabled) return;
+
+    if (_initRoutine != null)
+        StopCoroutine(_initRoutine);
+
+    _initRoutine = StartCoroutine(InitAndSyncIcon());
+}
+
 }
