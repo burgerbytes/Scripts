@@ -40,7 +40,19 @@ public class ReelSpinSystem : MonoBehaviour
 
     [Header("Spin Control")]
     [SerializeField] private int spinsPerTurn = 3;
+
+    [Tooltip("Main Spin button (calls TrySpin). Optional: if left null, ReelSpinSystem will try to auto-find a Button named 'SpinButton'.")]
+    [SerializeField] private Button spinButton;
+
+    [Tooltip("Cashout/Stop button (same as your Cashout button).")]
     [SerializeField] private Button stopSpinningButton;
+
+    [Header("Cashout Behavior")]
+    [Tooltip("If true, cashing out will NOT disable/hide the 3D reel objects. This keeps the reels available for future mid-battle spins.")]
+    [SerializeField] private bool keepReelsEnabledAfterCashout = true;
+
+    [Tooltip("If true, cashing out will close the ReelShutterController (if assigned). Leave false if you want reels visible after cashout.")]
+    [SerializeField] private bool closeShuttersOnCashout = false;
 
     [Header("Shutters / Post-Spin Space")]
     [Tooltip("Optional. If set, pressing Cashout/Stop will close shutters and disable spin/cashout + 3D reels.\n" +
@@ -230,6 +242,30 @@ public class ReelSpinSystem : MonoBehaviour
         if (stopSpinningButton != null)
             stopSpinningButton.onClick.AddListener(StopSpinningAndCollect);
 
+        // Optional: wire Spin button automatically.
+        if (spinButton == null)
+        {
+            var allButtons = Resources.FindObjectsOfTypeAll<Button>();
+            for (int i = 0; i < allButtons.Length; i++)
+            {
+                var b = allButtons[i];
+                if (b == null) continue;
+                if (b.gameObject == null) continue;
+                if (!b.gameObject.scene.IsValid()) continue;
+                if (b.gameObject.name == "SpinButton")
+                {
+                    spinButton = b;
+                    break;
+                }
+            }
+        }
+
+        if (spinButton != null)
+        {
+            spinButton.onClick.RemoveListener(TrySpin);
+            spinButton.onClick.AddListener(TrySpin);
+        }
+
         if (shutterController == null)
             shutterController = FindFirstObjectByType<ReelShutterController>();
 
@@ -249,6 +285,9 @@ public class ReelSpinSystem : MonoBehaviour
     {
         if (stopSpinningButton != null)
             stopSpinningButton.onClick.RemoveListener(StopSpinningAndCollect);
+
+        if (spinButton != null)
+            spinButton.onClick.RemoveListener(TrySpin);
     }
 
     public void BeginTurn()
@@ -259,6 +298,10 @@ public class ReelSpinSystem : MonoBehaviour
         // Cashout must always be available during reel phase.
         if (stopSpinningButton != null)
             stopSpinningButton.interactable = true;
+
+        // Spin is enabled at the start of each turn.
+        if (spinButton != null)
+            spinButton.interactable = true;
 
         // New reel phase -> clear any previous landed state.
         _currentLandedSymbols = null;
@@ -1078,8 +1121,12 @@ public class ReelSpinSystem : MonoBehaviour
 
     public void StopSpinningAndCollect()
     {
+        // After cashout, disable both Spin + Cashout.
         if (stopSpinningButton != null)
             stopSpinningButton.interactable = false;
+
+        if (spinButton != null)
+            spinButton.interactable = false;
 
         StartCoroutine(StopSpinningAndCollectRoutine());
     }
@@ -1091,11 +1138,14 @@ public class ReelSpinSystem : MonoBehaviour
         if (canApplySubstitution)
             yield return StartCoroutine(ApplySubstitutionBeforeCashoutRoutine());
 
-        Set3DReelsActive(false);
+        // End reel-phase, but keep the reels available/visible if desired.
+        if (!keepReelsEnabledAfterCashout)
+            Set3DReelsActive(false);
+
         SetReelPhase(false);
         CollectPendingPayout();
 
-        if (shutterController != null)
+        if (closeShuttersOnCashout && shutterController != null)
             shutterController.CloseShutters();
     }
 
@@ -1201,5 +1251,7 @@ public class ReelSpinSystem : MonoBehaviour
 ////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////
+
+
 
 
