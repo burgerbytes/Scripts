@@ -278,7 +278,9 @@ public class BattleManager : MonoBehaviour
     [Tooltip("Optional. If assigned, BattleManager will populate the Monster Info panel when preview-targeting enemies.")]
     [SerializeField] private MonsterInfoController monsterInfoController;
 
-    [Header("Enemy Lunge (No Animation Clips)")]
+    
+    [SerializeField] private InfoPanelController infoPanelController;
+[Header("Enemy Lunge (No Animation Clips)")]
     [Tooltip("How far the enemy sprite/visual lunges toward the target during an attack (world units).")]
     [SerializeField] private float enemyLungeDistance = 0.35f;
     [Tooltip("Seconds to move from start to lunge peak.")]
@@ -546,19 +548,41 @@ public class BattleManager : MonoBehaviour
             }
 
             return;
-        }
+        }if (!_activeMonsters.Contains(clicked) || clicked.IsDead)
+    return;
 
-        if (!_activeMonsters.Contains(clicked) || clicked.IsDead)
-            return;
+// If we're in the middle of casting/targeting an ability, a monster click should be treated as
+// target selection (if enabled), NOT as an info-panel request.
+if (_awaitingEnemyTarget && allowClickToSelectMonsterTarget)
+{
+    SelectEnemyTarget(clicked);
+    return;
+}
 
-        if (monsterInfoController != null)
-            monsterInfoController.Show(clicked);
+// Guard: do not open info panels while an ability is pending/targeting.
+if (!IsInAbilityCastingState)
+{
+    // Prefer the unified InfoPanelController (disables reels while open). Fall back to the legacy
+    // MonsterInfoController if the unified panel isn't wired yet.
+    if (infoPanelController != null)
+    {
+        string statsText = (monsterInfoController != null) ? monsterInfoController.BuildStatsForPanel(clicked) : null;
+        string body = string.IsNullOrWhiteSpace(statsText)
+            ? (clicked.Description ?? "")
+            : (statsText + " " + (clicked.Description ?? ""));
 
-        if (_awaitingEnemyTarget && allowClickToSelectMonsterTarget)
+        infoPanelController.Show(new InfoPanelData
         {
-            SelectEnemyTarget(clicked);
-        }
+            title = clicked.DisplayName,
+            body = body,
+            image = null
+        });
     }
+    else if (monsterInfoController != null)
+    {
+        monsterInfoController.Show(clicked);
+    }
+}}
 
     public void NotifyAttackImpact()
     {
@@ -4159,7 +4183,16 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
             return _party[0].stats;
         return null;
     }
-
+    public bool IsInAbilityCastingState
+    {
+        get
+        {
+            return _resolving
+                || _pendingAbility != null
+                || _awaitingEnemyTarget
+                || _awaitingPartyTarget;
+        }
+    }
 }
 
 ////////////////////////////////////////////////////////////

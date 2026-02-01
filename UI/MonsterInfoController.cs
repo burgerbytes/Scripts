@@ -174,6 +174,15 @@ public void Hide()
     // Stats formatting helpers
     // =======================
 
+// Expose the same stats formatting used by this panel so other UI (like the unified InfoPanel)
+// can reuse it without duplicating Monster formatting logic.
+public string BuildStatsForPanel(Monster monster)
+{
+    if (monster == null) return string.Empty;
+    return BuildStatsText(monster);
+}
+
+
     private string BuildStatsText(Monster monster)
     {
         var sb = new StringBuilder(256);
