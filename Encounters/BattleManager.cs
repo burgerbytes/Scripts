@@ -4022,6 +4022,7 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
         // ANY-hero checks (OR accumulate)
         bool flameSigilActive = false;
         bool waterSigilActive = false;
+        bool uiDirty = false;
 
         for (int i = 0; i < count; i++)
         {
@@ -4050,6 +4051,7 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
                     DimScreenTemporarily(0.5f);
                     if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(hero.transform);
                     hero.AddBonusDamageNextAttack(Mathf.Max(1, amount));
+                    uiDirty = true;
                 }
             }
             else if (rt == ReelSpinSystem.ResourceType.Defend)
@@ -4059,6 +4061,7 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
                     DimScreenTemporarily(0.5f);
                     if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(hero.transform);
                     hero.AddShield(Mathf.Max(1, amount));
+                    uiDirty = true;
                 }
             }
             else if (rt == ReelSpinSystem.ResourceType.Magic)
@@ -4078,17 +4081,21 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
                         {
                             if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
                             enemyMonster.AddIgnition(1);
+                            uiDirty = true;
                         }
 
                         if (waterSigilActive)
                         {
                             if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
                             enemyMonster.AddStasis(1);
+                            uiDirty = true;
                         }
                     }
                 }
             }
         }
+        if (uiDirty)
+            NotifyPartyChanged();
     }
 
 
@@ -4111,6 +4118,7 @@ if (logPassiveBridge)
         // If this was a Reelcraft edit, we want battle-only passives (Battle Rhythm/Iron Guard/Sigils) to proc too.
         bool flameSigilActive = false;
         bool waterSigilActive = false;
+        bool uiDirty = false;
 
         if (!fromSameSpin)
         {
@@ -4158,6 +4166,7 @@ if (logPassiveBridge)
                         DimScreenTemporarily(0.5f);
                         if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(hero.transform);
                         hero.AddBonusDamageNextAttack(Mathf.Max(1, amount));
+                        uiDirty = true;
                     }
                 }
                 else if (rt == ReelSpinSystem.ResourceType.Defend)
@@ -4167,6 +4176,7 @@ if (logPassiveBridge)
                         DimScreenTemporarily(0.5f);
                         if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(hero.transform);
                         hero.AddShield(Mathf.Max(1, amount));
+                        uiDirty = true;
                     }
                 }
                 else if (rt == ReelSpinSystem.ResourceType.Magic)
@@ -4185,19 +4195,24 @@ if (logPassiveBridge)
                             {
                                 if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
                                 enemyMonster.AddIgnition(1);
+                                uiDirty = true;
                             }
 
                             if (waterSigilActive)
                             {
                                 if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
                                 enemyMonster.AddStasis(1);
+                                uiDirty = true;
                             }
                         }
                     }
                 }
             }
         }
+        if (uiDirty)
+            NotifyPartyChanged();
     }
+
 
     private int _lastSpinLandedFrame = -1;
 
@@ -4294,5 +4309,3 @@ if (logPassiveBridge)
         }
     }
 }
-
-
