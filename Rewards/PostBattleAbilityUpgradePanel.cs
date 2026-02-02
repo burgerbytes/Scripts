@@ -26,6 +26,10 @@ public class PostBattleAbilityUpgradePanel : MonoBehaviour
     [Header("Next")]
     [SerializeField] private Button nextButton;
 
+    [Header("Optional: Disable Battle Reels While Open")]
+    [Tooltip("If assigned, disables the configured reel roots while this panel is open (e.g., battle reels).")]
+    [SerializeField] private ReelDisableManager reelDisableManager;
+
     private HeroStats _hero;
     private Action _onDone;
 
@@ -53,6 +57,9 @@ public class PostBattleAbilityUpgradePanel : MonoBehaviour
 
         if (root != null) root.SetActive(true);
         gameObject.SetActive(true);
+
+        // Ability upgrade UI is not compatible with interacting with battle reels.
+        reelDisableManager?.DisableReels();
 
         if (_hero != null && portraitImage != null)
         {
@@ -100,6 +107,9 @@ public class PostBattleAbilityUpgradePanel : MonoBehaviour
         _opt1 = null;
         _opt2 = null;
 
+        // Restore reels (safe even if already restored).
+        reelDisableManager?.EnableReels();
+
         if (root != null) root.SetActive(false);
         gameObject.SetActive(false);
     }
@@ -145,6 +155,12 @@ public class PostBattleAbilityUpgradePanel : MonoBehaviour
             nextButton.interactable = true;
     }
 
+    private void OnDisable()
+    {
+        // Safety: if the panel is disabled externally, ensure reels are restored.
+        reelDisableManager?.EnableReels();
+    }
+
     private void OnNextClicked()
     {
         Debug.Log($"[UI][AbilityUpgradePanel] Next clicked hero='{(_hero!=null?_hero.name:"<null>")}'");
@@ -154,3 +170,6 @@ public class PostBattleAbilityUpgradePanel : MonoBehaviour
         _onDone?.Invoke();
     }
 }
+
+
+////////////////////////////////////////////////////////////
