@@ -268,9 +268,6 @@ public class BattleManager : MonoBehaviour
 
     // Tracks the most recent spin's symbols list so we can avoid double-proccing when
     // OnCurrentLandedChanged fires immediately after OnSpinLanded for the same spin.
-    private List<ReelSymbolSO> _lastSpinSymbolsRef;
-
-
     [Header("Input / Targeting")]
     [SerializeField] private bool allowClickToSelectMonsterTarget = true;
     [SerializeField] private bool ignoreClicksOverUI = true;
@@ -3993,9 +3990,9 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
         if (reelSpinSystem == null) return;
         if (info.symbols == null || info.symbols.Count == 0) return;
 
-        // Remember this exact symbols list so we can avoid double-proccing on the immediately-following
-        // OnCurrentLandedChanged that is emitted from the same spin.
-        _lastSpinSymbolsRef = info.symbols;
+        // Remember the frame this spin landed so we can avoid double-proccing on the immediately-following
+        // OnCurrentLandedChanged that is emitted from the same spin (same frame).
+        _lastSpinLandedFrame = Time.frameCount;
 
         _spinResolvedAndLocked = false;
         if (logFlow) Debug.Log($"[Battle][SpinLanded] Reset _spinResolvedAndLocked=false. symbols={info.symbols.Count} A={info.attackCount} D={info.defendCount} M={info.magicCount} W={info.wildCount}", this);
@@ -4087,11 +4084,10 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
 
         int count = Mathf.Min(_party.Count, info.symbols.Count);
 
-        // A normal spin triggers BOTH OnSpinLanded and OnCurrentLandedChanged with the same info.symbols list.
-        // Reelcraft edits (nudges/pushes) typically trigger ONLY OnCurrentLandedChanged.
-        bool fromSameSpin = ReferenceEquals(info.symbols, _lastSpinSymbolsRef);
-
-        if (logPassiveBridge)
+        // A normal spin triggers BOTH OnSpinLanded and OnCurrentLandedChanged back-to-back in the SAME frame.
+        // Reelcraft edits (nudges/pushes), momentum spins, etc. typically trigger ONLY OnCurrentLandedChanged (or do so in a later frame).
+        bool fromSameSpin = (Time.frameCount == _lastSpinLandedFrame);
+if (logPassiveBridge)
             Debug.Log($"[Battle][PassiveBridge] CurrentLandedChanged symbols={info.symbols.Count} partyCount={_party.Count} fromSameSpin={fromSameSpin}", this);
 
         // If this was a Reelcraft edit, we want battle-only passives (Battle Rhythm/Iron Guard/Sigils) to proc too.
@@ -4184,6 +4180,8 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
             }
         }
     }
+
+    private int _lastSpinLandedFrame = -1;
 
     private Coroutine _dimRoutine;
 

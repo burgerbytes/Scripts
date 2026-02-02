@@ -1171,6 +1171,29 @@ public class ReelSpinSystem : MonoBehaviour
         if (total <= 0)
             yield break;
 
+        // Update the current landed symbol/mult for this reel so battle passives that listen to
+        // OnCurrentLandedChanged (e.g., Battle Rhythm bridge) can react to momentum spins.
+        // IMPORTANT: We intentionally do NOT call SetPendingFromSymbols() here, so normal pending payout state is unchanged.
+        if (_currentLandedSymbols == null)
+            _currentLandedSymbols = new List<ReelSymbolSO>();
+
+        while (_currentLandedSymbols.Count < 3)
+            _currentLandedSymbols.Add(null);
+
+        _currentLandedSymbols[reelIndex] = sym;
+
+        if (_currentLandedMultipliers == null)
+            _currentLandedMultipliers = new List<int> { 1, 1, 1 };
+
+        while (_currentLandedMultipliers.Count < 3)
+            _currentLandedMultipliers.Add(1);
+
+        _currentLandedMultipliers[reelIndex] = Mathf.Max(1, mult);
+
+        // Notify listeners that the midrow changed due to a momentum spin.
+        SpinLandedInfo momentumInfo = BuildSpinLandedInfo(_currentLandedSymbols);
+        OnCurrentLandedChanged?.Invoke(momentumInfo);
+
         if (resourcePool != null)
         {
             switch (rt)
