@@ -1,7 +1,4 @@
 bugs
-- disable combat reels on ability selection screen
-- reaching lv 5 hangs the game
-- change upgrade reel to allow player to select what to upgrade. 
 - when iron guard triggers, block doesn't appear until reel phase has ended
 - focus rune shows a damage preview even though it is a non damaging ability
 - on the learn ability panel, both ability buttons should be enabled the entire time to check both descriptions
@@ -14,6 +11,8 @@ bugs
 - when 2 charactes level up at the same time, the upgrade reels isn't called for the second hero
 
 features
+- change upgrade reel to allow player to select what to upgrade. 
+- implment ability equip menu, set max number of active abilities
 - create ninja lv2 passive abilities 
 - add some type of indictor (arrow, glow) to enemy unit being targeted
 - add status icon for fighter's battle rhythm with stack count

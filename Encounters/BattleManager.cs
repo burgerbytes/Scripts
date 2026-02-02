@@ -835,7 +835,9 @@ private bool TryRunLevel5EvolutionNow()
                 if (m == null) continue;
                 if (m.requiredBaseClass == null) continue;
 
-                if (m.requiredBaseClass == baseDef)
+                if (m.requiredBaseClass == baseDef ||
+                    (m.requiredBaseClass != null && baseDef != null &&
+                     string.Equals(m.requiredBaseClass.className, baseDef.className, StringComparison.OrdinalIgnoreCase)))
                 {
                     match = m;
                     break;
@@ -862,27 +864,43 @@ private bool TryRunLevel5EvolutionNow()
     private bool ShouldOfferEvolutionPanel(HeroStats hero)
     {
         if (hero == null) return false;
-        if (hero.Level < 5)
+
+        // IMPORTANT: only offer evolution when the hero actually reached the evolution threshold.
+        // This prevents the evolution panel from popping for non-mapped classes and accidentally
+        // running the reel-upgrade minigame early.
+        if (!hero.HasPendingEvolution)
         {
-            Debug.Log($"[Evolution][Gate] hero='{hero.name}' level={hero.Level} < 5 -> false", this);
+            Debug.Log($"[Evolution][Gate] hero='{hero.name}' HasPendingEvolution=false -> false", this);
             return false;
         }
+
         if (hero.AdvancedClassDef != null)
         {
             Debug.Log($"[Evolution][Gate] hero='{hero.name}' already advanced='{hero.AdvancedClassDef.className}' -> false", this);
             return false;
         }
 
-        bool ok = TryGetLevel5EvolutionData(
+        bool mappingFound = TryGetLevel5EvolutionData(
             hero,
             out _,
             out _,
             out _,
             out _,
             out _);
-        Debug.Log($"[Evolution][Gate] hero='{hero.name}' mappingFound={ok}", this);
+
+        // Legacy fallback: allow Fighter evolution even if the mapping list isn't wired
+        // or the base class SO reference changed.
+        bool legacyFighter =
+            hero.BaseClassDef != null &&
+            !string.IsNullOrEmpty(hero.BaseClassDef.className) &&
+            string.Equals(hero.BaseClassDef.className, "Fighter", StringComparison.OrdinalIgnoreCase);
+
+        bool ok = mappingFound || legacyFighter;
+
+        Debug.Log($"[Evolution][Gate] hero='{hero.name}' pending={hero.HasPendingEvolution} mappingFound={mappingFound} legacyFighter={legacyFighter} -> {ok}", this);
         return ok;
     }
+
 
     public int GetPartyIndexForHeroStats(HeroStats hero)
     {
@@ -4276,3 +4294,5 @@ if (logPassiveBridge)
         }
     }
 }
+
+
