@@ -1,6 +1,4 @@
 bugs
-- when iron guard triggers, block doesn't appear until reel phase has ended
-- focus rune shows a damage preview even though it is a non damaging ability
 - on the learn ability panel, both ability buttons should be enabled the entire time to check both descriptions
 - steel nudge needs to proc battle rhythm and iron guard
 - ninja substitution incorrectly procs on all ntokens rather than just null. it also procs every cashout rather than just the first
