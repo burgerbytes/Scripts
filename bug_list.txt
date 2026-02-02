@@ -1,4 +1,5 @@
 bugs
+- battle rhythm no longer triggers when landing on ATK tokens
 - reaching lv 5 hangs the game
 - status and ability menus should be hidden during reel phase
 - disable combat reels on ability selection screen
@@ -22,5 +23,6 @@ features
 - add tooltips for status icons
 - make all info/status panels open into a single panel and dim the screen
 - award same xp to all heroes. dead heroes get 0 xp
-- add reel locking
+- add reel locking (as an ability)
+- allow use of reelcraft during player phase
  
