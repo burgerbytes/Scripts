@@ -2,6 +2,8 @@
 ////////////////////////////////////////////////////////////
 // GUID: cf56299f5b00af345b24e257cb33b22b
 ////////////////////////////////////////////////////////////
+// GUID: cf56299f5b00af345b24e257cb33b22b
+////////////////////////////////////////////////////////////
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -16,7 +18,8 @@ public enum AbilityTag
 {
     Assassinate,
     Piercing,
-    FireElemental
+    FireElemental,
+    Momentum
 }
 
 /// <summary>
@@ -100,6 +103,10 @@ public class AbilityDefinitionSO : ScriptableObject
     [Tooltip("If true, this ability can only be used once per player turn per hero. The UI will gray it out after use.")]
     public bool usableOncePerTurn = false;
 
+    [Header("Momentum")]
+    [Tooltip("If true, killing an enemy with this ability triggers an immediate bonus spin on the caster's reel and instantly cashes out ONLY that reel.")]
+    public bool momentumOnKill = false;
+
     [Header("Status Effects")]
     public bool inflictsFocusRune = false;
     public bool inflictsBurn = false;
@@ -108,8 +115,3 @@ public class AbilityDefinitionSO : ScriptableObject
 
 
 ////////////////////////////////////////////////////////////
-
-
-////////////////////////////////////////////////////////////
-
-

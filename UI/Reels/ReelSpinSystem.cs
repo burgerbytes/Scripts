@@ -1119,6 +1119,77 @@ public class ReelSpinSystem : MonoBehaviour
         onDone?.Invoke();
     }
 
+    /// <summary>
+    /// Momentum bonus: spins ONLY the specified reel once and immediately grants resources from that reel's midrow symbol.
+    /// This does NOT change spinsRemaining and does NOT modify the normal pending payout state.
+    /// Intended to be called mid-battle when an ability kill triggers a bonus spin.
+    /// </summary>
+    public IEnumerator MomentumSpinAndInstantCollect(int reelIndex)
+    {
+        if (reels == null) yield break;
+        if (reelIndex < 0 || reelIndex >= reels.Count) yield break;
+
+        var entry = reels[reelIndex];
+        if (entry == null || entry.reel3d == null)
+            yield break;
+
+        // Prevent overlapping spins with the normal spin flow.
+        while (spinning)
+            yield return null;
+
+        spinning = true;
+
+        // Make sure the reel is visible/open.
+        Set3DReelsActive(true);
+        if (shutterController != null)
+            shutterController.OpenShutters();
+
+        // Optional: reuse the normal spin SFX.
+        PlaySpinSfx();
+
+        System.Random rng = new System.Random();
+        entry.reel3d.SpinRandom(rng, minFullRotations3D);
+
+        while (entry.reel3d != null && entry.reel3d.IsSpinning)
+            yield return null;
+
+        spinning = false;
+
+        if (entry.reel3d == null)
+            yield break;
+
+        int qi;
+        int mult;
+        ReelSymbolSO sym = entry.reel3d.GetMidrowSymbolAndMultiplier(midrowPlane, out qi, out mult);
+        if (sym == null)
+            yield break;
+
+        if (!TryMapSymbol(sym, out ResourceType rt, out int amt))
+            yield break;
+
+        int total = Mathf.Max(0, amt) * Mathf.Max(1, mult);
+        if (total <= 0)
+            yield break;
+
+        if (resourcePool != null)
+        {
+            switch (rt)
+            {
+                case ResourceType.Attack: resourcePool.Add(total, 0, 0, 0); break;
+                case ResourceType.Defend: resourcePool.Add(0, total, 0, 0); break;
+                case ResourceType.Magic:  resourcePool.Add(0, 0, total, 0); break;
+                case ResourceType.Wild:   resourcePool.Add(0, 0, 0, total); break;
+            }
+        }
+
+        if (log3DMidRowSymbolsEachSpin)
+        {
+            string id = !string.IsNullOrEmpty(entry.reelId) ? entry.reelId : $"slot{reelIndex}";
+            Debug.Log($"[ReelSpinSystem][Momentum] Instant cashout reel={id} symbol={(sym != null ? sym.name : "<null>")} x{Mathf.Max(1, mult)} => {rt}+{total}", this);
+        }
+    }
+
+
     public void StopSpinningAndCollect()
     {
         // After cashout, disable both Spin + Cashout.

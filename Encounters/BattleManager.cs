@@ -1,3 +1,5 @@
+// GUID: 30f201f35d336bf4d840162cd6fd1fde
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -2083,7 +2085,12 @@ private bool TryRunLevel5EvolutionNow()
                 else
                     actorStats.GainXP(xpAward);
 
-                RemoveMonster(enemyTarget);
+                
+
+// Momentum: if this ability killed the enemy, immediately spin ONLY the caster's reel once and cash it out.
+if (ability != null && ability.momentumOnKill && reelSpinSystem != null)
+    yield return StartCoroutine(reelSpinSystem.MomentumSpinAndInstantCollect(_pendingActorIndex));
+RemoveMonster(enemyTarget);
             }
         }
 
