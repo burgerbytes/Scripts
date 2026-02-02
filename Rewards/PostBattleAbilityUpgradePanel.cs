@@ -7,6 +7,11 @@ using UnityEngine.UI;
 /// <summary>
 /// Post-battle panel shown (starting at hero level 2) after the Reel Upgrade Minigame.
 /// Player chooses 1 of 2 abilities (based on AbilityDefinitionSO.unlockAtLevel) to permanently unlock.
+///
+/// UX rule:
+/// - Clicking an ability button only PREVIEWS that ability.
+/// - The ability is not committed/accepted until the player clicks Next.
+/// - Both ability buttons remain interactable the entire time (so the player can compare descriptions).
 /// </summary>
 public class PostBattleAbilityUpgradePanel : MonoBehaviour
 {
@@ -36,6 +41,9 @@ public class PostBattleAbilityUpgradePanel : MonoBehaviour
     private AbilityDefinitionSO _opt1;
     private AbilityDefinitionSO _opt2;
 
+    // Preview/selection (NOT applied until Next is clicked)
+    private AbilityDefinitionSO _selected;
+
     private void Awake()
     {
         if (nextButton != null)
@@ -54,6 +62,7 @@ public class PostBattleAbilityUpgradePanel : MonoBehaviour
     {
         _hero = hero;
         _onDone = onDone;
+        _selected = null;
 
         if (root != null) root.SetActive(true);
         gameObject.SetActive(true);
@@ -81,11 +90,9 @@ public class PostBattleAbilityUpgradePanel : MonoBehaviour
             return;
         }
 
-
         _opt1 = (options != null && options.Count > 0) ? options[0] : null;
         _opt2 = (options != null && options.Count > 1) ? options[1] : null;
-        Debug.Log($"[UI][AbilityUpgradePanel] Show hero='{(_hero!=null?_hero.name:"<null>")}' unlockLevel={unlockLevel} optionsCount={(options!=null?options.Count:0)} opt1='{(_opt1!=null?_opt1.abilityName:"<none>")}' opt2='{(_opt2!=null?_opt2.abilityName:"<none>")}'");
-
+        Debug.Log($"[UI][AbilityUpgradePanel] Show hero='{(_hero != null ? _hero.name : "<null>")}' unlockLevel={unlockLevel} optionsCount={(options != null ? options.Count : 0)} opt1='{(_opt1 != null ? _opt1.abilityName : "<none>")}' opt2='{(_opt2 != null ? _opt2.abilityName : "<none>")}'");
 
         SetupButton(abilityButton1, abilityText1, _opt1);
         SetupButton(abilityButton2, abilityText2, _opt2);
@@ -95,6 +102,7 @@ public class PostBattleAbilityUpgradePanel : MonoBehaviour
 
         if (nextButton != null)
         {
+            // Next is confirm; keep disabled until a preview/selection is made.
             nextButton.interactable = false;
             nextButton.gameObject.SetActive(true);
         }
@@ -106,6 +114,7 @@ public class PostBattleAbilityUpgradePanel : MonoBehaviour
         _onDone = null;
         _opt1 = null;
         _opt2 = null;
+        _selected = null;
 
         // Restore reels (safe even if already restored).
         reelDisableManager?.EnableReels();
@@ -136,20 +145,16 @@ public class PostBattleAbilityUpgradePanel : MonoBehaviour
             return;
         }
 
-        Debug.Log($"[UI][AbilityUpgradePanel] Ability clicked hero='{_hero.name}' chosen='{chosen.abilityName}' unlockAt={chosen.unlockAtLevel}");
-        bool applied = _hero.TryAcceptAbilityChoice(chosen);
-        if (!applied)
-        {
-            Debug.LogWarning($"[PostBattleAbilityUpgradePanel] Choice rejected for hero='{_hero.name}' ability='{chosen.abilityName}'.");
-            return;
-        }
+        // Preview selection ONLY (do not apply/consume choice here).
+        _selected = chosen;
 
-        // Lock in selection
-        if (abilityButton1 != null) abilityButton1.interactable = false;
-        if (abilityButton2 != null) abilityButton2.interactable = false;
+        Debug.Log($"[UI][AbilityUpgradePanel] Ability preview hero='{_hero.name}' selected='{chosen.abilityName}' unlockAt={chosen.unlockAtLevel}");
 
         if (abilityDescriptionText != null)
             abilityDescriptionText.text = chosen.description;
+
+        // IMPORTANT: both buttons remain interactable so the player can compare.
+        // Do NOT disable either ability button here.
 
         if (nextButton != null)
             nextButton.interactable = true;
@@ -163,7 +168,39 @@ public class PostBattleAbilityUpgradePanel : MonoBehaviour
 
     private void OnNextClicked()
     {
-        Debug.Log($"[UI][AbilityUpgradePanel] Next clicked hero='{(_hero!=null?_hero.name:"<null>")}'");
+        Debug.Log($"[UI][AbilityUpgradePanel] Next clicked hero='{(_hero != null ? _hero.name : "<null>")}' selected='{(_selected != null ? _selected.abilityName : "<none>")}'");
+
+        if (_hero == null)
+        {
+            // Nothing to apply; just exit safely.
+            Action doneNoHero = _onDone;
+            Hide();
+            doneNoHero?.Invoke();
+            return;
+        }
+
+        if (_selected == null)
+        {
+            // Should be unreachable because Next is disabled until a selection is made,
+            // but keep it resilient.
+            Debug.LogWarning($"[UI][AbilityUpgradePanel] Next clicked with no selection hero='{_hero.name}'.");
+            if (nextButton != null) nextButton.interactable = false;
+            return;
+        }
+
+        // Commit selection.
+        bool applied = _hero.TryAcceptAbilityChoice(_selected);
+        if (!applied)
+        {
+            Debug.LogWarning($"[PostBattleAbilityUpgradePanel] Choice rejected on confirm for hero='{_hero.name}' ability='{_selected.abilityName}'.");
+            // Keep panel open so player can try again.
+            if (nextButton != null) nextButton.interactable = false;
+            _selected = null;
+            if (abilityDescriptionText != null)
+                abilityDescriptionText.text = "Choose an ability to learn.";
+            return;
+        }
+
         if (nextButton != null)
             nextButton.interactable = false;
 
@@ -174,6 +211,3 @@ public class PostBattleAbilityUpgradePanel : MonoBehaviour
         done?.Invoke();
     }
 }
-
-
-////////////////////////////////////////////////////////////
