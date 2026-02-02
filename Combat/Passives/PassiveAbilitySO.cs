@@ -197,7 +197,16 @@ public class PassiveAbilitySO : AbilityDefinitionSO
                 ApplyEffects(hero, rule.effects);
         }
     }
-
+    public void FireReelSymbolLandedForMidrow(
+        HeroStats hero,
+        ReelSymbolSO symbol,
+        ReelSpinSystem.ResourceType resourceType,
+        int amount,
+        int multiplier)
+    {
+        ApplyReelSymbolLandedRules(hero, symbol, resourceType, amount, multiplier);
+    }
+    
     private void ApplyEffects(HeroStats hero, List<PassiveEffect> effects)
     {
         if (hero == null) return;

@@ -1,5 +1,3 @@
-// GUID: 30f201f35d336bf4d840162cd6fd1fde
-////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -267,6 +265,11 @@ public class BattleManager : MonoBehaviour
     [SerializeField] private bool logPassiveBridge = true;
     [SerializeField] private Button stopSpinningButton;
     [SerializeField] private bool _spinResolvedAndLocked;
+
+    // Tracks the most recent spin's symbols list so we can avoid double-proccing when
+    // OnCurrentLandedChanged fires immediately after OnSpinLanded for the same spin.
+    private List<ReelSymbolSO> _lastSpinSymbolsRef;
+
 
     [Header("Input / Targeting")]
     [SerializeField] private bool allowClickToSelectMonsterTarget = true;
@@ -3990,6 +3993,10 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
         if (reelSpinSystem == null) return;
         if (info.symbols == null || info.symbols.Count == 0) return;
 
+        // Remember this exact symbols list so we can avoid double-proccing on the immediately-following
+        // OnCurrentLandedChanged that is emitted from the same spin.
+        _lastSpinSymbolsRef = info.symbols;
+
         _spinResolvedAndLocked = false;
         if (logFlow) Debug.Log($"[Battle][SpinLanded] Reset _spinResolvedAndLocked=false. symbols={info.symbols.Count} A={info.attackCount} D={info.defendCount} M={info.magicCount} W={info.wildCount}", this);
 
@@ -4080,8 +4087,28 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
 
         int count = Mathf.Min(_party.Count, info.symbols.Count);
 
+        // A normal spin triggers BOTH OnSpinLanded and OnCurrentLandedChanged with the same info.symbols list.
+        // Reelcraft edits (nudges/pushes) typically trigger ONLY OnCurrentLandedChanged.
+        bool fromSameSpin = ReferenceEquals(info.symbols, _lastSpinSymbolsRef);
+
         if (logPassiveBridge)
-            Debug.Log($"[Battle][PassiveBridge] CurrentLandedChanged symbols={info.symbols.Count} partyCount={_party.Count}", this);
+            Debug.Log($"[Battle][PassiveBridge] CurrentLandedChanged symbols={info.symbols.Count} partyCount={_party.Count} fromSameSpin={fromSameSpin}", this);
+
+        // If this was a Reelcraft edit, we want battle-only passives (Battle Rhythm/Iron Guard/Sigils) to proc too.
+        bool flameSigilActive = false;
+        bool waterSigilActive = false;
+
+        if (!fromSameSpin)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                var heroStats = _party[i]?.stats;
+                if (heroStats == null) continue;
+
+                flameSigilActive |= heroStats.HasAbilityUnlocked("Flame Sigil");
+                waterSigilActive |= heroStats.HasAbilityUnlocked("Water Sigil");
+            }
+        }
 
         for (int i = 0; i < count; i++)
         {
@@ -4104,7 +4131,57 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
             if (rt == ReelSpinSystem.ResourceType.Attack && logPassiveBridge)
                 Debug.Log($"[Battle][PassiveBridge] ATK symbol landed hero='{hero.name}' symbol='{sym.name}' amount={amount} mult={mult}", this);
 
+            // Always notify the hero passive system.
             hero.NotifyReelSymbolLanded(sym, rt, amount, mult);
+
+            // For Reelcraft edits, also apply the battle-only hooks that previously only ran on OnSpinLanded.
+            if (!fromSameSpin)
+            {
+                if (rt == ReelSpinSystem.ResourceType.Attack)
+                {
+                    if (hero.HasAbilityUnlocked("Battle Rhythm"))
+                    {
+                        DimScreenTemporarily(0.5f);
+                        if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(hero.transform);
+                        hero.AddBonusDamageNextAttack(Mathf.Max(1, amount));
+                    }
+                }
+                else if (rt == ReelSpinSystem.ResourceType.Defend)
+                {
+                    if (hero.HasAbilityUnlocked("Iron Guard"))
+                    {
+                        DimScreenTemporarily(0.5f);
+                        if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(hero.transform);
+                        hero.AddShield(Mathf.Max(1, amount));
+                    }
+                }
+                else if (rt == ReelSpinSystem.ResourceType.Magic)
+                {
+                    if (!flameSigilActive && !waterSigilActive) continue;
+                    if (_activeMonsters != null)
+                    {
+                        foreach (var enemyMonster in _activeMonsters)
+                        {
+                            if (enemyMonster == null) continue;
+                            if (!enemyMonster.HasFocusRune) continue;
+
+                            DimScreenTemporarily(0.5f);
+
+                            if (flameSigilActive)
+                            {
+                                if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
+                                enemyMonster.AddIgnition(1);
+                            }
+
+                            if (waterSigilActive)
+                            {
+                                if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
+                                enemyMonster.AddStasis(1);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -4201,5 +4278,3 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
         }
     }
 }
-
-////////////////////////////////////////////////////////////
