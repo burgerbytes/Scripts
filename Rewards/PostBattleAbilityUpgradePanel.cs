@@ -167,7 +167,11 @@ public class PostBattleAbilityUpgradePanel : MonoBehaviour
         if (nextButton != null)
             nextButton.interactable = false;
 
-        _onDone?.Invoke();
+        // Ensure battle reels are restored when leaving this panel.
+        // Some flows invoke _onDone without explicitly deactivating this panel immediately.
+        Action done = _onDone;
+        Hide();
+        done?.Invoke();
     }
 }
 
