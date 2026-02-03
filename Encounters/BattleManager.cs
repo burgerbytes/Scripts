@@ -628,6 +628,14 @@ if (!IsInAbilityCastingState)
             Vector3 pos = spawn != null ? spawn.position : Vector3.zero;
 
             GameObject go = Instantiate(prefab, pos, Quaternion.identity, partyRoot);
+
+            // Align the hero so that its prefab child 'CenterPoint' sits exactly on the spawn point.
+            // This makes partySpawnPoints represent the intended visual center for VFX/UI alignment.
+            if (spawn != null)
+            {
+                AlignHeroToSpawnPointUsingCenterPoint(go, spawn);
+            }
+
             m.avatarGO = go;
             m.animator = go.GetComponentInChildren<Animator>(true);
             m.stats = go.GetComponentInChildren<HeroStats>(true);
@@ -3740,6 +3748,24 @@ private void LayoutHeroStatusIcons(Transform statusIconRoot)
             return;
 
         healVfxSpawner.PlayBRVfx(targetRoot);
+    }
+
+    /// <summary>
+    /// Repositions a newly-instantiated hero so that its CenterPoint aligns with the given spawn point.
+    /// This keeps visual anchors consistent across different sprite pivots/silhouettes.
+    /// </summary>
+    private void AlignHeroToSpawnPointUsingCenterPoint(GameObject heroGO, Transform spawnPoint)
+    {
+        if (heroGO == null || spawnPoint == null) return;
+
+        Transform root = heroGO.transform;
+        HeroStats hs = heroGO.GetComponentInChildren<HeroStats>(true);
+
+        Transform centerTf = GetHeroCenterPointTransform(hs, root);
+        if (centerTf == null) return;
+
+        Vector3 delta = spawnPoint.position - centerTf.position;
+        root.position += delta;
     }
 
 
