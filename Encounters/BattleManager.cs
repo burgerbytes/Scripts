@@ -3401,7 +3401,18 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
     [SerializeField] private Sprite statusIconIgnitionSprite;
     [SerializeField] private Sprite statusIconStasisSprite;
 
-    private void ApplyPartyHiddenVisuals()
+    [Header("Status Icon Layout")]
+    [SerializeField] private Vector3 statusIconLocalOffset = new Vector3(0f, 1.2f, 0f);
+    [SerializeField] private float statusIconScale = 0.8f;
+    [SerializeField] private float statusIconHorizontalSpacing = 0.35f;
+
+    
+
+[Header("Status Stack Count Layout")]
+[SerializeField] private Vector3 statusStackTextLocalOffset = new Vector3(0.22f, -0.18f, 0f);
+[SerializeField] private float statusStackTextScale = 1.0f;
+[SerializeField] private float statusStackTextFontSize = 2.5f;
+private void ApplyPartyHiddenVisuals()
     {
         if (_party == null) return;
 
@@ -3474,9 +3485,9 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
             // Normalize placement relative to CenterPoint (or root if CenterPoint is missing).
             if (iconTf != null)
             {
-                iconTf.localPosition = new Vector3(0f, 1.2f, 0f);
-                iconTf.localScale = Vector3.one;
-            }
+                iconTf.localPosition = statusIconLocalOffset;
+                iconTf.localScale = Vector3.one * statusIconScale;
+}
 
             if (iconTf != null)
             {
@@ -3501,9 +3512,88 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
                 );
 
                 statusIcon.SetBleedStacks(hs != null ? hs.BleedStacks : 0);
+
+                LayoutHeroStatusIcons(iconTf);
             }
         }
     }
+
+
+/// <summary>
+/// Layout hero status icons in a centered horizontal row and apply stack-count text tuning.
+/// Icons are expected to be SpriteRenderer children under the _StatusIcon root.
+/// The bleed stack label is expected to be a child named "Stacks" (TMP_Text) under _StatusIcon (legacy setup).
+/// </summary>
+private void LayoutHeroStatusIcons(Transform statusIconRoot)
+{
+    if (statusIconRoot == null) return;
+
+    // Collect active icon children (SpriteRenderer) excluding the stack label object.
+    List<Transform> icons = new List<Transform>(8);
+
+    for (int i = 0; i < statusIconRoot.childCount; i++)
+    {
+        Transform child = statusIconRoot.GetChild(i);
+        if (child == null || !child.gameObject.activeSelf) continue;
+
+        // Exclude the legacy stack label container if it's directly under the root.
+        if (string.Equals(child.name, "Stacks", StringComparison.OrdinalIgnoreCase))
+            continue;
+
+        // Only layout actual icon sprites.
+        var sr = child.GetComponent<SpriteRenderer>();
+        if (sr != null)
+            icons.Add(child);
+    }
+
+    // Centered horizontal row.
+    int count = icons.Count;
+    if (count > 0)
+    {
+        float startX = -(count - 1) * 0.5f * statusIconHorizontalSpacing;
+        for (int i = 0; i < count; i++)
+        {
+            float x = startX + i * statusIconHorizontalSpacing;
+            icons[i].localPosition = new Vector3(x, 0f, 0f);
+        }
+    }
+
+    // Apply stack-count tuning if a TMP label exists (common legacy: "_StatusIcon/Stacks").
+    Transform stacksTf = statusIconRoot.Find("Stacks");
+    if (stacksTf != null)
+    {
+        stacksTf.localPosition = statusStackTextLocalOffset;
+        stacksTf.localScale = Vector3.one * statusStackTextScale;
+
+        TMP_Text tmp = stacksTf.GetComponent<TMP_Text>();
+        if (tmp == null)
+            tmp = stacksTf.GetComponentInChildren<TMP_Text>(true);
+
+        if (tmp != null && statusStackTextFontSize > 0f)
+            tmp.fontSize = statusStackTextFontSize;
+    }
+
+    // Also, if any icon has its own embedded TMP count label, apply the same tuning there too.
+    for (int i = 0; i < icons.Count; i++)
+    {
+        var tmp = icons[i].GetComponentInChildren<TMP_Text>(true);
+        if (tmp == null) continue;
+
+        // Try to move a child named "Stacks"/"Count" if present, otherwise leave as-is.
+        Transform labelTf = icons[i].Find("Stacks");
+        if (labelTf == null) labelTf = icons[i].Find("Count");
+        if (labelTf != null)
+        {
+            labelTf.localPosition = statusStackTextLocalOffset;
+            labelTf.localScale = Vector3.one * statusStackTextScale;
+        }
+
+        if (statusStackTextFontSize > 0f)
+            tmp.fontSize = statusStackTextFontSize;
+    }
+}
+
+
 
     private void ApplyMonsterStatusVisuals()
     {
