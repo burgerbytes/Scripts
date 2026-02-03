@@ -3746,7 +3746,88 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
         return _party[index].stats;
     }
 
-    private static List<ItemOptionSO> RollUnique(List<ItemOptionSO> pool, int count)
+    
+
+    /// <summary>
+    /// Adds Magic resource directly to the battle resource pool (does nothing if resourcePool is missing).
+    /// Used by effects like Arcane Transmutation granting an immediate MAG point.
+    /// </summary>
+    public void AddMagicResource(long amount)
+    {
+        if (amount <= 0) return;
+        if (resourcePool != null)
+            resourcePool.Add(0, 0, amount, 0);
+    }
+
+    /// <summary>
+    /// Procs all currently-implemented Sigil passives as if a MAGIC symbol had landed.
+    /// (Currently: Flame Sigil + Water Sigil) and respects Focus Rune on monsters.
+    ///
+    /// This is intentionally public so Reelcraft effects like Arcane Transmutation can trigger sigils
+    /// without requiring a reel spin/cashout.
+    /// </summary>
+    public void ProcSigilsFromExternalMagicSource()
+    {
+        if (_party == null || _party.Count == 0) return;
+
+        // ANY-hero checks (OR accumulate)
+        bool flameSigilActive = false;
+        bool waterSigilActive = false;
+
+        for (int i = 0; i < _party.Count; i++)
+        {
+            var heroStats = _party[i]?.stats;
+            if (heroStats == null) continue;
+
+            flameSigilActive |= heroStats.HasAbilityUnlocked("Flame Sigil");
+            waterSigilActive |= heroStats.HasAbilityUnlocked("Water Sigil");
+        }
+
+        if (!flameSigilActive && !waterSigilActive) return;
+        if (_activeMonsters == null || _activeMonsters.Count == 0) return;
+
+        bool uiDirty = false;
+
+        // NOTE: Sigil procs can KILL monsters (Ignition/Stasis bomb), which removes them from _activeMonsters.
+        // Iterate a snapshot to avoid "Collection was modified" exceptions.
+        var monstersSnapshot = new List<Monster>(_activeMonsters);
+
+        for (int mi = 0; mi < monstersSnapshot.Count; mi++)
+        {
+            var enemyMonster = monstersSnapshot[mi];
+            if (enemyMonster == null) continue;
+            if (!enemyMonster.HasFocusRune) continue;
+
+            DimScreenTemporarily(0.5f);
+
+            if (flameSigilActive)
+            {
+                if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
+                int beforeIgn = enemyMonster.IgnitionStacks;
+                int capIgn = enemyMonster.maxIgnitionStacks;
+                if (logFlow) Debug.Log($"[Battle][Sigil] Flame Sigil proc (external) -> AddIgnition(+1) target='{enemyMonster.name}' before={beforeIgn} cap={capIgn}", this);
+                enemyMonster.AddIgnition(1);
+                if (logFlow) Debug.Log($"[Battle][Sigil] Flame Sigil done (external) target='{enemyMonster.name}' after={enemyMonster.IgnitionStacks} dead={enemyMonster.IsDead}", this);
+                uiDirty = true;
+            }
+
+            if (waterSigilActive)
+            {
+                if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
+                int beforeSta = enemyMonster.StasisStacks;
+                int capSta = enemyMonster.maxStasisStacks;
+                if (logFlow) Debug.Log($"[Battle][Sigil] Water Sigil proc (external) -> AddStasis(+1) target='{enemyMonster.name}' before={beforeSta} cap={capSta}", this);
+                enemyMonster.AddStasis(1);
+                if (logFlow) Debug.Log($"[Battle][Sigil] Water Sigil done (external) target='{enemyMonster.name}' after={enemyMonster.StasisStacks} dead={enemyMonster.IsDead}", this);
+                uiDirty = true;
+            }
+        }
+
+        if (uiDirty)
+            NotifyPartyChanged();
+    }
+
+private static List<ItemOptionSO> RollUnique(List<ItemOptionSO> pool, int count)
     {
         List<ItemOptionSO> temp = new List<ItemOptionSO>(pool);
         List<ItemOptionSO> result = new List<ItemOptionSO>(count);
@@ -4335,5 +4416,3 @@ if (enemyMonster == null) continue;
         }
     }
 }
-
-

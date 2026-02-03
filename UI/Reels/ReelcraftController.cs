@@ -119,6 +119,11 @@ public class ReelcraftController : MonoBehaviour
         var column = target.Column;
         int qi = target.QuadIndex;
 
+        // Only allow selecting the reel that belongs to the hero using Transmute.
+        int clickedReelIndex = (reelSpinSystem != null) ? reelSpinSystem.FindReelIndexForColumn(column) : -1;
+        if (_transmutePartyIndex >= 0 && clickedReelIndex >= 0 && clickedReelIndex != _transmutePartyIndex)
+            return;
+
         // Only allow clicking the currently-landed (midrow) symbol on each reel.
         if (reelSpinSystem != null && reelSpinSystem.MidrowPlane != null)
         {
@@ -158,6 +163,11 @@ public class ReelcraftController : MonoBehaviour
         // Prevent double-click spam
         _transmuteSelecting = false;
         ShowTransmuteGlow(false);
+        // Capture the symbol BEFORE transmute so we can award MAG + proc sigils only when converting a non-MAG midrow token.
+        ReelSymbolSO preSym = (column != null) ? column.GetSymbolOnQuad(quadIndex) : null;
+        bool preWasMagic = false;
+        if (reelSpinSystem != null && preSym != null && reelSpinSystem.TryMapSymbolPublic(preSym, out ReelSpinSystem.ResourceType preRt, out _))
+            preWasMagic = (preRt == ReelSpinSystem.ResourceType.Magic);
 
         if (column != null)
             yield return column.ShakeRoutine(0.12f, 6f);
@@ -188,6 +198,15 @@ public class ReelcraftController : MonoBehaviour
             reelSpinSystem.TryNudgeReel(0, 0);
             reelSpinSystem.TryNudgeReel(1, 0);
             reelSpinSystem.TryNudgeReel(2, 0);
+        }
+
+
+        // NEW: Using Transmute on a non-MAG midrow token should immediately grant +1 MAG
+        // and proc all Sigil abilities (Flame/Water/etc.) as if a MAGIC symbol had landed.
+        if (!preWasMagic && battleManager != null)
+        {
+            battleManager.AddMagicResource(1);
+            battleManager.ProcSigilsFromExternalMagicSource();
         }
 
         MarkUsed(_transmutePartyIndex);
