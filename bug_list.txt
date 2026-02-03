@@ -1,5 +1,5 @@
 bugs
-- transmute should proc sigils
+- procing bomb with flame sigil crashes game
 - move vfx to CenterPoint and align all hero status icons with hp like monsters'
 - make sure canceling hero abilities works
 - upgrade reels happens 2x becuase original call was never removed
