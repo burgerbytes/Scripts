@@ -4073,10 +4073,14 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
                 // Only do work if any sigil exists
                 if (!flameSigilActive && !waterSigilActive) continue;
                 if (_activeMonsters != null)
-                {
-                    foreach (var enemyMonster in _activeMonsters)
                     {
-                        if (enemyMonster == null) continue;
+                        // NOTE: Sigil procs can KILL monsters (Ignition/Stasis bomb), which removes them from _activeMonsters.
+                        // Iterate a snapshot to avoid "Collection was modified" exceptions.
+                        var monstersSnapshot = new List<Monster>(_activeMonsters);
+                        for (int mi = 0; mi < monstersSnapshot.Count; mi++)
+                        {
+                            var enemyMonster = monstersSnapshot[mi];
+if (enemyMonster == null) continue;
                         if (!enemyMonster.HasFocusRune) continue;
 
                         DimScreenTemporarily(0.5f);
@@ -4084,14 +4088,22 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
                         if (flameSigilActive)
                         {
                             if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
+                            int beforeIgn = enemyMonster.IgnitionStacks;
+                            int capIgn = enemyMonster.maxIgnitionStacks;
+                            if (logFlow) Debug.Log($"[Battle][Sigil] Flame Sigil proc -> AddIgnition(+1) target='{enemyMonster.name}' before={beforeIgn} cap={capIgn}", this);
                             enemyMonster.AddIgnition(1);
+                            if (logFlow) Debug.Log($"[Battle][Sigil] Flame Sigil done target='{enemyMonster.name}' after={enemyMonster.IgnitionStacks} dead={enemyMonster.IsDead}", this);
                             uiDirty = true;
                         }
 
                         if (waterSigilActive)
                         {
                             if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
+                            int beforeSta = enemyMonster.StasisStacks;
+                            int capSta = enemyMonster.maxStasisStacks;
+                            if (logFlow) Debug.Log($"[Battle][Sigil] Water Sigil proc -> AddStasis(+1) target='{enemyMonster.name}' before={beforeSta} cap={capSta}", this);
                             enemyMonster.AddStasis(1);
+                            if (logFlow) Debug.Log($"[Battle][Sigil] Water Sigil done target='{enemyMonster.name}' after={enemyMonster.StasisStacks} dead={enemyMonster.IsDead}", this);
                             uiDirty = true;
                         }
                     }
@@ -4188,9 +4200,13 @@ if (logPassiveBridge)
                     if (!flameSigilActive && !waterSigilActive) continue;
                     if (_activeMonsters != null)
                     {
-                        foreach (var enemyMonster in _activeMonsters)
+                        // NOTE: Sigil procs can KILL monsters (Ignition/Stasis bomb), which removes them from _activeMonsters.
+                        // Iterate a snapshot to avoid "Collection was modified" exceptions.
+                        var monstersSnapshot = new List<Monster>(_activeMonsters);
+                        for (int mi = 0; mi < monstersSnapshot.Count; mi++)
                         {
-                            if (enemyMonster == null) continue;
+                            var enemyMonster = monstersSnapshot[mi];
+if (enemyMonster == null) continue;
                             if (!enemyMonster.HasFocusRune) continue;
 
                             DimScreenTemporarily(0.5f);
@@ -4198,17 +4214,25 @@ if (logPassiveBridge)
                             if (flameSigilActive)
                             {
                                 if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
-                                enemyMonster.AddIgnition(1);
+                                int beforeIgn = enemyMonster.IgnitionStacks;
+                            int capIgn = enemyMonster.maxIgnitionStacks;
+                            if (logFlow) Debug.Log($"[Battle][Sigil] Flame Sigil proc -> AddIgnition(+1) target='{enemyMonster.name}' before={beforeIgn} cap={capIgn}", this);
+                            enemyMonster.AddIgnition(1);
+                            if (logFlow) Debug.Log($"[Battle][Sigil] Flame Sigil done target='{enemyMonster.name}' after={enemyMonster.IgnitionStacks} dead={enemyMonster.IsDead}", this);
                                 uiDirty = true;
                             }
 
                             if (waterSigilActive)
                             {
                                 if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
-                                enemyMonster.AddStasis(1);
+                                int beforeSta = enemyMonster.StasisStacks;
+                            int capSta = enemyMonster.maxStasisStacks;
+                            if (logFlow) Debug.Log($"[Battle][Sigil] Water Sigil proc -> AddStasis(+1) target='{enemyMonster.name}' before={beforeSta} cap={capSta}", this);
+                            enemyMonster.AddStasis(1);
+                            if (logFlow) Debug.Log($"[Battle][Sigil] Water Sigil done target='{enemyMonster.name}' after={enemyMonster.StasisStacks} dead={enemyMonster.IsDead}", this);
                                 uiDirty = true;
-                            }
                         }
+                    }
                     }
                 }
             }
@@ -4311,3 +4335,5 @@ if (logPassiveBridge)
         }
     }
 }
+
+

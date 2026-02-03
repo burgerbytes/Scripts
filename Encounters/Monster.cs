@@ -144,6 +144,7 @@ public class Monster : MonoBehaviour
 
     [Header("Debug")]
     [SerializeField] private bool debugDamageLogs = false;
+    [SerializeField] private bool debugStatusLogs = false;
 
     [Header("Status: Bleeding")]
     [SerializeField] private int _bleedStacks = 0;
@@ -507,29 +508,49 @@ public class Monster : MonoBehaviour
 
         int cap = (maxIgnitionStacks <= 0) ? int.MaxValue : maxIgnitionStacks;
 
+        if (debugStatusLogs)
+            Debug.Log($"[Monster][Ignition] AddIgnition monster='{name}' +{stacks} before={_ignitionStacks} cap={cap} hp={_currentHp}/{maxHp}", this);
+
         if (_ignitionStacks + stacks >= cap)
         {
             // Trigger bomb
             int explosionBaseDamage = 5; // TODO: tune this (or make it serialized/configurable)
+
+            if (debugStatusLogs)
+                Debug.Log($"[Monster][Ignition] EXPLODE monster='{name}' stacksBefore={_ignitionStacks} add={stacks} cap={cap} baseDmg={explosionBaseDamage}", this);
 
             // Apply as an "ability" hit so tag-vs-monster-tag multipliers work.
             // Note: Monster resistances in this class are currently only Physical/Electric.
             // The FireElemental interaction is handled by GetDamageMultiplierForAbilityTags().
             var tags = new AbilityTag[] { AbilityTag.FireElemental };
 
-            TakeDamageFromAbility(
+            int hpBefore = _currentHp;
+            int damageApplied = TakeDamageFromAbility(
                 abilityBaseDamage: explosionBaseDamage,
                 classAttackModifier: 1f,
                 element: ElementType.Physical,
                 abilityTags: tags
             );
 
+            if (debugStatusLogs)
+                Debug.Log($"[Monster][Ignition] Explosion resolved monster='{name}' damageApplied={damageApplied} hp {hpBefore}->{_currentHp} dead={IsDead}", this);
+
             if (IsDead)
             {
                 if (_battleManager == null)
                     _battleManager = BattleManager.Instance != null ? BattleManager.Instance : FindFirstObjectByType<BattleManager>();
 
-                _battleManager?.HandleMonsterKilled(this);
+                if (debugStatusLogs)
+                    Debug.Log($"[Monster][Ignition] Monster died from ignition explosion. Notifying BattleManager? bmNull={(_battleManager == null)}", this);
+
+                try
+                {
+                    _battleManager?.HandleMonsterKilled(this);
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogError($"[Monster][Ignition] ERROR while notifying BattleManager of ignition kill monster='{name}': {ex}", this);
+                }
             }
 
             ClearIgnition();
@@ -538,7 +559,11 @@ public class Monster : MonoBehaviour
 
         _ignitionStacks += stacks;
         OnStatusChanged?.Invoke();
+
+        if (debugStatusLogs)
+            Debug.Log($"[Monster][Ignition] Stacks updated monster='{name}' newStacks={_ignitionStacks}/{cap}", this);
     }
+
 
     public void ClearIgnition()
     {
@@ -588,3 +613,4 @@ public void SetCurrentHp(int hp)
 
 
 ////////////////////////////////////////////////////////////
+
