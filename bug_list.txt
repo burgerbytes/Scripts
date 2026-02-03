@@ -1,5 +1,4 @@
 bugs
-- move vfx to CenterPoint and align all hero status icons with hp like monsters'
 - make sure canceling hero abilities works
 - upgrade reels happens 2x becuase original call was never removed
 - when 2 charactes level up at the same time, the upgrade reels isn't called for the second hero
