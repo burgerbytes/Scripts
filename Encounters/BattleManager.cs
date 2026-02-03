@@ -1440,7 +1440,7 @@ private bool TryRunLevel5EvolutionNow()
             catch { dealt = 0; }
 
             if (dealt > 0 && pm.avatarGO != null)
-                SpawnDamageNumber(pm.avatarGO.transform.position, dealt);
+                SpawnDamageNumber(GetHeroCenterWorldPosition(hs, pm.avatarGO.transform), dealt);
         }
 
         if (IsPartyDefeated())
@@ -1481,7 +1481,7 @@ private bool TryRunLevel5EvolutionNow()
             HeroStats targetStats = _party[targetIdx].stats;
             GameObject targetGO = _party[targetIdx].avatarGO;
 
-            Transform targetTf = targetGO != null ? targetGO.transform : (targetStats != null ? targetStats.transform : null);
+            Transform targetTf = GetHeroCenterPointTransform(targetStats, targetGO != null ? targetGO.transform : (targetStats != null ? targetStats.transform : null));
 
             yield return EnemyLungeAttack(intent.enemy, targetTf, () =>
             {
@@ -1519,7 +1519,7 @@ private bool TryRunLevel5EvolutionNow()
                         if (hs.IsHidden) hs.SetHidden(false);
 
                         if (pm.avatarGO != null)
-                            SpawnDamageNumber(pm.avatarGO.transform.position, totalDamageShown);
+                            SpawnDamageNumber(GetHeroCenterWorldPosition(hs, pm.avatarGO.transform), totalDamageShown);
                     }
 
                     ApplyPartyHiddenVisuals();
@@ -1556,7 +1556,7 @@ private bool TryRunLevel5EvolutionNow()
                 if (logFlow) Debug.Log($"[Battle][EnemyAtk] Damage result. dealtToHp={dealtSingle} targetShieldAfter={targetStats.Shield}", this);
 
                 if (targetGO != null)
-                    SpawnDamageNumber(targetGO.transform.position, totalDamageShownSingle);
+                    SpawnDamageNumber(GetHeroCenterWorldPosition(targetStats, targetGO != null ? targetGO.transform : null), totalDamageShownSingle);
             });
             NotifyPartyChanged();
 
@@ -2170,9 +2170,9 @@ RemoveMonster(enemyTarget);
 
                 if (healed > 0)
                 {
-                    Vector3 pos = (targetGO != null) ? targetGO.transform.position : (targetStats != null ? targetStats.transform.position : Vector3.zero);
+                    Vector3 pos = GetHeroCenterWorldPosition(targetStats, targetGO != null ? targetGO.transform : (targetStats != null ? targetStats.transform : null));
                     SpawnHealNumber(pos, healed);
-                    SpawnHealVfx(targetStats.transform);
+                    SpawnHealVfx(GetHeroCenterPointTransform(targetStats, targetStats != null ? targetStats.transform : null));
                 }
             }
         }
@@ -3417,11 +3417,26 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
             if (sr != null)
                 sr.color = hidden ? hiddenTint : Color.white;
 
+            
             StatusEffectIconController statusIcon = null;
+
+            // Status icons should be positioned relative to the hero prefab's CenterPoint (if present).
+            // This avoids variance from differing sprite pivots/bounds between heroes.
+            Transform centerTf = GetHeroCenterPointTransform(hs, pm.avatarGO.transform);
+            Transform desiredParent = (centerTf != null) ? centerTf : pm.avatarGO.transform;
 
             Transform iconTf = null;
 
-            if (hs != null)
+            // First try: look for an existing "_StatusIcon" under the preferred anchor (CenterPoint/root),
+            // then fall back to the HeroStats root (legacy setups).
+            if (desiredParent != null)
+            {
+                iconTf = desiredParent.Find("_StatusIcon");
+                if (iconTf == null)
+                    iconTf = desiredParent.Find("__StatusIcon");
+            }
+
+            if (iconTf == null && hs != null)
             {
                 iconTf = hs.transform.Find("_StatusIcon");
                 if (iconTf == null)
@@ -3430,6 +3445,7 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
 
             if (iconTf == null)
             {
+                // Broad fallback: find any existing "_StatusIcon" anywhere under the avatar GO.
                 var all = pm.avatarGO.GetComponentsInChildren<Transform>(true);
                 for (int t = 0; t < all.Length; t++)
                 {
@@ -3445,8 +3461,19 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
             if (iconTf == null)
             {
                 var go = new GameObject("_StatusIcon");
-                go.transform.SetParent(pm.avatarGO.transform, false);
+                go.transform.SetParent(desiredParent != null ? desiredParent : pm.avatarGO.transform, false);
                 iconTf = go.transform;
+            }
+            else
+            {
+                // Ensure the anchor is parented to the desired parent so offsets are relative to CenterPoint.
+                if (desiredParent != null && iconTf.parent != desiredParent)
+                    iconTf.SetParent(desiredParent, true);
+            }
+
+            // Normalize placement relative to CenterPoint (or root if CenterPoint is missing).
+            if (iconTf != null)
+            {
                 iconTf.localPosition = new Vector3(0f, 1.2f, 0f);
                 iconTf.localScale = Vector3.one;
             }
@@ -3457,7 +3484,6 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
                 if (statusIcon == null)
                     statusIcon = iconTf.gameObject.AddComponent<StatusEffectIconController>();
             }
-
             if (statusIcon != null)
             {
                 statusIcon.ConfigureSprites(
@@ -3624,6 +3650,45 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
             return;
 
         healVfxSpawner.PlayBRVfx(targetRoot);
+    }
+
+
+    // ---------------- HERO CENTERPOINT HELPERS ----------------
+    // Many VFX/status visuals should be anchored to a hero's sprite center,
+    // not necessarily the hero GameObject's root transform.
+    private static Transform GetHeroCenterPointTransform(HeroStats hs, Transform fallbackRoot)
+    {
+        if (hs != null && hs.CenterPointTransform != null)
+            return hs.CenterPointTransform;
+
+        if (fallbackRoot == null) return null;
+
+        if (fallbackRoot.name == "CenterPoint")
+            return fallbackRoot;
+
+        Transform found = FindChildRecursive(fallbackRoot, "CenterPoint");
+        return found != null ? found : fallbackRoot;
+    }
+
+    private static Vector3 GetHeroCenterWorldPosition(HeroStats hs, Transform fallbackRoot)
+    {
+        Transform t = GetHeroCenterPointTransform(hs, fallbackRoot);
+        return t != null ? t.position : Vector3.zero;
+    }
+
+    private static Transform FindChildRecursive(Transform root, string childName)
+    {
+        if (root == null) return null;
+        for (int i = 0; i < root.childCount; i++)
+        {
+            Transform c = root.GetChild(i);
+            if (c == null) continue;
+            if (c.name == childName) return c;
+
+            Transform nested = FindChildRecursive(c, childName);
+            if (nested != null) return nested;
+        }
+        return null;
     }
 
     private static float ComputeParticleLifetimeSeconds(GameObject root, float fallbackSeconds)

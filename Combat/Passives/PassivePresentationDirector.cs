@@ -78,7 +78,7 @@ public class PassivePresentationDirector : MonoBehaviour
 
     private IEnumerator ProcRoutine(HeroStats hero, float dimAlpha, float zoomMultiplier, float durationSeconds, GameObject vfxPrefab)
     {
-        Transform t = hero.transform;
+        Transform t = (hero.CenterPointTransform != null ? hero.CenterPointTransform : hero.transform);
 
         if (logDebug) Debug.Log($"[PassivePresentation] Start hero='{hero.name}' dim={dimAlpha} zoomMult={zoomMultiplier} dur={durationSeconds}", this);
 

@@ -10,6 +10,19 @@ public class HeroStats : MonoBehaviour
     /// </summary>
     public HeroCombatEvents Events { get; private set; }
 
+    [Header("Visual Anchors")]
+    [Tooltip("Optional explicit reference to the hero prefab's CenterPoint child transform. If left null, we will auto-find a child named 'CenterPoint'.")]
+    [SerializeField] private Transform centerPoint;
+
+    /// <summary>
+    /// Resolved transform used as the "visual center" for VFX/status anchoring.
+    /// Falls back to this hero's root transform if CenterPoint is not present.
+    /// </summary>
+    public Transform CenterPointTransform { get; private set; }
+
+    public Vector3 CenterPointWorldPosition => (CenterPointTransform != null ? CenterPointTransform.position : transform.position);
+
+
     [Header("Passive Abilities")]
     [Tooltip("Always-on passives. These are NOT shown in the Ability Menu.")]
     [SerializeField] private List<PassiveAbilitySO> passiveAbilities = new List<PassiveAbilitySO>();
@@ -537,6 +550,7 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
     private void Awake()
     {
         Events = new HeroCombatEvents(this);
+        ResolveCenterPoint();
 
         currentHp = Mathf.Clamp(currentHp, 0, maxHp);
         currentStamina = Mathf.Clamp(currentStamina, 0f, maxStamina);
@@ -549,6 +563,36 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
         InitEquipmentWatcher();      // legacy array watcher (safe to keep)
         RefreshEquipSlotsFromGrid(); // runtime EquipGrid watcher
         NotifyChanged();
+    }
+
+
+    private void ResolveCenterPoint()
+    {
+        // If user wired it explicitly, respect that.
+        if (centerPoint != null)
+        {
+            CenterPointTransform = centerPoint;
+            return;
+        }
+
+        // Auto-find a child named "CenterPoint" anywhere under this hero.
+        Transform found = FindChildRecursive(transform, "CenterPoint");
+        CenterPointTransform = found != null ? found : transform;
+    }
+
+    private static Transform FindChildRecursive(Transform root, string childName)
+    {
+        if (root == null) return null;
+        for (int i = 0; i < root.childCount; i++)
+        {
+            Transform c = root.GetChild(i);
+            if (c == null) continue;
+            if (c.name == childName) return c;
+
+            Transform nested = FindChildRecursive(c, childName);
+            if (nested != null) return nested;
+        }
+        return null;
     }
 
     private void OnEnable()

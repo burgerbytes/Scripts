@@ -28,12 +28,40 @@ namespace SlotsAndSorcery.VFX
         [Tooltip("Fallback destroy time if we can't find particle durations.")]
         [SerializeField] private float fallbackDestroySeconds = 2.0f;
 
+
+        private static Transform ResolveCenterPointAnchor(Transform targetRoot)
+        {
+            if (targetRoot == null) return null;
+
+            // If caller already passed the CenterPoint transform, keep it.
+            if (targetRoot.name == "CenterPoint") return targetRoot;
+
+            // Search for a child named CenterPoint.
+            Transform found = FindChildRecursive(targetRoot, "CenterPoint");
+            return found != null ? found : targetRoot;
+        }
+
+        private static Transform FindChildRecursive(Transform root, string childName)
+        {
+            if (root == null) return null;
+            for (int i = 0; i < root.childCount; i++)
+            {
+                Transform c = root.GetChild(i);
+                if (c == null) continue;
+                if (c.name == childName) return c;
+
+                Transform nested = FindChildRecursive(c, childName);
+                if (nested != null) return nested;
+            }
+            return null;
+        }
+
         public void PlayHealVfx(Transform targetRoot, Transform optionalAnchorOverride = null)
         {
             if (healVfxPrefab == null || targetRoot == null) return;
 
             Transform anchor = optionalAnchorOverride != null ? optionalAnchorOverride :
-                               (defaultAnchor != null ? defaultAnchor : targetRoot);
+                               (defaultAnchor != null ? defaultAnchor : ResolveCenterPointAnchor(targetRoot));
 
             var go = Instantiate(healVfxPrefab, anchor);
             go.transform.localPosition += localOffset;
@@ -50,7 +78,7 @@ namespace SlotsAndSorcery.VFX
             if (brVfxPrefab == null || targetRoot == null) return;
 
             Transform anchor = optionalAnchorOverride != null ? optionalAnchorOverride :
-                               (defaultAnchor != null ? defaultAnchor : targetRoot);
+                               (defaultAnchor != null ? defaultAnchor : ResolveCenterPointAnchor(targetRoot));
 
             var go = Instantiate(brVfxPrefab, anchor);
             go.transform.localPosition += localOffset;
@@ -68,7 +96,7 @@ namespace SlotsAndSorcery.VFX
             if (smokeVfxPrefab == null || targetRoot == null) return;
 
             Transform anchor = optionalAnchorOverride != null ? optionalAnchorOverride :
-                               (defaultAnchor != null ? defaultAnchor : targetRoot);
+                               (defaultAnchor != null ? defaultAnchor : ResolveCenterPointAnchor(targetRoot));
 
             var go = Instantiate(brVfxPrefab, anchor);
             go.transform.localPosition += localOffset;
