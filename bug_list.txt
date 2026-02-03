@@ -1,5 +1,4 @@
 bugs
-- ninja substitution incorrectly procs on all tokens rather than just null. it also procs every cashout rather than just the first
 - transmute shoud proc sigils
 - move vfx to CenterPoint and align all hero status icons with hp like monsters'
 - make sure canceling hero abilities works

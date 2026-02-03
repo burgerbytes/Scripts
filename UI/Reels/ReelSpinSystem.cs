@@ -156,6 +156,24 @@ public class ReelSpinSystem : MonoBehaviour
     /// </summary>
     public Func<int, bool> CanApplySubstitutionForReelIndex;
 
+    // Battle-only: Substitution should only run on the first cashout of a battle.
+    private bool _substitutionAttemptedThisBattle = false;
+
+    
+    // Cashout-press gate: Substitution should only be available BEFORE the first cashout press of the battle.
+    private bool _cashoutPressedThisBattle = false;
+    private int _cashoutPressCountThisBattle = 0;
+    private int _substitutionTriggerCountThisBattle = 0;
+/// <summary>Called by BattleManager at the start of each battle.</summary>
+    public void ResetBattleSubstitutionState()
+    {
+        _substitutionAttemptedThisBattle = false;
+        _cashoutPressedThisBattle = false;
+        _cashoutPressCountThisBattle = 0;
+        _substitutionTriggerCountThisBattle = 0;
+        Debug.Log($"[ReelSpinSystem][SubstitutionDebug] ResetBattleSubstitutionState -> cashoutPressCount=0 substitutionTriggerCount=0", this);
+    }
+
     [Serializable]
     public struct SpinLandedInfo
     {
@@ -1068,11 +1086,23 @@ public class ReelSpinSystem : MonoBehaviour
 
     private IEnumerator ApplySubstitutionBeforeCashoutRoutine()
     {
+        // Substitution is a battle passive. Never apply it in reward mode.
+        if (_rewardModeActive) yield break;
+
         if (!InReelPhase) yield break;
         if (spinning) yield break;
         if (!HasCurrentLandedSymbols) yield break;
 
-        ReelSymbolSO wild = GetDefaultWildSymbol();
+        // Only attempt once per battle (BattleManager calls ResetBattleSubstitutionState at battle start).
+        if (_substitutionAttemptedThisBattle)
+        {
+            Debug.Log($"[ReelSpinSystem][SubstitutionDebug] ApplySubstitutionBeforeCashoutRoutine SKIP: already attempted this battle. cashoutPressCount={_cashoutPressCountThisBattle} triggerCount={_substitutionTriggerCountThisBattle}", this);
+            yield break;
+        }
+        _substitutionAttemptedThisBattle = true;
+        _substitutionTriggerCountThisBattle++;
+        Debug.Log($"[ReelSpinSystem][SubstitutionDebug] APPLY attempt #{_substitutionTriggerCountThisBattle} (cashoutPressCount={_cashoutPressCountThisBattle}).", this);
+ReelSymbolSO wild = GetDefaultWildSymbol();
         if (wild == null) yield break;
 
         int count = Mathf.Min(3, _currentLandedSymbols.Count);
@@ -1084,6 +1114,9 @@ public class ReelSpinSystem : MonoBehaviour
         {
             ReelSymbolSO sym = _currentLandedSymbols[i];
             if (sym == null) continue;
+
+            // If the reel already landed on a WLD token, do not overwrite it.
+            if (sym == wild) continue;
 
             if (CanApplySubstitutionForReelIndex != null && !CanApplySubstitutionForReelIndex(i))
                 continue;
@@ -1099,7 +1132,11 @@ public class ReelSpinSystem : MonoBehaviour
             anyChanged = true;
         }
 
-        if (!anyChanged) yield break;
+        if (!anyChanged)
+        {
+            Debug.Log($"[ReelSpinSystem][SubstitutionDebug] APPLY resulted in NO changes (all were WILD or disallowed).", this);
+            yield break;
+        }
 
         // Recompute pending + notify listeners BEFORE payout is collected.
         SetPendingFromSymbols(_currentLandedSymbols, _currentLandedMultipliers);
@@ -1215,6 +1252,13 @@ public class ReelSpinSystem : MonoBehaviour
 
     public void StopSpinningAndCollect()
     {
+        // Track cashout presses per battle (for Substitution gating + debugging).
+        bool wasPressedBefore = _cashoutPressedThisBattle;
+        _cashoutPressedThisBattle = true;
+        _cashoutPressCountThisBattle++;
+        bool firstCashoutThisBattle = !wasPressedBefore;
+        Debug.Log($"[ReelSpinSystem][Cashout] Press #{_cashoutPressCountThisBattle} this battle. firstCashout={firstCashoutThisBattle} InReelPhase={InReelPhase} rewardMode={_rewardModeActive} spinning={spinning}", this);
+
         // After cashout, disable both Spin + Cashout.
         if (stopSpinningButton != null)
             stopSpinningButton.interactable = false;
@@ -1222,17 +1266,18 @@ public class ReelSpinSystem : MonoBehaviour
         if (spinButton != null)
             spinButton.interactable = false;
 
-        StartCoroutine(StopSpinningAndCollectRoutine());
+        StartCoroutine(StopSpinningAndCollectRoutine(firstCashoutThisBattle));
     }
 
-    private IEnumerator StopSpinningAndCollectRoutine()
+    private IEnumerator StopSpinningAndCollectRoutine(bool firstCashoutThisBattle)
     {
-        bool canApplySubstitution = CanApplySubstitutionNow();
+        bool canApplySubstitution = firstCashoutThisBattle && CanApplySubstitutionNow();
+
+        Debug.Log($"[ReelSpinSystem][SubstitutionDebug] StopSpinningAndCollectRoutine: firstCashout={firstCashoutThisBattle} CanApplySubstitutionNow={CanApplySubstitutionNow()} => willApply={canApplySubstitution} (triggerCount={_substitutionTriggerCountThisBattle})", this);
 
         if (canApplySubstitution)
             yield return StartCoroutine(ApplySubstitutionBeforeCashoutRoutine());
-
-        // End reel-phase, but keep the reels available/visible if desired.
+// End reel-phase, but keep the reels available/visible if desired.
         if (!keepReelsEnabledAfterCashout)
             Set3DReelsActive(false);
 
@@ -1345,7 +1390,3 @@ public class ReelSpinSystem : MonoBehaviour
 ////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////
-
-
-
-
