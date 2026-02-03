@@ -272,12 +272,7 @@ public class PartyHUD : MonoBehaviour
         if (reelSpinSystem == null)
             reelSpinSystem = FindFirstObjectByType<ReelSpinSystem>();
 
-        if (reelSpinSystem != null && !reelSpinSystem.InReelPhase)
-        {
-            if (debugLogs)
-                Debug.Log("[PartyHUD] Not in reel phase; ignoring OpenReelcraftForPartyIndex.", this);
-            return;
-        }
+        // Reelcraft is allowed outside reel phase (still once-per-battle and controller-gated).
 
         EnsureReelcraftPanelRef();
 

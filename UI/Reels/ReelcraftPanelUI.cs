@@ -96,9 +96,10 @@ public class ReelcraftPanelUI : MonoBehaviour
 
     private void HandleReelPhaseChanged(bool inReelPhase)
     {
-        // If reel phase ends, hide this panel immediately.
-        if (!inReelPhase)
-            Hide();
+        // Reelcraft can be used outside reel phase; do not auto-hide on cashout.
+        // We keep the panel state and simply refresh interactables/description.
+        if (gameObject.activeSelf)
+            Refresh();
     }
 
     private void HandlePendingChanged(int a, int d, int m, int w)
@@ -167,8 +168,7 @@ public class ReelcraftPanelUI : MonoBehaviour
         _partyIndex = partyIndex;
         _hero = battleManager.GetHeroAtPartyIndex(partyIndex);
 
-        if (reelSpinSystem != null && !reelSpinSystem.InReelPhase)
-            return;
+        // Reelcraft can be opened outside reel phase (e.g., after cashout). The controller will gate actual use.
 
         gameObject.SetActive(true);
         Refresh();
@@ -248,7 +248,7 @@ public class ReelcraftPanelUI : MonoBehaviour
     private static string BuildDescription(ReelcraftController.ReelcraftArchetype archetype, bool canUse, bool used)
     {
         if (used) return "Reelcraft can only be used once per battle.";
-        if (!canUse) return "Reelcraft is only available during the reel phase after a spin lands.";
+        if (!canUse) return "Reelcraft is not available right now (reels may be spinning, it may not be your turn, or it has already been used this battle).";
 
         switch (archetype)
         {
@@ -346,3 +346,4 @@ public class ReelcraftPanelUI : MonoBehaviour
         if (c != null) c.gameObject.SetActive(visible);
     }
 }
+

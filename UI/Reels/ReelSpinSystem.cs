@@ -249,6 +249,8 @@ public class ReelSpinSystem : MonoBehaviour
     private readonly List<ReelStripSO> _savedStrips = new List<ReelStripSO>();
 
     public bool IsRewardMode => _rewardModeActive;
+    public bool IsSpinning => spinning;
+
 
     private void Awake()
     {
@@ -704,9 +706,11 @@ public class ReelSpinSystem : MonoBehaviour
     /// </summary>
     public bool TryNudgeReel(int reelIndex, int deltaSteps)
     {
-        if (!InReelPhase) return false;
+        // Reelcraft can nudge reels outside reel phase (e.g., after cashout) as long as reels are not spinning.
         if (spinning) return false;
-        if (!HasCurrentLandedSymbols) return false;
+        if (IsRewardMode) return false;
+
+        bool isReelPhaseEdit = InReelPhase && HasCurrentLandedSymbols;
 
         if (reels == null || reelIndex < 0 || reelIndex >= reels.Count)
             return false;
@@ -715,8 +719,20 @@ public class ReelSpinSystem : MonoBehaviour
         if (entry == null || entry.reel3d == null)
             return false;
 
-        if (!entry.reel3d.TryNudgeSteps(deltaSteps))
-            return false;
+        // deltaSteps==0 is used as a 'refresh' in some flows (e.g., after transmutation).
+        // Outside reel phase, we allow this as a no-op success.
+        if (deltaSteps != 0)
+        {
+            if (!entry.reel3d.TryNudgeSteps(deltaSteps))
+                return false;
+        }
+        else
+        {
+            entry.reel3d.TryNudgeSteps(0);
+        }
+
+        if (!isReelPhaseEdit)
+            return true;
 
         // Re-read the symbol at midrow for that reel.
         int qi;
@@ -1390,3 +1406,4 @@ ReelSymbolSO wild = GetDefaultWildSymbol();
 ////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////
+

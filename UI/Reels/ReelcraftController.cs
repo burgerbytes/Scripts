@@ -91,7 +91,7 @@ public class ReelcraftController : MonoBehaviour
     {
         if (!_transmuteSelecting) return;
         if (reelSpinSystem == null) return;
-        if (!reelSpinSystem.InReelPhase) { CancelTransmuteSelection(); return; }
+        if (reelSpinSystem.IsRewardMode || reelSpinSystem.IsSpinning) { CancelTransmuteSelection(); return; }
 
         // Mouse click selection. IMPORTANT:
         // We *do not* early-return when over UI, because many UI setups have large RaycastTargets
@@ -230,22 +230,38 @@ public class ReelcraftController : MonoBehaviour
     public bool CanUse(int partyIndex)
     {
         if (reelSpinSystem == null) return false;
-        if (!reelSpinSystem.InReelPhase) return false;
-        if (!reelSpinSystem.HasCurrentLandedSymbols) return false;
 
+        // Global gates
+        if (reelSpinSystem.IsRewardMode) return false;
+        if (reelSpinSystem.IsSpinning) return false;
+        if (battleManager != null && !battleManager.IsPlayerPhase) return false;
+
+        HeroStats hero = (battleManager != null) ? battleManager.GetHeroAtPartyIndex(partyIndex) : null;
+        ReelcraftArchetype archetype = GetArchetype(hero);
+
+        // Ninja's Twofold Shadow modifies the *current* pending payout, so it still requires an active reel phase with landed symbols.
+        bool requiresActiveSpinResult = (archetype == ReelcraftArchetype.Ninja);
+
+        if (requiresActiveSpinResult)
+        {
+            if (!reelSpinSystem.InReelPhase) return false;
+            if (!reelSpinSystem.HasCurrentLandedSymbols) return false;
+        }
+
+        // Once-per-battle (per hero)
         if (!HasUsed(partyIndex))
             return true;
 
         // Debug: allow unlimited Measured Bash for Fighters.
         if (debugUnlimitedFighterMeasuredBash && battleManager != null)
         {
-            HeroStats hero = battleManager.GetHeroAtPartyIndex(partyIndex);
-            if (GetArchetype(hero) == ReelcraftArchetype.Fighter)
+            if (archetype == ReelcraftArchetype.Fighter)
                 return true;
         }
 
         return false;
     }
+
 
     public ReelcraftArchetype GetArchetype(HeroStats hero)
     {
