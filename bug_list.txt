@@ -1,5 +1,5 @@
 bugs
-- transmute shoud proc sigils
+- transmute should proc sigils
 - move vfx to CenterPoint and align all hero status icons with hp like monsters'
 - make sure canceling hero abilities works
 - upgrade reels happens 2x becuase original call was never removed
@@ -17,4 +17,5 @@ features
 - award same xp to all heroes. dead heroes get 0 xp
 - add reel locking (as an ability)
 - allow use of reelcraft during player phase
- 
+- make reelcraft abilities upgradeable (e.g. fighter ability can nudge other reels)
+- cast abilities by dragging and dropping tokens onto heroes
