@@ -1570,6 +1570,9 @@ private bool TryRunLevel5EvolutionNow()
         }
 
         ResetPartyRoundFlags();
+        // NOTE: Substitution is a once-per-battle "first cashout" effect.
+        // Do NOT reset its battle counters on turn transitions (EnemyPhase -> PlayerPhase),
+        // or it will incorrectly be able to trigger again on the next spin.
         PlanEnemyIntents();
 
         SetState(BattleState.PlayerPhase);
@@ -1694,6 +1697,7 @@ private bool TryRunLevel5EvolutionNow()
         SetState(BattleState.BattleStart);
 
         ResetPartyRoundFlags();
+        if (reelSpinSystem != null) reelSpinSystem.ResetBattleSubstitutionState();
 
         // Ensure any per-battle-only statuses (e.g., Conceal/Hidden) are cleared before a new encounter begins.
         if (_party != null)
@@ -4238,13 +4242,11 @@ if (logPassiveBridge)
         _dimRoutine = null;
     }
 
-    
-
     private void ConfigureReelSpinSystemCashoutHooks()
     {
         if (reelSpinSystem == null) return;
 
-        if (logFlow) Debug.Log("[Battle][SubstitutionHook] Installing CanApplySubstitutionForReelIndex delegate.", this);
+        if (logFlow) Debug.Log("[Battle][SubstitutionHook] Installing CanApplySubstitutionForReelIndex delegate (unlock-only; ReelSpinSystem gates by first cashout this battle).", this);
 
         // Gate Substitution per reel index based on each hero's unlock.
         reelSpinSystem.CanApplySubstitutionForReelIndex = (reelIndex) =>
