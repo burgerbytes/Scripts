@@ -3419,13 +3419,12 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
     [SerializeField] private float statusIconScale = 0.8f;
     [SerializeField] private float statusIconHorizontalSpacing = 0.35f;
 
-    
+    [Header("Status Stack Count Layout")]
+    [SerializeField] private Vector3 statusStackTextLocalOffset = new Vector3(0.22f, -0.18f, 0f);
+    [SerializeField] private float statusStackTextScale = 1.0f;
+    [SerializeField] private float statusStackTextFontSize = 2.5f;
 
-[Header("Status Stack Count Layout")]
-[SerializeField] private Vector3 statusStackTextLocalOffset = new Vector3(0.22f, -0.18f, 0f);
-[SerializeField] private float statusStackTextScale = 1.0f;
-[SerializeField] private float statusStackTextFontSize = 2.5f;
-private void ApplyPartyHiddenVisuals()
+    private void ApplyPartyHiddenVisuals()
     {
         if (_party == null) return;
 
@@ -3442,7 +3441,9 @@ private void ApplyPartyHiddenVisuals()
                 sr.color = hidden ? hiddenTint : Color.white;
 
             
-            StatusEffectIconController statusIcon = null;
+            
+            // Status icons: support multiple simultaneous effects by creating one child icon per effect under _StatusIcon.
+            // (Legacy versions used a single StatusEffectIconController on the root, which could only show one sprite at a time.)
 
             // Status icons should be positioned relative to the hero prefab's CenterPoint (if present).
             // This avoids variance from differing sprite pivots/bounds between heroes.
@@ -3500,38 +3501,123 @@ private void ApplyPartyHiddenVisuals()
             {
                 iconTf.localPosition = statusIconLocalOffset;
                 iconTf.localScale = Vector3.one * statusIconScale;
-}
 
-            if (iconTf != null)
-            {
-                statusIcon = iconTf.GetComponent<StatusEffectIconController>();
-                if (statusIcon == null)
-                    statusIcon = iconTf.gameObject.AddComponent<StatusEffectIconController>();
-            }
-            if (statusIcon != null)
-            {
-                statusIcon.ConfigureSprites(
-                    statusIconHiddenSprite,
-                    statusIconStunnedSprite,
-                    statusIconTripleBladeEmpoweredSprite,
-                    statusIconBleedingSprite
-                );
+                // Root should never render a sprite (children do the rendering).
+                var rootSr = iconTf.GetComponent<SpriteRenderer>();
+                if (rootSr != null) rootSr.enabled = false;
 
-                statusIcon.SetStates(
-                    hidden: hidden,
-                    stunned: (hs != null && hs.IsStunned),
-                    tripleBladeEmpowered: (hs != null && hs.IsTripleBladeEmpoweredThisTurn),
-                    bleeding: (hs != null && hs.IsBleeding)
-                );
-
-                statusIcon.SetBleedStacks(hs != null ? hs.BleedStacks : 0);
-
+                RefreshHeroStatusIcons(iconTf, hs);
                 LayoutHeroStatusIcons(iconTf);
             }
         }
     }
 
 
+
+/// <summary>
+/// Ensures hero status icons are shown simultaneously by maintaining one child icon GameObject per status.
+/// The root is expected to be the "_StatusIcon" transform (anchored under the hero CenterPoint).
+/// </summary>
+private void RefreshHeroStatusIcons(Transform statusIconRoot, HeroStats hs)
+{
+    if (statusIconRoot == null) return;
+
+    bool hidden = hs != null && hs.IsHidden;
+    bool stunned = hs != null && hs.IsStunned;
+    bool triple = hs != null && hs.IsTripleBladeEmpoweredThisTurn;
+    bool bleeding = hs != null && hs.IsBleeding;
+    int bleedStacks = (hs != null) ? hs.BleedStacks : 0;
+
+    // Disable any legacy root-level "Stacks" label; stacks now live under the Bleeding icon.
+    var legacyStacks = statusIconRoot.Find("Stacks");
+    if (legacyStacks != null)
+        legacyStacks.gameObject.SetActive(false);
+
+    EnsureHeroStatusIcon(statusIconRoot, "Hidden", statusIconHiddenSprite, hidden);
+    EnsureHeroStatusIcon(statusIconRoot, "Stunned", statusIconStunnedSprite, stunned);
+    EnsureHeroStatusIcon(statusIconRoot, "TripleBlade", statusIconTripleBladeEmpoweredSprite, triple);
+
+    var bleedIcon = EnsureHeroStatusIcon(statusIconRoot, "Bleeding", statusIconBleedingSprite, bleeding);
+    if (bleedIcon != null)
+        EnsureHeroStatusStacks(bleedIcon, bleeding ? bleedStacks : 0);
+}
+
+private Transform EnsureHeroStatusIcon(Transform root, string childName, Sprite sprite, bool active)
+{
+    if (root == null) return null;
+
+    // Don't create/show an icon if no sprite is assigned.
+    bool shouldShow = active && sprite != null;
+
+    Transform tf = root.Find(childName);
+    if (tf == null)
+    {
+        var go = new GameObject(childName);
+        go.transform.SetParent(root, false);
+        tf = go.transform;
+
+        var sr = go.AddComponent<SpriteRenderer>();
+        sr.sortingOrder = 50;
+    }
+
+    // Keep transforms stable; layout will position in a row.
+    tf.localPosition = Vector3.zero;
+    tf.localRotation = Quaternion.identity;
+    tf.localScale = Vector3.one;
+
+    var iconSr = tf.GetComponent<SpriteRenderer>();
+    if (iconSr == null) iconSr = tf.gameObject.AddComponent<SpriteRenderer>();
+    iconSr.sprite = sprite;
+    iconSr.enabled = shouldShow;
+
+    if (tf.gameObject.activeSelf != shouldShow)
+        tf.gameObject.SetActive(shouldShow);
+
+    return tf;
+}
+
+private void EnsureHeroStatusStacks(Transform iconTf, int stacks)
+{
+    if (iconTf == null) return;
+
+    Transform stacksTf = iconTf.Find("Stacks");
+    TextMeshPro tmp = null;
+
+    if (stacksTf == null)
+    {
+        var go = new GameObject("Stacks");
+        go.transform.SetParent(iconTf, false);
+        stacksTf = go.transform;
+
+        tmp = go.AddComponent<TextMeshPro>();
+        tmp.alignment = TextAlignmentOptions.Center;
+        tmp.enableAutoSizing = false;
+
+        var mr = tmp.GetComponent<MeshRenderer>();
+        if (mr != null) mr.sortingOrder = 51;
+    }
+    else
+    {
+        tmp = stacksTf.GetComponent<TextMeshPro>();
+        if (tmp == null) tmp = stacksTf.GetComponentInChildren<TextMeshPro>(true);
+    }
+
+    if (stacksTf != null)
+    {
+        stacksTf.localPosition = statusStackTextLocalOffset;
+        stacksTf.localScale = Vector3.one * statusStackTextScale;
+    }
+
+    if (tmp != null)
+    {
+        bool show = stacks > 0;
+        tmp.text = show ? stacks.ToString() : "";
+        tmp.enabled = show;
+
+        if (statusStackTextFontSize > 0f)
+            tmp.fontSize = statusStackTextFontSize;
+    }
+}
 /// <summary>
 /// Layout hero status icons in a centered horizontal row and apply stack-count text tuning.
 /// Icons are expected to be SpriteRenderer children under the _StatusIcon root.
