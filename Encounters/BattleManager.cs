@@ -1525,6 +1525,7 @@ private bool TryRunLevel5EvolutionNow()
                         if (intent.appliesBleed && intent.bleedStacks > 0)
                             ApplyBleedStacksToHero(hs, intent.bleedStacks);
                         if (hs.IsHidden) hs.SetHidden(false);
+                        hs.ApplyShadowFadeConcealIfPending();
 
                         if (pm.avatarGO != null)
                             SpawnDamageNumber(GetHeroCenterWorldPosition(hs, pm.avatarGO.transform), totalDamageShown);
@@ -1561,6 +1562,8 @@ private bool TryRunLevel5EvolutionNow()
 
                 if (intent.appliesBleed && intent.bleedStacks > 0)
                     ApplyBleedStacksToHero(targetStats, intent.bleedStacks);
+
+                targetStats.ApplyShadowFadeConcealIfPending();
                 if (logFlow) Debug.Log($"[Battle][EnemyAtk] Damage result. dealtToHp={dealtSingle} targetShieldAfter={targetStats.Shield}", this);
 
                 if (targetGO != null)
@@ -2117,10 +2120,11 @@ private bool TryRunLevel5EvolutionNow()
 
                 
 
-// Momentum: if this ability killed the enemy, immediately spin ONLY the caster's reel once and cash it out.
-if (ability != null && ability.momentumOnKill && reelSpinSystem != null)
-    yield return StartCoroutine(reelSpinSystem.MomentumSpinAndInstantCollect(_pendingActorIndex));
-RemoveMonster(enemyTarget);
+                // Momentum: if this ability killed the enemy, immediately spin ONLY the caster's reel once and cash it out.
+                if (ability != null && ability.momentumOnKill && reelSpinSystem != null)
+                    yield return StartCoroutine(reelSpinSystem.MomentumSpinAndInstantCollect(_pendingActorIndex));
+                    
+                RemoveMonster(enemyTarget);
             }
         }
 
@@ -3748,6 +3752,14 @@ private void LayoutHeroStatusIcons(Transform statusIconRoot)
             return;
 
         healVfxSpawner.PlayBRVfx(targetRoot);
+    }
+
+    private void SpawnIgnitionBlastVfx(Transform targetRoot)
+    {
+        if (healVfxSpawner == null || targetRoot == null)
+            return;
+
+        healVfxSpawner.PlayIgnitionBlastVfx(targetRoot);
     }
 
     /// <summary>

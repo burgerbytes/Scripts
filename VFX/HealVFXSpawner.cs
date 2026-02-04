@@ -91,6 +91,24 @@ namespace SlotsAndSorcery.VFX
             Destroy(go, life);
         }
 
+        public void PlayIgnitionBlastVfx(Transform targetRoot, Transform optionalAnchorOverride = null)
+        {
+            if (brVfxPrefab == null || targetRoot == null) return;
+
+            Transform anchor = optionalAnchorOverride != null ? optionalAnchorOverride :
+                               (defaultAnchor != null ? defaultAnchor : ResolveCenterPointAnchor(targetRoot));
+
+            var go = Instantiate(brVfxPrefab, anchor);
+            go.transform.localPosition += localOffset;
+            go.transform.localRotation = Quaternion.identity;
+
+            if (!autoDestroyWhenFinished)
+                return;
+
+            float life = ComputeLifetimeSeconds(go);
+            Destroy(go, life);
+        }
+
         public void PlaySmokeVfx(Transform targetRoot, Transform optionalAnchorOverride = null)
         {
             if (smokeVfxPrefab == null || targetRoot == null) return;

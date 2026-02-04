@@ -1,10 +1,10 @@
-bugs
+bugs/issues
+- multiple status effect icons dont appear simulatneaously on heroes
 - there's a small chance that reelcraft ability icons wont appear on battle screen
+- Pre battle item selection panels are way too small
 
 features
-- change upgrade reel to allow player to select what to upgrade. 
 - implment ability equip menu, set max number of active abilities
-- create ninja lv2 passive abilities 
 - add some type of indictor (arrow, glow) to enemy unit being targeted
 - add status icon for fighter's battle rhythm with stack count
 - add tooltips for status icons
@@ -12,8 +12,13 @@ features
 - award same xp to all heroes. dead heroes get 0 xp
 - add reel locking (as an ability)
 - allow use of reelcraft during player phase
-- make reelcraft abilities upgradeable (e.g. fighter ability can nudge other reels)
+
+
+
+Changes?
+- change upgrade reel to allow player to select what to upgrade. 
 - cast abilities by dragging and dropping tokens onto heroes
+- make reelcraft abilities upgradeable (e.g. fighter ability can nudge other reels)
 
 
 PHASE 1 GOALS

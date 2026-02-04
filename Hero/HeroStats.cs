@@ -10,6 +10,9 @@ public class HeroStats : MonoBehaviour
     /// </summary>
     public HeroCombatEvents Events { get; private set; }
 
+    private const string SHADOW_FADE_ABILITY_NAME = "Shadow Fade";
+
+
     [Header("Visual Anchors")]
     [Tooltip("Optional explicit reference to the hero prefab's CenterPoint child transform. If left null, we will auto-find a child named 'CenterPoint'.")]
     [SerializeField] private Transform centerPoint;
@@ -92,6 +95,13 @@ public class HeroStats : MonoBehaviour
     [Header("Combat Status")]
     [SerializeField] private int currentShield = 0;
     [SerializeField] private bool isHidden = false;
+
+    [Header("Shadow Fade / Conceal Proc")]
+    [Tooltip("Runtime: set true after Shadow Fade has procced once this battle.")]
+    [SerializeField] private bool shadowFadeUsedThisBattle = false;
+
+    [Tooltip("Runtime: queued when Shadow Fade triggers; applied after the hit resolves so it isn't immediately consumed.")]
+    [SerializeField] private bool shadowFadePendingConceal = false;
 
     [Header("Damage-over-time")]
     [Tooltip("Bleeding stacks: each turn lose 1 HP per stack, then stacks reduce by 1.")]
@@ -813,6 +823,8 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
         // Reset combat state
         currentShield = 0;
         isHidden = false;
+        shadowFadeUsedThisBattle = false;
+        shadowFadePendingConceal = false;
         bleedStacks = 0;
         bleedAppliedOnPlayerTurn = -999;
 
@@ -823,6 +835,8 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
     {
         currentShield = 0;
         isHidden = false;
+        shadowFadeUsedThisBattle = false;
+        shadowFadePendingConceal = false;
         bleedStacks = 0;
         bleedAppliedOnPlayerTurn = -999;
         NotifyChanged();
@@ -893,6 +907,27 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
         NotifyChanged();
     }
 
+
+    /// <summary>
+    /// Shadow Fade passive: first time this hero is hit each battle, queue Conceal.
+    /// The conceal application is deferred until after the current hit resolves so it is not immediately consumed
+    /// by existing post-hit cleanup (e.g., AoE clearing conceal).
+    /// </summary>
+    public void ApplyShadowFadeConcealIfPending()
+    {
+        if (!shadowFadePendingConceal) return;
+
+        shadowFadePendingConceal = false;
+
+        // Only apply if not already hidden.
+        if (!isHidden)
+        {
+            if (logPassives)
+                Debug.Log($"[Passive][ShadowFade] Applying Conceal. hero='{name}'", this);
+
+            SetHidden(true);
+        }
+    }
     // ---------------- Bleeding ----------------
     public void AddBleedStacks(int stacks)
     {
@@ -1012,6 +1047,18 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
     {
         amount = Mathf.Max(0, amount);
         if (amount == 0) return 0;
+
+        // Queue Shadow Fade (Conceal) if this hero has it unlocked and it hasn't procced yet this battle.
+        // We defer the actual conceal application until BattleManager calls ApplyShadowFadeConcealIfPending()
+        // after the current hit resolves.
+        if (!shadowFadeUsedThisBattle && !shadowFadePendingConceal && amount > 0 && HasAbilityUnlocked(SHADOW_FADE_ABILITY_NAME))
+        {
+            shadowFadeUsedThisBattle = true;
+            shadowFadePendingConceal = true;
+
+            if (logPassives)
+                Debug.Log($"[Passive][ShadowFade] Queued Conceal (first hit this battle). hero='{name}' incomingRaw={amount}", this);
+        }
 
         int absorbed = Mathf.Min(currentShield, amount);
         if (absorbed > 0)
