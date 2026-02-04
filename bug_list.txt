@@ -4,6 +4,8 @@ bugs/issues
 - Pre battle item selection panels are way too small
 - make sure ability menu is inactive on playe phase start
 - add button to cancel reelcraft ability casting
+- add skull and crossbones to dead party members
+- increase size of monster status icons
 
 features
 - implment ability equip menu, set max number of active abilities

@@ -3953,20 +3953,13 @@ private void LayoutHeroStatusIcons(Transform statusIconRoot)
             resourcePool.Add(0, 0, amount, 0);
     }
 
-    /// <summary>
-    /// Procs all currently-implemented Sigil passives as if a MAGIC symbol had landed.
-    /// (Currently: Flame Sigil + Water Sigil) and respects Focus Rune on monsters.
-    ///
-    /// This is intentionally public so Reelcraft effects like Arcane Transmutation can trigger sigils
-    /// without requiring a reel spin/cashout.
-    /// </summary>
-    public void ProcSigilsFromExternalMagicSource()
-    {
-        if (_party == null || _party.Count == 0) return;
 
-        // ANY-hero checks (OR accumulate)
-        bool flameSigilActive = false;
-        bool waterSigilActive = false;
+    private void GetActiveSigils(out bool flameSigilActive, out bool waterSigilActive)
+    {
+        flameSigilActive = false;
+        waterSigilActive = false;
+
+        if (_party == null || _party.Count == 0) return;
 
         for (int i = 0; i < _party.Count; i++)
         {
@@ -3976,9 +3969,16 @@ private void LayoutHeroStatusIcons(Transform statusIconRoot)
             flameSigilActive |= heroStats.HasAbilityUnlocked("Flame Sigil");
             waterSigilActive |= heroStats.HasAbilityUnlocked("Water Sigil");
         }
+    }
 
-        if (!flameSigilActive && !waterSigilActive) return;
-        if (_activeMonsters == null || _activeMonsters.Count == 0) return;
+    /// <summary>
+    /// Shared implementation used by BOTH: reel-landed MAGIC procs and external MAGIC sources (eg. Transmute).
+    /// Returns true if anything changed that should refresh UI.
+    /// </summary>
+    private bool ProcSigilsOnFocusedMonsters(bool flameSigilActive, bool waterSigilActive, string sourceTag)
+    {
+        if (!flameSigilActive && !waterSigilActive) return false;
+        if (_activeMonsters == null || _activeMonsters.Count == 0) return false;
 
         bool uiDirty = false;
 
@@ -3998,15 +3998,23 @@ private void LayoutHeroStatusIcons(Transform statusIconRoot)
             {
                 int beforeIgn = enemyMonster.IgnitionStacks;
                 int capIgn = enemyMonster.maxIgnitionStacks;
-                Transform enemyPos = enemyMonster.transform;
-                if (beforeIgn + 1 < capIgn) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
-                else healVfxSpawner.PlayIgnitionBlastVfx(enemyPos);
 
-                Debug.Log($"[Battle][Sigil] Flame Sigil proc (external) -> AddIgnition(+1) target='{enemyMonster.name}' before={beforeIgn} cap={capIgn}", this);
+                // Capture transform now; VFX spawner may choose to spawn world-space for blasts so it still plays if the monster is destroyed.
+                Transform enemyRoot = enemyMonster.transform;
+
+                if (healVfxSpawner != null)
+                {
+                    if (beforeIgn + 1 < capIgn) healVfxSpawner.PlayBRVfx(enemyRoot);
+                    else healVfxSpawner.PlayIgnitionBlastVfx(enemyRoot);
+                }
+
+                Debug.Log($"[Battle][Sigil] Flame Sigil proc ({sourceTag}) -> AddIgnition(+1) target='{enemyMonster.name}' before={beforeIgn} cap={capIgn}", this);
                 bool triggerBomb = enemyMonster.AddIgnition(1);
-                if (triggerBomb)
-                    healVfxSpawner.PlayIgnitionBlastVfx(enemyPos);
-                Debug.Log($"[Battle][Sigil] Flame Sigil done (external) target='{enemyMonster.name}' after={enemyMonster.IgnitionStacks} dead={enemyMonster.IsDead}", this);
+
+                if (triggerBomb && healVfxSpawner != null)
+                    healVfxSpawner.PlayIgnitionBlastVfx(enemyRoot);
+
+                Debug.Log($"[Battle][Sigil] Flame Sigil done ({sourceTag}) target='{enemyMonster.name}' after={enemyMonster.IgnitionStacks} dead={enemyMonster.IsDead}", this);
                 uiDirty = true;
             }
 
@@ -4015,13 +4023,28 @@ private void LayoutHeroStatusIcons(Transform statusIconRoot)
                 if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
                 int beforeSta = enemyMonster.StasisStacks;
                 int capSta = enemyMonster.maxStasisStacks;
-                if (logFlow) Debug.Log($"[Battle][Sigil] Water Sigil proc (external) -> AddStasis(+1) target='{enemyMonster.name}' before={beforeSta} cap={capSta}", this);
+                if (logFlow) Debug.Log($"[Battle][Sigil] Water Sigil proc ({sourceTag}) -> AddStasis(+1) target='{enemyMonster.name}' before={beforeSta} cap={capSta}", this);
                 enemyMonster.AddStasis(1);
-                if (logFlow) Debug.Log($"[Battle][Sigil] Water Sigil done (external) target='{enemyMonster.name}' after={enemyMonster.StasisStacks} dead={enemyMonster.IsDead}", this);
+                if (logFlow) Debug.Log($"[Battle][Sigil] Water Sigil done ({sourceTag}) target='{enemyMonster.name}' after={enemyMonster.StasisStacks} dead={enemyMonster.IsDead}", this);
                 uiDirty = true;
             }
         }
 
+        return uiDirty;
+    }
+
+    /// <summary>
+    /// Procs all currently-implemented Sigil passives as if a MAGIC symbol had landed.
+    /// (Currently: Flame Sigil + Water Sigil) and respects Focus Rune on monsters.
+    ///
+    /// This is intentionally public so Reelcraft effects like Arcane Transmutation can trigger sigils
+    /// without requiring a reel spin/cashout.
+    /// </summary>
+    public void ProcSigilsFromExternalMagicSource()
+    {
+        GetActiveSigils(out bool flameSigilActive, out bool waterSigilActive);
+
+        bool uiDirty = ProcSigilsOnFocusedMonsters(flameSigilActive, waterSigilActive, "external");
         if (uiDirty)
             NotifyPartyChanged();
     }
@@ -4350,49 +4373,8 @@ private static List<ItemOptionSO> RollUnique(List<ItemOptionSO> pool, int count)
             }
             else if (rt == ReelSpinSystem.ResourceType.Magic)
             {
-                // Only do work if any sigil exists
-                if (!flameSigilActive && !waterSigilActive) continue;
-                if (_activeMonsters != null)
-                    {
-                        // NOTE: Sigil procs can KILL monsters (Ignition/Stasis bomb), which removes them from _activeMonsters.
-                        // Iterate a snapshot to avoid "Collection was modified" exceptions.
-                        var monstersSnapshot = new List<Monster>(_activeMonsters);
-                        for (int mi = 0; mi < monstersSnapshot.Count; mi++)
-                        {
-                            var enemyMonster = monstersSnapshot[mi];
-                        if (enemyMonster == null) continue;
-                        if (!enemyMonster.HasFocusRune) continue;
-
-                        DimScreenTemporarily(0.5f);
-
-                        if (flameSigilActive)
-                        {
-                            int beforeIgn = enemyMonster.IgnitionStacks;
-                            int capIgn = enemyMonster.maxIgnitionStacks;
-                            Transform enemyPos = enemyMonster.transform;
-                            if (beforeIgn + 1 < capIgn) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
-                            else healVfxSpawner.PlayIgnitionBlastVfx(enemyPos);
-
-                            Debug.Log($"[Battle][Sigil] Flame Sigil proc (external) -> AddIgnition(+1) target='{enemyMonster.name}' before={beforeIgn} cap={capIgn}", this);
-                            bool triggerBomb = enemyMonster.AddIgnition(1);
-                            if (triggerBomb)
-                                healVfxSpawner.PlayIgnitionBlastVfx(enemyPos);
-                            Debug.Log($"[Battle][Sigil] Flame Sigil done (external) target='{enemyMonster.name}' after={enemyMonster.IgnitionStacks} dead={enemyMonster.IsDead}", this);
-                            uiDirty = true;
-                        }
-
-                        if (waterSigilActive)
-                        {
-                            if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
-                            int beforeSta = enemyMonster.StasisStacks;
-                            int capSta = enemyMonster.maxStasisStacks;
-                            if (logFlow) Debug.Log($"[Battle][Sigil] Water Sigil proc -> AddStasis(+1) target='{enemyMonster.name}' before={beforeSta} cap={capSta}", this);
-                            enemyMonster.AddStasis(1);
-                            if (logFlow) Debug.Log($"[Battle][Sigil] Water Sigil done target='{enemyMonster.name}' after={enemyMonster.StasisStacks} dead={enemyMonster.IsDead}", this);
-                            uiDirty = true;
-                        }
-                    }
-                }
+                // MAGIC symbol landed -> proc Sigils (Flame/Water) against Focus-Rune targets.
+                uiDirty |= ProcSigilsOnFocusedMonsters(flameSigilActive, waterSigilActive, "spin");
             }
         }
         if (uiDirty)

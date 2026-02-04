@@ -17,6 +17,10 @@ namespace SlotsAndSorcery.VFX
         [Header("Ignition Blast VFX Prefab")]
         [SerializeField] private GameObject ignitionBlastVfxPrefab;
 
+        [Header("Ignition Blast Behavior")]
+        [Tooltip("If true, the ignition blast VFX will be parented to the target anchor. If false (recommended), it will spawn in world-space so it still plays even if the target is destroyed.")]
+        [SerializeField] private bool parentIgnitionBlastToTarget = false;
+
         [Header("Placement")]
         [Tooltip("If set, VFX will spawn at this transform. If null, spawns at targetRoot.")]
         [SerializeField] private Transform defaultAnchor;
@@ -101,9 +105,23 @@ namespace SlotsAndSorcery.VFX
             Transform anchor = optionalAnchorOverride != null ? optionalAnchorOverride :
                                (defaultAnchor != null ? defaultAnchor : ResolveCenterPointAnchor(targetRoot));
 
-            var go = Instantiate(ignitionBlastVfxPrefab, anchor);
-            go.transform.localPosition += localOffset;
-            go.transform.localRotation = Quaternion.identity;
+            if (anchor == null) return;
+
+            GameObject go;
+
+            if (parentIgnitionBlastToTarget)
+            {
+                // Parent to anchor (old behavior)
+                go = Instantiate(ignitionBlastVfxPrefab, anchor);
+                go.transform.localPosition += localOffset;
+                go.transform.localRotation = Quaternion.identity;
+            }
+            else
+            {
+                // World-space spawn so the VFX still plays if the target is destroyed by the blast.
+                Vector3 worldPos = anchor.position + localOffset;
+                go = Instantiate(ignitionBlastVfxPrefab, worldPos, Quaternion.identity);
+            }
 
             if (!autoDestroyWhenFinished)
                 return;
@@ -119,7 +137,7 @@ namespace SlotsAndSorcery.VFX
             Transform anchor = optionalAnchorOverride != null ? optionalAnchorOverride :
                                (defaultAnchor != null ? defaultAnchor : ResolveCenterPointAnchor(targetRoot));
 
-            var go = Instantiate(brVfxPrefab, anchor);
+            var go = Instantiate(smokeVfxPrefab, anchor);
             go.transform.localPosition += localOffset;
             go.transform.localRotation = Quaternion.identity;
 
