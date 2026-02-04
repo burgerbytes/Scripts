@@ -1,10 +1,10 @@
 bugs
-- make sure canceling hero abilities works
 - upgrade reels happens 2x becuase original call was never removed
 - when 2 charactes level up at the same time, the upgrade reels isn't called for the second hero
 - there's a small chance that reelcraft ability icons wont appear on battle screen
 
 features
+- cast abilities by dragging and dropping tokens onto heroes
 - change upgrade reel to allow player to select what to upgrade. 
 - implment ability equip menu, set max number of active abilities
 - create ninja lv2 passive abilities 
@@ -16,7 +16,7 @@ features
 - add reel locking (as an ability)
 - allow use of reelcraft during player phase
 - make reelcraft abilities upgradeable (e.g. fighter ability can nudge other reels)
-- cast abilities by dragging and dropping tokens onto heroes
+
 
 
 PHASE 1 GOALS
