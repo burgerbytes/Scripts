@@ -1175,11 +1175,8 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
             pendingAbilityChoiceLevels.Add(level);
             Debug.Log($"[Hero][AbilityUpgrade] Queued ability choice hero='{name}' reachedLevel={level} pendingChoices={pendingAbilityChoiceLevels.Count}");
         }
-
-        // Queue a reel upgrade to be resolved via the Reel Upgrade Minigame.
-        // Don't queue upgrades past the max level.
-        if (level <= maxLevel && upgradeReelOnLevelUp && reelUpgradeRules != null && reelStrip != null)
-            pendingReelUpgrades += 1;
+        // NOTE: Reel upgrades are now granted via the Rewards Table (Reelforging) choice.
+        // We intentionally do NOT auto-queue reel upgrades on level-up to avoid double-proccing.
     }
 
     // ---------------- Damage / Resources ----------------

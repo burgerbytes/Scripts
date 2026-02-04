@@ -4568,15 +4568,15 @@ if (enemyMonster == null) continue;
     // --- Rewards / Party helpers ---
     private static HeroStats[] BuildPartyStatsArray(List<PartyMemberRuntime> party)
     {
+        // IMPORTANT: Preserve party indices so dropdown selections map back to _party reliably.
+        // (We may have null slots if a party member is missing.)
         if (party == null || party.Count == 0) return System.Array.Empty<HeroStats>();
 
-        var list = new List<HeroStats>(party.Count);
+        var arr = new HeroStats[party.Count];
         for (int i = 0; i < party.Count; i++)
-        {
-            var hs = party[i] != null ? party[i].stats : null;
-            if (hs != null) list.Add(hs);
-        }
-        return list.ToArray();
+            arr[i] = party[i] != null ? party[i].stats : null;
+
+        return arr;
     }
 
     private HeroStats GetPartyGoldReceiver()
