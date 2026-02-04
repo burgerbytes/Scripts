@@ -1,5 +1,4 @@
 bugs/issues
-- multiple status effect icons dont appear simulatneaously on heroes
 - there's a small chance that reelcraft ability icons wont appear on battle screen
 - Pre battle item selection panels are way too small
 - make sure ability menu is inactive on playe phase start
