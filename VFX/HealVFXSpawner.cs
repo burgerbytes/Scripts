@@ -14,6 +14,9 @@ namespace SlotsAndSorcery.VFX
         [Header("Smoke Poof VFX Prefab")]
         [SerializeField] private GameObject smokeVfxPrefab;
 
+        [Header("Ignition Blast VFX Prefab")]
+        [SerializeField] private GameObject ignitionBlastVfxPrefab;
+
         [Header("Placement")]
         [Tooltip("If set, VFX will spawn at this transform. If null, spawns at targetRoot.")]
         [SerializeField] private Transform defaultAnchor;
@@ -93,12 +96,12 @@ namespace SlotsAndSorcery.VFX
 
         public void PlayIgnitionBlastVfx(Transform targetRoot, Transform optionalAnchorOverride = null)
         {
-            if (brVfxPrefab == null || targetRoot == null) return;
+            if (ignitionBlastVfxPrefab == null || targetRoot == null) return;
 
             Transform anchor = optionalAnchorOverride != null ? optionalAnchorOverride :
                                (defaultAnchor != null ? defaultAnchor : ResolveCenterPointAnchor(targetRoot));
 
-            var go = Instantiate(brVfxPrefab, anchor);
+            var go = Instantiate(ignitionBlastVfxPrefab, anchor);
             go.transform.localPosition += localOffset;
             go.transform.localRotation = Quaternion.identity;
 

@@ -550,41 +550,42 @@ public class BattleManager : MonoBehaviour
             }
 
             return;
-        }if (!_activeMonsters.Contains(clicked) || clicked.IsDead)
-    return;
+        }
+        if (!_activeMonsters.Contains(clicked) || clicked.IsDead) return;
 
-// If we're in the middle of casting/targeting an ability, a monster click should be treated as
-// target selection (if enabled), NOT as an info-panel request.
-if (_awaitingEnemyTarget && allowClickToSelectMonsterTarget)
-{
-    SelectEnemyTarget(clicked);
-    return;
-}
-
-// Guard: do not open info panels while an ability is pending/targeting.
-if (!IsInAbilityCastingState)
-{
-    // Prefer the unified InfoPanelController (disables reels while open). Fall back to the legacy
-    // MonsterInfoController if the unified panel isn't wired yet.
-    if (infoPanelController != null)
-    {
-        string statsText = (monsterInfoController != null) ? monsterInfoController.BuildStatsForPanel(clicked) : null;
-        string body = string.IsNullOrWhiteSpace(statsText)
-            ? (clicked.Description ?? "")
-            : (statsText + " " + (clicked.Description ?? ""));
-
-        infoPanelController.Show(new InfoPanelData
+        // If we're in the middle of casting/targeting an ability, a monster click should be treated as
+        // target selection (if enabled), NOT as an info-panel request.
+        if (_awaitingEnemyTarget && allowClickToSelectMonsterTarget)
         {
-            title = clicked.DisplayName,
-            body = body,
-            image = null
-        });
+            SelectEnemyTarget(clicked);
+            return;
+        }
+
+        // Guard: do not open info panels while an ability is pending/targeting.
+        if (!IsInAbilityCastingState)
+        {
+            // Prefer the unified InfoPanelController (disables reels while open). Fall back to the legacy
+            // MonsterInfoController if the unified panel isn't wired yet.
+            if (infoPanelController != null)
+            {
+                string statsText = (monsterInfoController != null) ? monsterInfoController.BuildStatsForPanel(clicked) : null;
+                string body = string.IsNullOrWhiteSpace(statsText)
+                    ? (clicked.Description ?? "")
+                    : (statsText + " " + (clicked.Description ?? ""));
+
+                infoPanelController.Show(new InfoPanelData
+                {
+                    title = clicked.DisplayName,
+                    body = body,
+                    image = null
+                });
+            }
+            else if (monsterInfoController != null)
+            {
+                monsterInfoController.Show(clicked);
+            }
+        }
     }
-    else if (monsterInfoController != null)
-    {
-        monsterInfoController.Show(clicked);
-    }
-}}
 
     public void NotifyAttackImpact()
     {
@@ -3754,7 +3755,7 @@ private void LayoutHeroStatusIcons(Transform statusIconRoot)
         healVfxSpawner.PlayBRVfx(targetRoot);
     }
 
-    private void SpawnIgnitionBlastVfx(Transform targetRoot)
+    public void SpawnIgnitionBlastVfx(Transform targetRoot)
     {
         if (healVfxSpawner == null || targetRoot == null)
             return;
@@ -3995,12 +3996,17 @@ private void LayoutHeroStatusIcons(Transform statusIconRoot)
 
             if (flameSigilActive)
             {
-                if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
                 int beforeIgn = enemyMonster.IgnitionStacks;
                 int capIgn = enemyMonster.maxIgnitionStacks;
-                if (logFlow) Debug.Log($"[Battle][Sigil] Flame Sigil proc (external) -> AddIgnition(+1) target='{enemyMonster.name}' before={beforeIgn} cap={capIgn}", this);
-                enemyMonster.AddIgnition(1);
-                if (logFlow) Debug.Log($"[Battle][Sigil] Flame Sigil done (external) target='{enemyMonster.name}' after={enemyMonster.IgnitionStacks} dead={enemyMonster.IsDead}", this);
+                Transform enemyPos = enemyMonster.transform;
+                if (beforeIgn + 1 < capIgn) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
+                else healVfxSpawner.PlayIgnitionBlastVfx(enemyPos);
+
+                Debug.Log($"[Battle][Sigil] Flame Sigil proc (external) -> AddIgnition(+1) target='{enemyMonster.name}' before={beforeIgn} cap={capIgn}", this);
+                bool triggerBomb = enemyMonster.AddIgnition(1);
+                if (triggerBomb)
+                    healVfxSpawner.PlayIgnitionBlastVfx(enemyPos);
+                Debug.Log($"[Battle][Sigil] Flame Sigil done (external) target='{enemyMonster.name}' after={enemyMonster.IgnitionStacks} dead={enemyMonster.IsDead}", this);
                 uiDirty = true;
             }
 
@@ -4354,19 +4360,24 @@ private static List<ItemOptionSO> RollUnique(List<ItemOptionSO> pool, int count)
                         for (int mi = 0; mi < monstersSnapshot.Count; mi++)
                         {
                             var enemyMonster = monstersSnapshot[mi];
-if (enemyMonster == null) continue;
+                        if (enemyMonster == null) continue;
                         if (!enemyMonster.HasFocusRune) continue;
 
                         DimScreenTemporarily(0.5f);
 
                         if (flameSigilActive)
                         {
-                            if (healVfxSpawner != null) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
                             int beforeIgn = enemyMonster.IgnitionStacks;
                             int capIgn = enemyMonster.maxIgnitionStacks;
-                            if (logFlow) Debug.Log($"[Battle][Sigil] Flame Sigil proc -> AddIgnition(+1) target='{enemyMonster.name}' before={beforeIgn} cap={capIgn}", this);
-                            enemyMonster.AddIgnition(1);
-                            if (logFlow) Debug.Log($"[Battle][Sigil] Flame Sigil done target='{enemyMonster.name}' after={enemyMonster.IgnitionStacks} dead={enemyMonster.IsDead}", this);
+                            Transform enemyPos = enemyMonster.transform;
+                            if (beforeIgn + 1 < capIgn) healVfxSpawner.PlayBRVfx(enemyMonster.transform);
+                            else healVfxSpawner.PlayIgnitionBlastVfx(enemyPos);
+
+                            Debug.Log($"[Battle][Sigil] Flame Sigil proc (external) -> AddIgnition(+1) target='{enemyMonster.name}' before={beforeIgn} cap={capIgn}", this);
+                            bool triggerBomb = enemyMonster.AddIgnition(1);
+                            if (triggerBomb)
+                                healVfxSpawner.PlayIgnitionBlastVfx(enemyPos);
+                            Debug.Log($"[Battle][Sigil] Flame Sigil done (external) target='{enemyMonster.name}' after={enemyMonster.IgnitionStacks} dead={enemyMonster.IsDead}", this);
                             uiDirty = true;
                         }
 
@@ -4480,7 +4491,7 @@ if (logPassiveBridge)
                         for (int mi = 0; mi < monstersSnapshot.Count; mi++)
                         {
                             var enemyMonster = monstersSnapshot[mi];
-if (enemyMonster == null) continue;
+                            if (enemyMonster == null) continue;
                             if (!enemyMonster.HasFocusRune) continue;
 
                             DimScreenTemporarily(0.5f);

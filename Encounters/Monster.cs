@@ -502,10 +502,9 @@ public class Monster : MonoBehaviour
         OnStatusChanged?.Invoke();
     }
 
-    public void AddIgnition(int stacks)
+    public bool AddIgnition(int stacks)
     {
-        if (stacks <= 0) return;
-
+        bool triggerBomb = false;
         int cap = (maxIgnitionStacks <= 0) ? int.MaxValue : maxIgnitionStacks;
 
         if (debugStatusLogs)
@@ -514,10 +513,9 @@ public class Monster : MonoBehaviour
         if (_ignitionStacks + stacks >= cap)
         {
             // Trigger bomb
+            triggerBomb = true;
             int explosionBaseDamage = 5; // TODO: tune this (or make it serialized/configurable)
-
-            if (debugStatusLogs)
-                Debug.Log($"[Monster][Ignition] EXPLODE monster='{name}' stacksBefore={_ignitionStacks} add={stacks} cap={cap} baseDmg={explosionBaseDamage}", this);
+            Debug.Log($"[Monster][Ignition] EXPLODE monster='{name}' stacksBefore={_ignitionStacks} add={stacks} cap={cap} baseDmg={explosionBaseDamage}", this);
 
             // Apply as an "ability" hit so tag-vs-monster-tag multipliers work.
             // Note: Monster resistances in this class are currently only Physical/Electric.
@@ -554,7 +552,7 @@ public class Monster : MonoBehaviour
             }
 
             ClearIgnition();
-            return;
+            return triggerBomb;
         }
 
         _ignitionStacks += stacks;
@@ -562,6 +560,7 @@ public class Monster : MonoBehaviour
 
         if (debugStatusLogs)
             Debug.Log($"[Monster][Ignition] Stacks updated monster='{name}' newStacks={_ignitionStacks}/{cap}", this);
+       return false;
     }
 
 
