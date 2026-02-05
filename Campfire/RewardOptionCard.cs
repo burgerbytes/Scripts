@@ -40,11 +40,18 @@ public class RewardOptionCard : MonoBehaviour
         if (descText != null)
             descText.text = _campfireOption.description;
 
+        // No "Pros"/"Cons" headers; campfire can still show (none) if empty.
         if (prosText != null)
-            prosText.text = FormatList("Pros", _campfireOption.pros);
+        {
+            prosText.gameObject.SetActive(true);
+            prosText.text = FormatList(_campfireOption.pros, showNonePlaceholder: true);
+        }
 
         if (consText != null)
-            consText.text = FormatList("Cons", _campfireOption.cons);
+        {
+            consText.gameObject.SetActive(true);
+            consText.text = FormatList(_campfireOption.cons, showNonePlaceholder: true);
+        }
 
         if (iconImage != null)
         {
@@ -72,15 +79,31 @@ public class RewardOptionCard : MonoBehaviour
         if (descText != null)
             descText.text = _itemOption.description;
 
+        // Item reward behavior:
+        // - Hide pros/cons text objects entirely if there is no real content.
+        // - Do NOT show "(none)" placeholder.
         if (prosText != null)
-            prosText.text = FormatList("Pros", _itemOption.pros);
+        {
+            bool hasPros = HasContent(_itemOption.pros);
+            prosText.gameObject.SetActive(hasPros);
+            if (hasPros)
+                prosText.text = FormatList(_itemOption.pros, showNonePlaceholder: false);
+        }
 
         if (consText != null)
-            consText.text = FormatList("Cons", _itemOption.cons);
+        {
+            bool hasCons = HasContent(_itemOption.cons);
+            consText.gameObject.SetActive(hasCons);
+            if (hasCons)
+                consText.text = FormatList(_itemOption.cons, showNonePlaceholder: false);
+        }
 
         if (iconImage != null)
         {
-            iconImage.sprite = _itemOption.icon != null ? _itemOption.icon : (_itemOption.item != null ? _itemOption.item.icon : null);
+            iconImage.sprite = _itemOption.icon != null
+                ? _itemOption.icon
+                : (_itemOption.item != null ? _itemOption.item.icon : null);
+
             iconImage.enabled = iconImage.sprite != null;
         }
 
@@ -110,13 +133,25 @@ public class RewardOptionCard : MonoBehaviour
         }
     }
 
-    private string FormatList(string header, string[] lines)
+    private static bool HasContent(string[] lines)
+    {
+        if (lines == null || lines.Length == 0) return false;
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (!string.IsNullOrWhiteSpace(lines[i]))
+                return true;
+        }
+
+        return false;
+    }
+
+    private string FormatList(string[] lines, bool showNonePlaceholder)
     {
         if (lines == null || lines.Length == 0)
-            return $"<b>{header}:</b>\n<alpha=#88>(none)</alpha>";
+            return showNonePlaceholder ? "<alpha=#88>(none)</alpha>" : string.Empty;
 
         StringBuilder sb = new StringBuilder();
-        sb.Append($"<b>{header}:</b>\n");
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -128,6 +163,10 @@ public class RewardOptionCard : MonoBehaviour
             sb.Append('\n');
         }
 
-        return sb.ToString().TrimEnd();
+        string result = sb.ToString().TrimEnd();
+        if (string.IsNullOrEmpty(result))
+            return showNonePlaceholder ? "<alpha=#88>(none)</alpha>" : string.Empty;
+
+        return result;
     }
 }
