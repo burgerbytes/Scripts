@@ -5,7 +5,6 @@ bugs/issues
 - add button to cancel reelcraft ability casting
 - add skull and crossbones to dead party members
 - increase size of monster status icons
-- triple bade effect no longer works
 
 features
 - implment ability equip menu, set max number of active abilities
