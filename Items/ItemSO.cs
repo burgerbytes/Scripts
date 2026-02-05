@@ -22,7 +22,9 @@ public enum ItemEffect
     ThreeOfAKind, // Ally holding this item will get +3 attack when the reels payout is 3 of a kind
     AllIn,       // You can only attack once per turn with the character using this item
     FirstAid,    // Recover 1 HP after taking damage
-    TripleBlade  // When reels land on three Attack symbols, double Attack for the turn but limit to one attack
-}
+    TripleBlade, // When reels land on three Attack symbols, double Attack for the turn but limit to one attack
 
-////////////////////////////////////////////////////////////
+    // Worn Buckler: gain 1 Block at the start of each Player Phase.
+    // Breaks (is destroyed/removed) the first time the hero takes HP damage while they have 0 Block.
+    WornBuckler
+}

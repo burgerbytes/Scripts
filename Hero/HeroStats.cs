@@ -1048,6 +1048,12 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
         amount = Mathf.Max(0, amount);
         if (amount == 0) return 0;
 
+        // Worn Buckler break rule (UPDATED):
+        // Break permanently when this hit reduces the hero's Block (shield) to 0.
+        // No HP-loss check required.
+        bool hasWornBucklerEquipped = HasEquippedEffect(ItemEffect.WornBuckler);
+        int shieldBefore = currentShield;
+
         // Queue Shadow Fade (Conceal) if this hero has it unlocked and it hasn't procced yet this battle.
         // We defer the actual conceal application until BattleManager calls ApplyShadowFadeConcealIfPending()
         // after the current hit resolves.
@@ -1060,6 +1066,7 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
                 Debug.Log($"[Passive][ShadowFade] Queued Conceal (first hit this battle). hero='{name}' incomingRaw={amount}", this);
         }
 
+        // Shield absorbs first
         int absorbed = Mathf.Min(currentShield, amount);
         if (absorbed > 0)
         {
@@ -1067,6 +1074,15 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
             amount -= absorbed;
         }
 
+        // If this hit dropped shield from >0 to 0, the buckler breaks immediately (removed from run).
+        if (hasWornBucklerEquipped && shieldBefore > 0 && currentShield <= 0)
+        {
+            bool broke = BreakFirstEquippedItemWithEffect(ItemEffect.WornBuckler, "[WornBuckler]");
+            if (broke)
+                Debug.Log($"[WornBuckler] Broke on hero='{name}' (Block reduced to 0).", this);
+        }
+
+        // If shield fully absorbed, no HP loss
         if (amount <= 0)
         {
             NotifyChanged();
@@ -1075,7 +1091,63 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
 
         int before = currentHp;
         TakeDamage(amount);
-        return Mathf.Max(0, before - currentHp);
+        int hpLoss = Mathf.Max(0, before - currentHp);
+
+        return hpLoss;
+    }
+
+    /// <summary>
+    /// Finds the first equipped InventoryItem that contains the given effect and destroys it.
+    /// Used for "breakable" items like Worn Buckler.
+    /// </summary>
+    private bool BreakFirstEquippedItemWithEffect(ItemEffect effect, string logPrefix)
+    {
+        // Preferred: scan actual equipped InventoryItem children under equipGridRoot
+        var equipped = GetEquippedInventoryItems();
+        for (int i = 0; i < equipped.Length; i++)
+        {
+            var ii = equipped[i];
+            if (ii == null || ii.item == null) continue;
+            if (ii.item.effects == null || !ii.item.effects.Contains(effect)) continue;
+
+            if (!string.IsNullOrEmpty(logPrefix))
+                Debug.Log($"{logPrefix} Breaking equipped item '{ii.item.itemName}' on hero='{name}'.", this);
+
+            Destroy(ii.gameObject);
+            NotifyChanged();
+
+            // Ensure visual refresh (shield/status/etc.) in case the equip change affects visuals.
+            if (BattleManager.Instance != null)
+                BattleManager.Instance.RefreshStatusVisuals();
+
+            return true;
+        }
+
+        // Fallback: legacy inspector-wired equipmentSlots array
+        if (equipmentSlots != null)
+        {
+            for (int i = 0; i < equipmentSlots.Length; i++)
+            {
+                InventorySlot slot = equipmentSlots[i];
+                if (slot == null) continue;
+                InventoryItem invItem = slot.GetComponentInChildren<InventoryItem>();
+                if (invItem == null || invItem.item == null) continue;
+                if (invItem.item.effects == null || !invItem.item.effects.Contains(effect)) continue;
+
+                if (!string.IsNullOrEmpty(logPrefix))
+                    Debug.Log($"{logPrefix} Breaking equipped item '{invItem.item.itemName}' on hero='{name}' (legacy slots).", this);
+
+                Destroy(invItem.gameObject);
+                NotifyChanged();
+
+                if (BattleManager.Instance != null)
+                    BattleManager.Instance.RefreshStatusVisuals();
+
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // ---------------- XP / Leveling (GATED) ----------------
@@ -1703,9 +1775,6 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
 }
 
 
-
-
-////////////////////////////////////////////////////////////
 
 
 ////////////////////////////////////////////////////////////
