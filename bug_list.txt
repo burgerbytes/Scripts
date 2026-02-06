@@ -5,6 +5,7 @@ bugs/issues
 - make sure ability menu is inactive on player phase start
 - add button to cancel reelcraft ability casting
 - increase size of monster status icons
+- hook up all animations
 
 features
 - add some type of indictor (arrow, glow) to enemy unit being targeted
