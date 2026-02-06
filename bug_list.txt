@@ -1,12 +1,12 @@
 bugs/issues
+- after evolution profile needs to be the advanced class, not base class
+	var profile = anim.GetComponentInParent<CasterAnimationProfile>();
 - there's a small chance that reelcraft ability icons wont appear on battle screen
 - make sure ability menu is inactive on player phase start
 - add button to cancel reelcraft ability casting
-- add skull and crossbones to dead party members
 - increase size of monster status icons
 
 features
-- implment ability equip menu, set max number of active abilities
 - add some type of indictor (arrow, glow) to enemy unit being targeted
 - add status icon for fighter's battle rhythm with stack count
 - add tooltips for status icons
@@ -14,23 +14,25 @@ features
 - award same xp to all heroes. dead heroes get 0 xp
 - add reel locking (as an ability)
 - allow use of reelcraft during player phase
-
-
+- add skull and crossbones to dead party members
 
 Changes?
 - change upgrade reel to allow player to select what to upgrade. 
 - cast abilities by dragging and dropping tokens onto heroes
 - make reelcraft abilities upgradeable (e.g. fighter ability can nudge other reels)
-
+- implment ability equip menu, set max number of active abilities
 
 PHASE 1 GOALS
 - 3 heroes with defined playstyles
-- 6 fully functional abilities for each hero
+- 8 fully functional abilities for each hero
+	-fighter (first aid/ slash; battle rhythm/iron guard; heavy strike/taunt; bloodlust/resolve)
+	-mage (focus rune/dart; flame sigil/water sigil; aegis/pyre; 
+	-ninja (backstab/conceal; subsitution/shadow fade; shuriken toss/toxic bomb; precision/plague arts)
 - Each hero has 1 evolution (player will get one evolution for one hero after each boss fight)
 - Evolution will have 2 abilities to pick from
 - Total of 10 battles (2 areas, 2 bosses) forest -> caverns -> crypt
 - 3 different BGs (1 final boss specific one)
-- 5 fully functional items
+- 5 fully functional items (2/5)
 - SFX for everything
 - VFX for all abilities
 - Put game up on itchio

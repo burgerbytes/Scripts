@@ -68,7 +68,27 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
     [Tooltip("Optional: world sprite override applied to the evolved hero's SpriteRenderer(s). Useful if the prefab sprite is not set yet.")]
     [SerializeField] private Sprite templarWorldSpriteOverride;
 
-    [Header("Evolution VFX (Reel)")]
+    
+    [Header("Evolution (Level 5) - Sword Saint")]
+    [Tooltip("Optional: assign your Ninja base class definition for strict matching.")]
+    [SerializeField] private ClassDefinitionSO ninjaBaseClassDef;
+
+    [Tooltip("For testing: Ninja evolves into this Advanced class (Sword Saint).")]
+    [SerializeField] private ClassDefinitionSO swordSaintAdvancedClassDef;
+
+    [Tooltip("Prefab used for the evolved hero in battle (Sword Saint).")]
+    [SerializeField] private GameObject swordSaintBattlePrefab;
+
+    [Tooltip("Reel strip template for the evolved class (Sword Saint). If null, the reel won't swap visually.")]
+    [SerializeField] private ReelStripSO swordSaintReelStripTemplate;
+
+    [Tooltip("Optional: portrait override applied to the hero after evolution.")]
+    [SerializeField] private Sprite swordSaintPortraitOverride;
+
+    [Tooltip("Optional: world sprite override applied to the evolved hero's SpriteRenderer(s). Useful if the prefab sprite is not set yet.")]
+    [SerializeField] private Sprite swordSaintWorldSpriteOverride;
+
+[Header("Evolution VFX (Reel)")]
     [SerializeField] private float evolveSpinRampSeconds = 1.2f;
     [SerializeField] private float evolveMaxSpinSpeedMultiplier = 6f;
     [SerializeField] private float evolvePopHoldSeconds = 0.10f;
@@ -83,7 +103,13 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
     [Tooltip("Optional: preview prefab for the evolved class (Templar). If null, we reuse templarBattlePrefab.")]
     [SerializeField] private GameObject templarPreviewPrefab;
 
-    [Tooltip("Local position offset applied to the preview under the anchor.")]
+        [Tooltip("If set, we spawn this prefab as the preview when the hero is a Ninja (instead of cloning the in-scene avatar).")]
+    [SerializeField] private GameObject ninjaPreviewPrefab;
+
+    [Tooltip("Optional: preview prefab for the evolved class (Sword Saint). If null, we reuse swordSaintBattlePrefab.")]
+    [SerializeField] private GameObject swordSaintPreviewPrefab;
+
+[Tooltip("Local position offset applied to the preview under the anchor.")]
     [SerializeField] private Vector3 heroPreviewLocalOffset = Vector3.zero;
 
     [Tooltip("Local rotation applied to the preview under the anchor.")]
@@ -381,37 +407,71 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         }
         Debug.Log("[Evolution] ResolveConfig: BattleManager missing or no mapping match. Trying legacy fallback.", this);
 
-        // Fallback: legacy Fighter -> Templar config (kept for compatibility).
+        // Fallback: legacy config (kept for compatibility).
+        // - Fighter -> Templar
+        // - Ninja  -> Sword Saint
+        bool isFighter = false;
+        bool isNinja = false;
+
         if (fighterBaseClassDef != null)
         {
-            bool ok = hero.BaseClassDef == fighterBaseClassDef;
-            Debug.Log($"[Evolution] Eligibility strictBaseDef hero='{hero.name}' ok={ok} base='{(hero.BaseClassDef != null ? hero.BaseClassDef.className : "NULL")}'", this);
-            if (!ok) return false;
+            isFighter = hero.BaseClassDef == fighterBaseClassDef;
+            Debug.Log($"[Evolution] Eligibility strictBaseDef(Fighter) hero='{hero.name}' ok={isFighter} base='{(hero.BaseClassDef != null ? hero.BaseClassDef.className : "NULL")}'", this);
         }
         else if (hero.BaseClassDef != null && !string.IsNullOrEmpty(hero.BaseClassDef.className))
         {
-            bool ok = string.Equals(hero.BaseClassDef.className, "Fighter", StringComparison.OrdinalIgnoreCase);
-            Debug.Log($"[Evolution] Eligibility byName hero='{hero.name}' ok={ok} base='{hero.BaseClassDef.className}'", this);
-            if (!ok) return false;
+            isFighter = string.Equals(hero.BaseClassDef.className, "Fighter", StringComparison.OrdinalIgnoreCase);
         }
-        else
+
+        if (ninjaBaseClassDef != null)
         {
+            isNinja = hero.BaseClassDef == ninjaBaseClassDef;
+            Debug.Log($"[Evolution] Eligibility strictBaseDef(Ninja) hero='{hero.name}' ok={isNinja} base='{(hero.BaseClassDef != null ? hero.BaseClassDef.className : "NULL")}'", this);
+        }
+        else if (hero.BaseClassDef != null && !string.IsNullOrEmpty(hero.BaseClassDef.className))
+        {
+            isNinja = string.Equals(hero.BaseClassDef.className, "Ninja", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (!isFighter && !isNinja)
+        {
+            Debug.Log($"[Evolution] Eligibility byName hero='{hero.name}' base='{(hero.BaseClassDef != null ? hero.BaseClassDef.className : "NULL")}' -> not Fighter/Ninja. Skipping legacy fallback.", this);
             return false;
         }
 
-        if (templarBattlePrefab == null)
+        // Pick which evolution to apply.
+        if (isFighter)
         {
-            Debug.LogWarning("[Evolution] Legacy evolution config missing templarBattlePrefab. Skipping evolution.", this);
+            if (templarBattlePrefab == null)
+            {
+                Debug.LogWarning("[Evolution] Legacy evolution config missing templarBattlePrefab. Skipping evolution.", this);
+                return false;
+            }
+
+            _usingFallbackEvolutionConfig = true;
+            _evolutionBattlePrefab = templarBattlePrefab;
+            _evolutionAdvancedClassDef = templarAdvancedClassDef;
+            _evolutionReelStripTemplate = templarReelStripTemplate;
+            _evolutionPortraitOverride = templarPortraitOverride;
+            _evolutionWorldSpriteOverride = templarWorldSpriteOverride;
+            _evolutionPreviewPrefab = templarPreviewPrefab;
+            return true;
+        }
+
+        // Ninja -> Sword Saint
+        if (swordSaintBattlePrefab == null)
+        {
+            Debug.LogWarning("[Evolution] Legacy evolution config missing swordSaintBattlePrefab. Skipping evolution.", this);
             return false;
         }
 
         _usingFallbackEvolutionConfig = true;
-        _evolutionBattlePrefab = templarBattlePrefab;
-        _evolutionAdvancedClassDef = templarAdvancedClassDef;
-        _evolutionReelStripTemplate = templarReelStripTemplate;
-        _evolutionPortraitOverride = templarPortraitOverride;
-        _evolutionWorldSpriteOverride = templarWorldSpriteOverride;
-        _evolutionPreviewPrefab = templarPreviewPrefab;
+        _evolutionBattlePrefab = swordSaintBattlePrefab;
+        _evolutionAdvancedClassDef = swordSaintAdvancedClassDef;
+        _evolutionReelStripTemplate = swordSaintReelStripTemplate;
+        _evolutionPortraitOverride = swordSaintPortraitOverride;
+        _evolutionWorldSpriteOverride = swordSaintWorldSpriteOverride;
+        _evolutionPreviewPrefab = swordSaintPreviewPrefab;
         return true;
     }
 
@@ -906,9 +966,16 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
 
         GameObject prefab = null;
 
-        // Prefer explicit preview prefab for Fighter
-        if (_evolutionEligible && _usingFallbackEvolutionConfig && fighterPreviewPrefab != null)
-            prefab = fighterPreviewPrefab;
+        // Prefer explicit preview prefab for the base class (only for legacy fallback mode).
+        if (_evolutionEligible && _usingFallbackEvolutionConfig)
+        {
+            string baseName = _hero != null && _hero.BaseClassDef != null ? _hero.BaseClassDef.className : string.Empty;
+
+            if (fighterPreviewPrefab != null && string.Equals(baseName, "Fighter", StringComparison.OrdinalIgnoreCase))
+                prefab = fighterPreviewPrefab;
+            else if (ninjaPreviewPrefab != null && string.Equals(baseName, "Ninja", StringComparison.OrdinalIgnoreCase))
+                prefab = ninjaPreviewPrefab;
+        }
 
         // IMPORTANT: Never clone transform.root here.
         // In many scenes the hero's transform.root is the *entire battle scene* (e.g., a parent with

@@ -897,16 +897,19 @@ private bool TryRunLevel5EvolutionNow()
             out _,
             out _);
 
-        // Legacy fallback: allow Fighter evolution even if the mapping list isn't wired
+        // Legacy fallback: allow Fighter/Ninja evolution even if the mapping list isn't wired
         // or the base class SO reference changed.
-        bool legacyFighter =
+        bool legacyFighterOrNinja =
             hero.BaseClassDef != null &&
             !string.IsNullOrEmpty(hero.BaseClassDef.className) &&
-            string.Equals(hero.BaseClassDef.className, "Fighter", StringComparison.OrdinalIgnoreCase);
+            (
+                string.Equals(hero.BaseClassDef.className, "Fighter", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(hero.BaseClassDef.className, "Ninja", StringComparison.OrdinalIgnoreCase)
+            );
 
-        bool ok = mappingFound || legacyFighter;
+        bool ok = mappingFound || legacyFighterOrNinja;
 
-        Debug.Log($"[Evolution][Gate] hero='{hero.name}' pending={hero.HasPendingEvolution} mappingFound={mappingFound} legacyFighter={legacyFighter} -> {ok}", this);
+        Debug.Log($"[Evolution][Gate] hero='{hero.name}' pending={hero.HasPendingEvolution} mappingFound={mappingFound} legacyFighterOrNinja={legacyFighterOrNinja} -> {ok}", this);
         return ok;
     }
 
@@ -969,6 +972,7 @@ private bool TryRunLevel5EvolutionNow()
             this
         );
         Transform parent = (partyRoot != null) ? partyRoot : m.avatarGO.transform.parent;
+        Vector3 oldCenterWorld = (oldStats != null ? oldStats.CenterPointWorldPosition : m.avatarGO.transform.position);
 
         Vector3 pos = m.avatarGO.transform.position;
         Quaternion rot = m.avatarGO.transform.rotation;
@@ -983,6 +987,20 @@ private bool TryRunLevel5EvolutionNow()
             Debug.LogError($"[BattleManager] Advanced prefab '{advancedPrefab.name}' has no HeroStats component.");
             Destroy(newGo);
             return false;
+        }
+
+                // Align the new prefab so its CenterPoint stays where the old hero's CenterPoint was.
+        // This prevents evolved prefabs with different CenterPoint local offsets from appearing shifted.
+        Vector3 newCenterWorld = newStats.CenterPointWorldPosition;
+        Vector3 deltaToMatchCenter = oldCenterWorld - newCenterWorld;
+        if (deltaToMatchCenter.sqrMagnitude > 0.000001f)
+        {
+            newGo.transform.position += deltaToMatchCenter;
+            Debug.Log($"[Evolution] CenterPoint align: oldCenter={oldCenterWorld} newCenter={newCenterWorld} delta={deltaToMatchCenter} -> newPos={newGo.transform.position}", this);
+        }
+        else
+        {
+            Debug.Log($"[Evolution] CenterPoint align not needed (delta ~ 0). center={newCenterWorld}", this);
         }
 
         // Preserve all runtime progress from the old instance.
@@ -1917,7 +1935,12 @@ private bool TryRunLevel5EvolutionNow()
                     useImpactSync = true;
                     stateToPlay = profile != null ? profile.GetAttackStateForAbility("Backstab") : null;
                     if (string.IsNullOrWhiteSpace(stateToPlay))
-                        stateToPlay = "ninja_backstab";
+                    {
+                        if (actorStats.AdvancedClassDef.className == "Sword Saint")
+                            stateToPlay = "swordsaint_basic_attack";
+                        else
+                            stateToPlay = "ninja_backstab";
+                    }                        
                     break;
 
                 case "Conceal":
@@ -1959,10 +1982,18 @@ private bool TryRunLevel5EvolutionNow()
                     if (string.IsNullOrWhiteSpace(stateToPlay))
                         stateToPlay = "templar_magic_ability";
                     break;
+                // Sword Saint Abilities
+                case "Silent Sever":
+                    useImpactSync = true;
+                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("Silent Sever") : null;
+                    if (string.IsNullOrWhiteSpace(stateToPlay))
+                        stateToPlay = "swordsaint_basic_attack";
+                    break;
 
                 default:
                     useImpactSync = false;
-                    stateToPlay = profile != null ? profile.GetAttackStateForAbility(ability.name) : null;
+                    stateToPlay = "swordsaint_basic_attack";
+                    //stateToPlay = profile != null ? profile.GetAttackStateForAbility(ability.name) : null;
                     if (string.IsNullOrWhiteSpace(stateToPlay))
                         stateToPlay = "fighter_basic_attack";
                     break;
