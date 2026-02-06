@@ -1901,6 +1901,7 @@ private bool TryRunLevel5EvolutionNow()
         if (anim != null)
         {
             var profile = anim.GetComponentInParent<CasterAnimationProfile>();
+            stateToPlay = profile != null ? profile.GetAttackStateForAbility(ability.name) : null;
 
             switch (ability.name)
             {
@@ -1911,6 +1912,13 @@ private bool TryRunLevel5EvolutionNow()
                         stateToPlay = "templar_basic_attack";
                     if (string.IsNullOrWhiteSpace(stateToPlay))
                         stateToPlay = "fighter_basic_attack";
+                    break;
+
+                case "First Aid":
+                    useImpactSync = true;
+                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("First Aid") : null;
+                    if (string.IsNullOrWhiteSpace(stateToPlay))
+                        stateToPlay = "fighter_magic_ability";
                     break;
 
                 case "Pyre":
@@ -1927,13 +1935,6 @@ private bool TryRunLevel5EvolutionNow()
                         stateToPlay = profile != null ? profile.GetAttackStateForAbility("Pyre") : null;
                     if (string.IsNullOrWhiteSpace(stateToPlay))
                         stateToPlay = "mage_basic_attack";
-                    break;
-
-                case "First Aid":
-                    useImpactSync = true;
-                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("First Aid") : null;
-                    if (string.IsNullOrWhiteSpace(stateToPlay))
-                        stateToPlay = "fighter_magic_ability";
                     break;
 
                 case "Backstab":
