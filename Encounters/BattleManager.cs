@@ -1,3 +1,5 @@
+// GUID: 30f201f35d336bf4d840162cd6fd1fde
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -899,17 +901,18 @@ private bool TryRunLevel5EvolutionNow()
 
         // Legacy fallback: allow Fighter/Ninja evolution even if the mapping list isn't wired
         // or the base class SO reference changed.
-        bool legacyFighterOrNinja =
+        bool legacyFighterNinjaMage =
             hero.BaseClassDef != null &&
             !string.IsNullOrEmpty(hero.BaseClassDef.className) &&
             (
                 string.Equals(hero.BaseClassDef.className, "Fighter", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(hero.BaseClassDef.className, "Ninja", StringComparison.OrdinalIgnoreCase)
+                string.Equals(hero.BaseClassDef.className, "Ninja", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(hero.BaseClassDef.className, "Mage", StringComparison.OrdinalIgnoreCase)
             );
 
-        bool ok = mappingFound || legacyFighterOrNinja;
+        bool ok = mappingFound || legacyFighterNinjaMage;
 
-        Debug.Log($"[Evolution][Gate] hero='{hero.name}' pending={hero.HasPendingEvolution} mappingFound={mappingFound} legacyFighterOrNinja={legacyFighterOrNinja} -> {ok}", this);
+        Debug.Log($"[Evolution][Gate] hero='{hero.name}' pending={hero.HasPendingEvolution} mappingFound={mappingFound} legacyFighterNinjaMage={legacyFighterNinjaMage} -> {ok}", this);
         return ok;
     }
 
@@ -4731,3 +4734,6 @@ if (logPassiveBridge)
         }
     }
 }
+
+
+////////////////////////////////////////////////////////////

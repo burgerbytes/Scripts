@@ -1,3 +1,5 @@
+// GUID: a7aeeac56029a2e4296e5db5583f0c70
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -88,6 +90,26 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
     [Tooltip("Optional: world sprite override applied to the evolved hero's SpriteRenderer(s). Useful if the prefab sprite is not set yet.")]
     [SerializeField] private Sprite swordSaintWorldSpriteOverride;
 
+
+    [Header("Evolution (Level 5) - Royal Mage")]
+    [Tooltip("Optional: assign your Mage base class definition for strict matching.")]
+    [SerializeField] private ClassDefinitionSO mageBaseClassDef;
+
+    [Tooltip("For testing: Mage evolves into this Advanced class (Royal Mage).")]
+    [SerializeField] private ClassDefinitionSO royalMageAdvancedClassDef;
+
+    [Tooltip("Prefab used for the evolved hero in battle (Royal Mage).")]
+    [SerializeField] private GameObject royalMageBattlePrefab;
+
+    [Tooltip("Reel strip template for the evolved class (Royal Mage). If null, the reel won't swap visually.")]
+    [SerializeField] private ReelStripSO royalMageReelStripTemplate;
+
+    [Tooltip("Optional: portrait override applied to the hero after evolution.")]
+    [SerializeField] private Sprite royalMagePortraitOverride;
+
+    [Tooltip("Optional: world sprite override applied to the evolved hero's SpriteRenderer(s). Useful if the prefab sprite is not set yet.")]
+    [SerializeField] private Sprite royalMageWorldSpriteOverride;
+
 [Header("Evolution VFX (Reel)")]
     [SerializeField] private float evolveSpinRampSeconds = 1.2f;
     [SerializeField] private float evolveMaxSpinSpeedMultiplier = 6f;
@@ -108,6 +130,13 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
 
     [Tooltip("Optional: preview prefab for the evolved class (Sword Saint). If null, we reuse swordSaintBattlePrefab.")]
     [SerializeField] private GameObject swordSaintPreviewPrefab;
+
+
+    [Tooltip("If set, we spawn this prefab as the preview when the hero is a Mage (instead of cloning the in-scene avatar).")]
+    [SerializeField] private GameObject magePreviewPrefab;
+
+    [Tooltip("Optional: preview prefab for the evolved class (Royal Mage). If null, we reuse royalMageBattlePrefab.")]
+    [SerializeField] private GameObject royalMagePreviewPrefab;
 
 [Tooltip("Local position offset applied to the preview under the anchor.")]
     [SerializeField] private Vector3 heroPreviewLocalOffset = Vector3.zero;
@@ -410,8 +439,10 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         // Fallback: legacy config (kept for compatibility).
         // - Fighter -> Templar
         // - Ninja  -> Sword Saint
+        // - Mage   -> Royal Mage
         bool isFighter = false;
         bool isNinja = false;
+        bool isMage = false;
 
         if (fighterBaseClassDef != null)
         {
@@ -433,9 +464,19 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
             isNinja = string.Equals(hero.BaseClassDef.className, "Ninja", StringComparison.OrdinalIgnoreCase);
         }
 
-        if (!isFighter && !isNinja)
+        if (mageBaseClassDef != null)
         {
-            Debug.Log($"[Evolution] Eligibility byName hero='{hero.name}' base='{(hero.BaseClassDef != null ? hero.BaseClassDef.className : "NULL")}' -> not Fighter/Ninja. Skipping legacy fallback.", this);
+            isMage = hero.BaseClassDef == mageBaseClassDef;
+            Debug.Log($"[Evolution] Eligibility strictBaseDef(Mage) hero='{hero.name}' ok={isMage} base='{(hero.BaseClassDef != null ? hero.BaseClassDef.className : "NULL")}'", this);
+        }
+        else if (hero.BaseClassDef != null && !string.IsNullOrEmpty(hero.BaseClassDef.className))
+        {
+            isMage = string.Equals(hero.BaseClassDef.className, "Mage", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (!isFighter && !isNinja && !isMage)
+        {
+            Debug.Log($"[Evolution] Eligibility byName hero='{hero.name}' base='{(hero.BaseClassDef != null ? hero.BaseClassDef.className : "NULL")}' -> not Fighter/Ninja/Mage. Skipping legacy fallback.", this);
             return false;
         }
 
@@ -459,19 +500,38 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
         }
 
         // Ninja -> Sword Saint
-        if (swordSaintBattlePrefab == null)
+        if (isNinja)
         {
-            Debug.LogWarning("[Evolution] Legacy evolution config missing swordSaintBattlePrefab. Skipping evolution.", this);
+            if (swordSaintBattlePrefab == null)
+            {
+                Debug.LogWarning("[Evolution] Legacy evolution config missing swordSaintBattlePrefab. Skipping evolution.", this);
+                return false;
+            }
+
+            _usingFallbackEvolutionConfig = true;
+            _evolutionBattlePrefab = swordSaintBattlePrefab;
+            _evolutionAdvancedClassDef = swordSaintAdvancedClassDef;
+            _evolutionReelStripTemplate = swordSaintReelStripTemplate;
+            _evolutionPortraitOverride = swordSaintPortraitOverride;
+            _evolutionWorldSpriteOverride = swordSaintWorldSpriteOverride;
+            _evolutionPreviewPrefab = swordSaintPreviewPrefab;
+            return true;
+        }
+
+        // Mage -> Royal Mage
+        if (royalMageBattlePrefab == null)
+        {
+            Debug.LogWarning("[Evolution] Legacy evolution config missing royalMageBattlePrefab. Skipping evolution.", this);
             return false;
         }
 
         _usingFallbackEvolutionConfig = true;
-        _evolutionBattlePrefab = swordSaintBattlePrefab;
-        _evolutionAdvancedClassDef = swordSaintAdvancedClassDef;
-        _evolutionReelStripTemplate = swordSaintReelStripTemplate;
-        _evolutionPortraitOverride = swordSaintPortraitOverride;
-        _evolutionWorldSpriteOverride = swordSaintWorldSpriteOverride;
-        _evolutionPreviewPrefab = swordSaintPreviewPrefab;
+        _evolutionBattlePrefab = royalMageBattlePrefab;
+        _evolutionAdvancedClassDef = royalMageAdvancedClassDef;
+        _evolutionReelStripTemplate = royalMageReelStripTemplate;
+        _evolutionPortraitOverride = royalMagePortraitOverride;
+        _evolutionWorldSpriteOverride = royalMageWorldSpriteOverride;
+        _evolutionPreviewPrefab = royalMagePreviewPrefab;
         return true;
     }
 
@@ -975,6 +1035,8 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
                 prefab = fighterPreviewPrefab;
             else if (ninjaPreviewPrefab != null && string.Equals(baseName, "Ninja", StringComparison.OrdinalIgnoreCase))
                 prefab = ninjaPreviewPrefab;
+            else if (magePreviewPrefab != null && string.Equals(baseName, "Mage", StringComparison.OrdinalIgnoreCase))
+                prefab = magePreviewPrefab;
         }
 
         // IMPORTANT: Never clone transform.root here.
@@ -1081,5 +1143,7 @@ public class PostBattleReelUpgradeMinigamePanel : MonoBehaviour
     }
 }
 
+
+////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////

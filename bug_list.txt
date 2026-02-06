@@ -1,6 +1,4 @@
 bugs/issues
-- after evolution profile needs to be the advanced class, not base class
-	var profile = anim.GetComponentInParent<CasterAnimationProfile>();
 - there's a small chance that reelcraft ability icons wont appear on battle screen
 - make sure ability menu is inactive on player phase start
 - add button to cancel reelcraft ability casting
