@@ -1904,6 +1904,8 @@ private bool TryRunLevel5EvolutionNow()
                 case "Slash":
                     useImpactSync = true;
                     stateToPlay = profile != null ? profile.GetAttackStateForAbility("Slash") : null;
+                    if (actorStats.AdvancedClassDef.className == "Templar")
+                        stateToPlay = "templar_basic_attack";
                     if (string.IsNullOrWhiteSpace(stateToPlay))
                         stateToPlay = "fighter_basic_attack";
                     break;
@@ -1940,6 +1942,17 @@ private bool TryRunLevel5EvolutionNow()
                             stateToPlay = "swordsaint_basic_attack";
                         else
                             stateToPlay = "ninja_backstab";
+                    }                        
+                    break;
+
+                case "Quick Blade":
+                    useImpactSync = true;
+                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("Quick Blade") : null;
+                    if (actorStats.AdvancedClassDef.className == "Sword Saint")
+                            stateToPlay = "swordsaint_basic_attack";
+                    if (string.IsNullOrWhiteSpace(stateToPlay))
+                    {
+                        stateToPlay = "ninja_backstab";
                     }                        
                     break;
 
@@ -1992,8 +2005,7 @@ private bool TryRunLevel5EvolutionNow()
 
                 default:
                     useImpactSync = false;
-                    stateToPlay = "swordsaint_basic_attack";
-                    //stateToPlay = profile != null ? profile.GetAttackStateForAbility(ability.name) : null;
+                    stateToPlay = profile != null ? profile.GetAttackStateForAbility(ability.name) : null;
                     if (string.IsNullOrWhiteSpace(stateToPlay))
                         stateToPlay = "fighter_basic_attack";
                     break;
