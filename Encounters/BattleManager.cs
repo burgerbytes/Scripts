@@ -1901,118 +1901,38 @@ private bool TryRunLevel5EvolutionNow()
         if (anim != null)
         {
             var profile = anim.GetComponentInParent<CasterAnimationProfile>();
-            stateToPlay = profile != null ? profile.GetAttackStateForAbility(ability.name) : null;
+            // OPTION B (preferred): drive animation from a stable Ability "animation key" instead of the
+            // player-facing ability name. This scales cleanly as more classes share abilities.
+            //
+            // - If the AbilityDefinitionSO has a field/property named "animationKey" (case-insensitive), we'll use it.
+            // - Otherwise we fall back to legacy behavior using ability.name/ability.abilityName.
+            // - The CasterAnimationProfile can optionally scope a mapping to a className.
 
-            switch (ability.name)
+            string actorClassName = GetActorClassName(actorStats);
+            // Prefer the explicit animation key on the ability asset.
+            // Leave blank to fall back to legacy name-based mapping.
+            string animationKey = (ability != null && !string.IsNullOrWhiteSpace(ability.animationKey))
+                ? ability.animationKey.Trim()
+                : null;
+
+            // Some abilities intentionally play no cast animation.
+            if (IsNoAnimAbility(ability))
             {
-                case "Slash":
-                    useImpactSync = true;
-                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("Slash") : null;
-                    if (actorStats.AdvancedClassDef.className == "Templar")
-                        stateToPlay = "templar_basic_attack";
-                    if (string.IsNullOrWhiteSpace(stateToPlay))
-                        stateToPlay = "fighter_basic_attack";
-                    break;
+                useImpactSync = false;
+                stateToPlay = null;
+                if (logFlow) Debug.Log($"[Battle][Resolve] {ability.abilityName}: no animation and no impact sync.", this);
+            }
+            else
+            {
+                stateToPlay = profile != null
+                    ? profile.ResolveAttackState(animationKey, actorClassName, abilityNameFallback: ability.name)
+                    : null;
 
-                case "First Aid":
-                    useImpactSync = true;
-                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("First Aid") : null;
-                    if (string.IsNullOrWhiteSpace(stateToPlay))
-                        stateToPlay = "fighter_magic_ability";
-                    break;
+                // If we still didn't find anything, retain the prior default behavior.
+                if (string.IsNullOrWhiteSpace(stateToPlay))
+                    stateToPlay = "fighter_basic_attack";
 
-                case "Pyre":
-                    useImpactSync = true;
-                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("Pyre") : null;
-                    if (string.IsNullOrWhiteSpace(stateToPlay))
-                        stateToPlay = "mage_basic_attack";
-                    break;
-
-                case "Heal":
-                    useImpactSync = true;
-                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("Heal") : null;
-                    if (string.IsNullOrWhiteSpace(stateToPlay))
-                        stateToPlay = profile != null ? profile.GetAttackStateForAbility("Pyre") : null;
-                    if (string.IsNullOrWhiteSpace(stateToPlay))
-                        stateToPlay = "mage_basic_attack";
-                    break;
-
-                case "Backstab":
-                    useImpactSync = true;
-                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("Backstab") : null;
-                    if (string.IsNullOrWhiteSpace(stateToPlay))
-                    {
-                        if (actorStats.AdvancedClassDef.className == "Sword Saint")
-                            stateToPlay = "swordsaint_basic_attack";
-                        else
-                            stateToPlay = "ninja_backstab";
-                    }                        
-                    break;
-
-                case "Quick Blade":
-                    useImpactSync = true;
-                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("Quick Blade") : null;
-                    if (actorStats.AdvancedClassDef.className == "Sword Saint")
-                            stateToPlay = "swordsaint_basic_attack";
-                    if (string.IsNullOrWhiteSpace(stateToPlay))
-                    {
-                        stateToPlay = "ninja_backstab";
-                    }                        
-                    break;
-
-                case "Conceal":
-                    useImpactSync = false;
-                    stateToPlay = null;
-                    if (logFlow) Debug.Log("[Battle][Resolve] Conceal: no animation and no impact sync.", this);
-                    break;
-
-                case "Block":
-                    useImpactSync = false;
-                    stateToPlay = null;
-                    if (logFlow) Debug.Log("[Battle][Resolve] Block: no animation and no impact sync.", this);
-                    break;
-
-                case "Aegis":
-                    useImpactSync = false;
-                    stateToPlay = null;
-                    if (logFlow) Debug.Log("[Battle][Resolve] Aegis: no animation and no impact sync.", this);
-                    break;
-
-                // Templar Abilities
-                case "Righteous Cut":
-                    useImpactSync = true;
-                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("Righteous Cut") : null;
-                    if (string.IsNullOrWhiteSpace(stateToPlay))
-                        stateToPlay = "templar_basic_attack";
-                    break;
-
-                case "Verdict & Execution":
-                    useImpactSync = true;
-                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("Verdict & Execution") : null;
-                    if (string.IsNullOrWhiteSpace(stateToPlay))
-                        stateToPlay = "templar_strong_attack";
-                    break;
-
-                case "Stay the Sentence":
-                    useImpactSync = true;
-                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("Stay the Sentence") : null;
-                    if (string.IsNullOrWhiteSpace(stateToPlay))
-                        stateToPlay = "templar_magic_ability";
-                    break;
-                // Sword Saint Abilities
-                case "Silent Sever":
-                    useImpactSync = true;
-                    stateToPlay = profile != null ? profile.GetAttackStateForAbility("Silent Sever") : null;
-                    if (string.IsNullOrWhiteSpace(stateToPlay))
-                        stateToPlay = "swordsaint_basic_attack";
-                    break;
-
-                default:
-                    useImpactSync = false;
-                    stateToPlay = profile != null ? profile.GetAttackStateForAbility(ability.name) : null;
-                    if (string.IsNullOrWhiteSpace(stateToPlay))
-                        stateToPlay = "fighter_basic_attack";
-                    break;
+                useImpactSync = true;
             }
 
             // If this is a heal/shield targeting Self/Ally, default to syncing the effect
@@ -2351,6 +2271,42 @@ private bool TryRunLevel5EvolutionNow()
     {
         if (ability == null) return default;
         return ability.cost;
+    }
+
+    // ============================
+    // Ability Animation Key Helpers
+    // ============================
+    private static string GetActorClassName(HeroStats actorStats)
+    {
+        // Prefer the current advanced class, otherwise base class.
+        try
+        {
+            if (actorStats != null)
+            {
+                if (actorStats.AdvancedClassDef != null && !string.IsNullOrWhiteSpace(actorStats.AdvancedClassDef.className))
+                    return actorStats.AdvancedClassDef.className.Trim();
+
+                if (actorStats.BaseClassDef != null && !string.IsNullOrWhiteSpace(actorStats.BaseClassDef.className))
+                    return actorStats.BaseClassDef.className.Trim();
+            }
+        }
+        catch { /* ignore */ }
+
+        return null;
+    }
+
+    private static bool IsNoAnimAbility(AbilityDefinitionSO ability)
+    {
+        if (ability == null) return false;
+        string n = null;
+        try { n = string.IsNullOrWhiteSpace(ability.name) ? ability.abilityName : ability.name; } catch { n = null; }
+        if (string.IsNullOrWhiteSpace(n)) return false;
+        n = n.Trim();
+
+        // These are intentionally “instant” (no cast animation / no impact sync).
+        return string.Equals(n, "Conceal", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(n, "Block", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(n, "Aegis", StringComparison.OrdinalIgnoreCase);
     }
 
     private void SetEnemyTargetPreview(Monster target)

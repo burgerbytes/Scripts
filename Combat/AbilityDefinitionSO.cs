@@ -1,9 +1,5 @@
 // GUID: cf56299f5b00af345b24e257cb33b22b
 ////////////////////////////////////////////////////////////
-// GUID: cf56299f5b00af345b24e257cb33b22b
-////////////////////////////////////////////////////////////
-// GUID: cf56299f5b00af345b24e257cb33b22b
-////////////////////////////////////////////////////////////
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -50,6 +46,10 @@ public class AbilityDefinitionSO : ScriptableObject
     public string abilityName;
     [TextArea(2, 6)] public string description;
     public Sprite icon;
+
+    [Header("Animation")]
+    [Tooltip("Stable animation key used to map this ability to an Animator state via CasterAnimationProfile (e.g. 'BasicAttack', 'MageCast'). Leave blank to fall back to legacy name-based mapping.")]
+    public string animationKey;
 
     [Header("Type")]
     [Tooltip("Active abilities are executed by the player. Passive abilities are always-on event listeners.")]

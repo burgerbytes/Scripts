@@ -22,7 +22,7 @@ Changes?
 - implment ability equip menu, set max number of active abilities
 
 PHASE 1 GOALS
-- 3 heroes with defined playstyles
+- 3 heroes with defined playstyles 
 - 8 fully functional abilities for each hero
 	-fighter (first aid/ slash; battle rhythm/iron guard; heavy strike/taunt; bloodlust/resolve)
 	-mage (focus rune/dart; flame sigil/water sigil; aegis/pyre; 
@@ -32,6 +32,7 @@ PHASE 1 GOALS
 - Total of 10 battles (2 areas, 2 bosses) forest -> caverns -> crypt
 - 3 different BGs (1 final boss specific one)
 - 5 fully functional items (2/5)
+- 20 different enemies each with 2-3 abilities
 - SFX for everything
 - VFX for all abilities
 - Put game up on itchio
