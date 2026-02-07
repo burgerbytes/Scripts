@@ -1,3 +1,6 @@
+// PATH: Assets/Scripts/UI/ReelcraftAbilityButtonForwarder.cs
+// GUID: 0e46fb73f7566334798e1378396d5631
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Reflection;
@@ -28,8 +31,11 @@ public class ReelcraftAbilityButtonForwarder : MonoBehaviour
     [SerializeField] private bool hideIconWhenNull = true;
 
     [Header("Timing")]
-    [Tooltip("How long to keep retrying to find BattleManager/Hero to sync icon.")]
-    [SerializeField] private float initTimeoutSeconds = 15f;
+    [Tooltip(
+        "How often (seconds, unscaled) we retry resolving BattleManager/hero to sync the icon.\n" +
+        "This runs while the object is enabled (no hard timeout) so the icon still appears even if\n" +
+        "BattleManager/party spawns late, the HUD is enabled before party setup, or objects are toggled on/off.")]
+    [SerializeField] private float retryIntervalSeconds = 0.25f;
 
     private Button _thisButton;
     private Image _thisImage;
@@ -37,6 +43,9 @@ public class ReelcraftAbilityButtonForwarder : MonoBehaviour
 
     private int _partyIndex = -1;
     private Coroutine _initRoutine;
+
+    private BattleManager _cachedBM;
+    private bool _syncedWithRealHero;
 
     private void Awake()
     {
@@ -85,41 +94,46 @@ public class ReelcraftAbilityButtonForwarder : MonoBehaviour
 
     private IEnumerator InitAndSyncIcon()
     {
-    // Re-resolve in case prefab/hierarchy changed or PartyHUDSlot wasn't present at Awake time.
-    if (_partyIndex < 0)
-        _partyIndex = ResolvePartyIndexRobust(_slot, transform);
+        // Re-resolve in case prefab/hierarchy changed or PartyHUDSlot wasn't present at Awake time.
+        if (_partyIndex < 0)
+            _partyIndex = ResolvePartyIndexRobust(_slot, transform);
 
-    float start = Time.unscaledTime;
-    BattleManager bm = null;
-
-    while (Time.unscaledTime - start < initTimeoutSeconds)
-    {
-        if (bm == null)
-            bm = FindFirstObjectByType<BattleManager>(FindObjectsInactive.Include);
-
-        if (bm != null && _partyIndex >= 0)
+        // If we have *no* party index yet, keep trying; UI hierarchies sometimes stabilize a frame later.
+        // (Example: HUD instantiated, then PickAlly slots are renamed/duplicated.)
+        while (isActiveAndEnabled)
         {
-            var hero = SafeGetHeroAtPartyIndex(bm, _partyIndex);
+            if (_partyIndex < 0)
+                _partyIndex = ResolvePartyIndexRobust(_slot, transform);
+
+            if (_cachedBM == null)
+                _cachedBM = FindFirstObjectByType<BattleManager>(FindObjectsInactive.Include);
+
+            HeroStats hero = null;
+            if (_cachedBM != null && _partyIndex >= 0)
+                hero = SafeGetHeroAtPartyIndex(_cachedBM, _partyIndex);
 
             if (debugLogs)
-                Debug.Log($"[ReelcraftAbilityButtonForwarder] InitAndSyncIcon tick. bm={(bm != null)} hero={(hero != null)} partyIndex={_partyIndex}", this);
+                Debug.Log($"[ReelcraftAbilityButtonForwarder] Sync tick. bm={(_cachedBM != null)} hero={(hero != null)} partyIndex={_partyIndex} synced={_syncedWithRealHero}", this);
 
+            // If we have a real hero, always prefer syncing from it (e.g., evolution changed AdvancedClassDef).
             if (hero != null)
             {
                 SyncIconFromHero(hero);
-                yield break;
+                _syncedWithRealHero = true;
             }
+            else
+            {
+                // Only apply fallback once; don't permanently hide if we simply haven't spawned the party yet.
+                if (!_syncedWithRealHero)
+                    SyncIconFromHero(null);
+            }
+
+            // If the icon is now valid (either hero or fallback), we can throttle retries.
+            // We still keep looping so late party setup/evolution updates are picked up reliably.
+            float wait = Mathf.Max(0.01f, retryIntervalSeconds);
+            yield return new WaitForSecondsRealtime(wait);
         }
-
-        yield return null;
     }
-
-    // Timed out: apply fallback (if any) and optionally hide.
-    if (debugLogs)
-        Debug.LogWarning($"[ReelcraftAbilityButtonForwarder] InitAndSyncIcon timed out. bm={(bm != null)} hero=false partyIndex={_partyIndex}", this);
-
-    SyncIconFromHero(null);
-}
 
     private void HandleClicked()
     {
@@ -174,6 +188,8 @@ public class ReelcraftAbilityButtonForwarder : MonoBehaviour
 
         _thisImage.sprite = icon;
 
+        // Important: do NOT permanently hide the Image just because the hero isn't resolved yet.
+        // We may be racing party spawning / scene enabling. We'll keep retrying while enabled.
         if (hideIconWhenNull)
             _thisImage.enabled = (icon != null);
         else
@@ -339,12 +355,18 @@ public class ReelcraftAbilityButtonForwarder : MonoBehaviour
 
     public void ForceResync()
     {
-    if (!isActiveAndEnabled) return;
+        if (!isActiveAndEnabled) return;
 
-    if (_initRoutine != null)
-        StopCoroutine(_initRoutine);
+        _syncedWithRealHero = false;
+        _cachedBM = null;
 
-    _initRoutine = StartCoroutine(InitAndSyncIcon());
+        if (_initRoutine != null)
+            StopCoroutine(_initRoutine);
+
+        _initRoutine = StartCoroutine(InitAndSyncIcon());
+    }
+
 }
 
-}
+
+////////////////////////////////////////////////////////////

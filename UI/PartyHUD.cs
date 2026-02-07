@@ -1,3 +1,6 @@
+// PATH: Assets/Scripts/UI/PartyHUD.cs
+// GUID: 5a8a06222baaa2b4883d4bb71239e8a6
+////////////////////////////////////////////////////////////
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -31,6 +34,12 @@ public class PartyHUD : MonoBehaviour
     private bool _panelVisible = false;
     private bool _hasShownStatsOnce = false;
     private bool _menusWereHiddenForReelPhase = false;
+
+    // Reelcraft icon forwarding is prone to race conditions (HUD enabling before party spawns,
+    // class selection/evolution swapping class defs, panel objects toggling inactive/active).
+    // We keep a cached list of forwarders and opportunistically poke them to resync.
+    private List<ReelcraftAbilityButtonForwarder> _reelcraftForwarders = new List<ReelcraftAbilityButtonForwarder>();
+    private float _lastReelcraftResyncTime = -999f;
 
     private void Awake()
     {
@@ -69,6 +78,8 @@ public class PartyHUD : MonoBehaviour
                 AssignPortraitToSlot(i);
             }
         }
+
+        CacheReelcraftForwarders();
     }
 
     private void OnEnable()
@@ -88,6 +99,10 @@ public class PartyHUD : MonoBehaviour
             statsPanel.Hide();
 
         RefreshAllSlots();
+
+        // Kick the reelcraft icons immediately on enable. (Forwarders will keep retrying
+        // while enabled, but this ensures the first frame after enable gets a chance.)
+        ForceResyncReelcraftForwarders();
     }
 
     private void OnDisable()
@@ -101,6 +116,33 @@ public class PartyHUD : MonoBehaviour
 
         if (reelSpinSystem != null)
             reelSpinSystem.OnReelPhaseChanged -= HandleReelPhaseChanged;
+    }
+
+    private void CacheReelcraftForwarders()
+    {
+        _reelcraftForwarders.Clear();
+        var found = GetComponentsInChildren<ReelcraftAbilityButtonForwarder>(true);
+        if (found != null && found.Length > 0)
+            _reelcraftForwarders.AddRange(found);
+    }
+
+    private void ForceResyncReelcraftForwarders()
+    {
+        // Throttle: RefreshAllSlots can be called multiple times per frame on state transitions.
+        if (Time.unscaledTime - _lastReelcraftResyncTime < 0.25f)
+            return;
+
+        _lastReelcraftResyncTime = Time.unscaledTime;
+
+        if (_reelcraftForwarders == null || _reelcraftForwarders.Count == 0)
+            CacheReelcraftForwarders();
+
+        for (int i = 0; i < _reelcraftForwarders.Count; i++)
+        {
+            var fwd = _reelcraftForwarders[i];
+            if (fwd == null) continue;
+            fwd.ForceResync();
+        }
     }
 
     private void EnsureReelcraftPanelRef()
@@ -253,6 +295,9 @@ public class PartyHUD : MonoBehaviour
             bool isSelected = (i == _selectedIndex);
             slot.Render(snapshot, isSelected, incoming);
         }
+
+        // Party changed (including evolution) can happen after HUD enable; make sure icons catch up.
+        ForceResyncReelcraftForwarders();
     }
 
     // Called by ReelcraftAbilityButtonForwarder (and potentially other UI) to open Reelcraft for a given party index.
@@ -444,3 +489,6 @@ void OnSlotClicked(int index)
         return null;
     }
 }
+
+
+////////////////////////////////////////////////////////////
