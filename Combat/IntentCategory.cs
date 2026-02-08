@@ -5,5 +5,6 @@ public enum IntentCategory
     DamageAndStatus,   // Damage + status
     Aoe,               // AoE with no damage
     StatusAndAoe,      // AoE damage (may also apply status)
-    SelfBuff           // Buffs self
+    SelfBuff,          // Buffs self
+    Summon             // Summons another monster
 }

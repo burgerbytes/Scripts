@@ -111,6 +111,15 @@ public class AbilityDefinitionSO : ScriptableObject
     public bool inflictsFocusRune = false;
     public bool inflictsBurn = false;
     public bool inflictsFreeze = false;
+
+
+    [Header("Summon (Experimental)")]
+    [Tooltip("Optional: if assigned, this ability can summon a monster prefab. (Requires battle-side support for ally summons; currently used for enemy summons.)")]
+    public GameObject summonPrefab;
+
+    [Tooltip("How many to summon when this ability resolves (if summonPrefab is assigned).")]
+    [Min(1)]
+    public int summonCount = 1;
 }
 
 

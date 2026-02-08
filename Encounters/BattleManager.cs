@@ -24,7 +24,7 @@ public class BattleManager : MonoBehaviour
 
     public enum BattleState { Idle, BattleStart, PlayerPhase, EnemyPhase, BattleEnd }
     public enum PlayerActionType { None, Ability1, Ability2 }
-    public enum IntentType { Attack, AoEAttack }
+    public enum IntentType { Attack, AoEAttack, Summon }
 
     [Serializable]
     private class PartyMemberRuntime
@@ -58,10 +58,16 @@ public class BattleManager : MonoBehaviour
         
         public bool appliesCorrosion;
         public int corrosionIconCount;
+
+        public bool isSummon;
+        public int summonCount;
+        public int maxSummonsPerBattle;
     }
 
-    private static IntentCategory ComputeIntentCategory(int damage, bool isAoe, bool stunsTarget, bool appliesBleed, bool appliesCorrosion)
+    private static IntentCategory ComputeIntentCategory(int damage, bool isAoe, bool stunsTarget, bool appliesBleed, bool appliesCorrosion, bool isSummon)
     {
+        if (isSummon) return IntentCategory.Summon;
+
         bool hasStatus = stunsTarget || appliesBleed || appliesCorrosion;
 
         if (isAoe)
@@ -128,6 +134,10 @@ public class BattleManager : MonoBehaviour
         public int bleedStacks;
         public bool appliesCorrosion;
         public int corrosionIconCount;
+
+        public bool isSummon;
+        public int summonCount;
+        public int maxSummonsPerBattle;
     }
 
     [Serializable]
@@ -1156,8 +1166,7 @@ private bool TryRunLevel5EvolutionNow()
         for (int i = 0; i < _plannedIntents.Count; i++)
         {
             var intent = _plannedIntents[i];
-            if (intent.enemy == null || intent.enemy.IsDead) continue;
-            // Conceal/Hidden: single-target attacks miss, but AoE still hits.
+            if (intent.enemy == null || intent.enemy.IsDead) continue;// Conceal/Hidden: single-target attacks miss, but AoE still hits.
             // Mirror the runtime resolution rules (see EnemyAttack resolution).
             bool hitsThisHero = intent.isAoe || intent.targetPartyIndex == index;
             if (!hitsThisHero) continue;
@@ -1502,154 +1511,182 @@ private bool TryRunLevel5EvolutionNow()
 
         CancelPendingAbility();
 
-        if (_plannedIntents.Count == 0) PlanEnemyIntents();
+        if (_plannedIntents.Count == 0)
+            PlanEnemyIntents();
 
+        // Snapshot intents so we can safely clear the live list used for UI rendering.
         var intentsToExecute = new List<EnemyIntent>(_plannedIntents);
 
-        _plannedIntents.Clear();
+        // Broadcast the snapshot BEFORE clearing (some listeners depend on the planned list).
         OnEnemyIntentsPlanned?.Invoke(new List<EnemyIntent>(_plannedIntents));
+
+        _plannedIntents.Clear();
         NotifyPartyChanged();
+
+        Debug.Log($"[EnemyPhase] intentsToExecute.Count={intentsToExecute.Count}", this);
 
         for (int i = 0; i < intentsToExecute.Count; i++)
         {
             var intent = intentsToExecute[i];
-            if (intent.enemy == null || intent.enemy.IsDead) continue;
 
-            int targetIdx = intent.targetPartyIndex;
-
-            if (!IsValidPartyIndex(targetIdx) || _party[targetIdx].IsDead)
-                targetIdx = GetRandomLivingTargetIndex();
-
-            if (!IsValidPartyIndex(targetIdx)) break;
-
-            HeroStats targetStats = _party[targetIdx].stats;
-            GameObject targetGO = _party[targetIdx].avatarGO;
-
-            Transform targetTf = GetHeroCenterPointTransform(targetStats, targetGO != null ? targetGO.transform : (targetStats != null ? targetStats.transform : null));
-
-            yield return EnemyLungeAttack(intent.enemy, targetTf, () =>
+            if (intent.enemy == null)
             {
-                int raw = intent.damage;
-                if (raw <= 0 && intent.enemy != null) raw = intent.enemy.GetDamage();
+                Debug.LogWarning("[EnemyPhase] intent.enemy is NULL. Skipping intent.", this);
+                continue;
+            }
 
-                if (intent.isAoe || intent.type == IntentType.AoEAttack)
+            bool summoned = intent.enemy.isSummonedMonster;
+
+            if (intent.enemy.IsDead)
+            {
+                if (summoned)
+                    Debug.LogWarning($"[Summon][EXEC] Summoned enemy '{intent.enemy.name}' is dead. Skipping intent.", intent.enemy);
+                continue;
+            }
+
+            if (summoned)
+                Debug.Log($"[Summon][EXEC] ENTER intent[{i}] enemy={intent.enemy.name} type={intent.type} atkIdx={intent.attackIndex} target={intent.targetPartyIndex} aoe={intent.isAoe}", intent.enemy);
+
+            // Summon intent
+            if (intent.type == IntentType.Summon || intent.isSummon)
+            {
+                if (summoned)
+                    Debug.Log($"[Summon][EXEC] (Summoner is summoned) executing SUMMON intent. enemy={intent.enemy.name} atkIdx={intent.attackIndex}", intent.enemy);
+                else
+                    Debug.Log($"[SUMMON][EXEC] Executing summon intent. Enemy={intent.enemy.name} atkIdx={intent.attackIndex}", intent.enemy);
+
+                ExecuteMonsterSummonIntent(intent);
+                yield return new WaitForSeconds(0.15f);
+                continue;
+            }
+
+            // Build target list
+            List<int> targets = new List<int>();
+
+            if (intent.isAoe)
+            {
+                for (int p = 0; p < PartyCount; p++)
                 {
-                    for (int pi = 0; pi < PartyCount; pi++)
+                    if (!IsValidPartyIndex(p)) continue;
+                    var pm = _party[p];
+                    if (pm == null || pm.stats == null || pm.IsDead) continue;
+                    targets.Add(p);
+                }
+            }
+            else
+            {
+                int targetIdx = intent.targetPartyIndex;
+
+                // If invalid/dead, choose a fallback living target (DO NOT break the whole enemy phase).
+                if (!IsValidPartyIndex(targetIdx) || _party[targetIdx] == null || _party[targetIdx].stats == null || _party[targetIdx].IsDead)
+                    targetIdx = GetRandomLivingTargetIndex();
+
+                if (!IsValidPartyIndex(targetIdx) || _party[targetIdx] == null || _party[targetIdx].stats == null || _party[targetIdx].IsDead)
+                {
+                    if (summoned)
+                        Debug.LogWarning($"[Summon][EXEC] Summoned enemy '{intent.enemy.name}' had NO VALID TARGET. originalTarget={intent.targetPartyIndex}. Skipping intent.", intent.enemy);
+                    else
+                        Debug.LogWarning($"[EnemyPhase] Enemy '{intent.enemy.name}' had NO VALID TARGET. originalTarget={intent.targetPartyIndex}. Skipping intent.", intent.enemy);
+                    continue;
+                }
+
+                targets.Add(targetIdx);
+            }
+
+            if (targets.Count == 0)
+            {
+                if (summoned)
+                    Debug.LogWarning($"[Summon][EXEC] Summoned enemy '{intent.enemy.name}' resolved zero targets. Skipping.", intent.enemy);
+                continue;
+            }
+
+            // Choose a lunge target transform (use the first target)
+            Transform lungeTarget = null;
+            var firstHero = _party[targets[0]];
+            if (firstHero != null && firstHero.animator != null)
+                lungeTarget = firstHero.animator.transform;
+            else if (firstHero != null && firstHero.avatarGO != null)
+                lungeTarget = firstHero.avatarGO.transform;
+
+            if (lungeTarget == null)
+            {
+                if (summoned)
+                    Debug.LogWarning($"[Summon][EXEC] Summoned enemy '{intent.enemy.name}' has null lunge target transform. Skipping intent.", intent.enemy);
+                else
+                    Debug.LogWarning($"[EnemyPhase] Enemy '{intent.enemy.name}' has null lunge target transform. Skipping intent.", intent.enemy);
+                continue;
+            }
+
+            if (summoned)
+                Debug.Log($"[Summon][EXEC] START ATTACK enemy={intent.enemy.name} targets={targets.Count}", intent.enemy);
+
+            // Do the enemy lunge animation, then apply results.
+            yield return EnemyLungeAttack(intent.enemy, lungeTarget, () =>
+            {
+                if (summoned)
+                    Debug.Log($"[Summon][APPLY] enemy={intent.enemy.name} applying effects to {targets.Count} targets", intent.enemy);
+
+                for (int t = 0; t < targets.Count; t++)
+                {
+                    int partyIndex = targets[t];
+                    if (!IsValidPartyIndex(partyIndex)) continue;
+
+                    var heroPm = _party[partyIndex];
+                    if (heroPm == null || heroPm.stats == null || heroPm.IsDead) continue;
+
+                    var hs = heroPm.stats;
+
+                    // Conceal/Hidden: single-target attacks miss; AoE still hits.
+                    if (hs.IsHidden && !intent.isAoe)
                     {
-                        var pm = _party[pi];
-                        var hs = pm != null ? pm.stats : null;
-                        if (hs == null || pm.IsDead) continue;
-
-                        if (logFlow) Debug.Log($"[Battle][EnemyAtk][AoE] Applying incoming damage. attacker={(intent.enemy != null ? intent.enemy.name : "<null>")} targetIdx={pi} raw={raw} targetShieldBefore={hs.Shield}", this);
-
-                        int hpBefore = hs.CurrentHp;
-                        int shieldBefore = hs.Shield;
-
-                        int hpDealt = hs.ApplyIncomingDamage(raw);
-
-                        // Show total damage applied (shield removed + HP lost), not just HP lost.
-                        int shieldLost = Mathf.Max(0, shieldBefore - hs.Shield);
-                        int hpLost = Mathf.Max(0, hpBefore - hs.CurrentHp);
-                        int totalDamageShown = shieldLost + hpLost;
-
-                        if (performanceTracker != null)
-                            performanceTracker.RecordDamageTaken(hs, hpDealt);
-
-                        if (intent.stunsTarget)
-                            hs.StunForNextPlayerPhases(intent.stunPlayerPhases);
-
-                        if (intent.appliesBleed && intent.bleedStacks > 0)
-                            ApplyBleedStacksToHero(hs, intent.bleedStacks);
-
-                        if (intent.appliesCorrosion && reelSpinSystem != null)
-                        {
-                            reelSpinSystem.ApplyCorrosionToReel(pi, Mathf.Max(1, intent.corrosionIconCount));
-                        }
-
-                        ApplyPartyHiddenVisuals();
-if (hs.IsHidden) hs.SetHidden(false);
-                        hs.ApplyShadowFadeConcealIfPending();
-
-                        if (pm.avatarGO != null)
-                            SpawnDamageNumber(GetHeroCenterWorldPosition(hs, pm.avatarGO.transform), totalDamageShown);
+                        if (summoned)
+                            Debug.Log($"[Summon][APPLY] enemy={intent.enemy.name} MISSED hidden hero partyIndex={partyIndex} hero={hs.name}", hs);
+                        continue;
                     }
 
-                    ApplyPartyHiddenVisuals();
-                    return;
+                    int raw = intent.damage > 0 ? intent.damage : intent.enemy.GetDamage();
+                    raw = Mathf.Max(0, raw);
+
+                    if (summoned)
+                        Debug.Log($"[Summon][APPLY] enemy={intent.enemy.name} -> hero={hs.name} rawDamage={raw} bleed={intent.appliesBleed} stun={intent.stunsTarget} corrosion={intent.appliesCorrosion}", hs);
+
+                    if (raw > 0)
+                        hs.TakeDamage(raw);
+
+                    if (intent.appliesBleed && intent.bleedStacks > 0)
+                        ApplyBleedStacksToHero(hs, intent.bleedStacks);
+
+                    if (intent.stunsTarget && intent.stunPlayerPhases > 0)
+                        hs.StunForNextPlayerPhases(intent.stunPlayerPhases);
+
+                    if (intent.appliesCorrosion && intent.corrosionIconCount > 0 && reelSpinSystem != null)
+                    {
+                        for (int c = 0; c < intent.corrosionIconCount; c++)
+                            reelSpinSystem.ApplyCorrosionToReel(partyIndex);
+                    }
                 }
-
-                if (targetStats == null) return;
-
-                if (targetStats.IsHidden && !intent.isAoe)
-                {
-                    if (logFlow) Debug.Log($"[Battle][EnemyAtk] Target is hidden (Conceal). Attack misses. attacker={(intent.enemy != null ? intent.enemy.name : "<null>")} targetIdx={targetIdx}", this);
-                    return;
-                }
-
-                if (logFlow) Debug.Log($"[Battle][EnemyAtk] Applying incoming damage. attacker={(intent.enemy != null ? intent.enemy.name : "<null>")} targetIdx={targetIdx} raw={raw} targetShieldBefore={targetStats.Shield}", this);
-
-                int hpBeforeSingle = targetStats.CurrentHp;
-                int shieldBeforeSingle = targetStats.Shield;
-
-                int dealtSingle = targetStats.ApplyIncomingDamage(raw);
-
-                int shieldLostSingle = Mathf.Max(0, shieldBeforeSingle - targetStats.Shield);
-                int hpLostSingle = Mathf.Max(0, hpBeforeSingle - targetStats.CurrentHp);
-                int totalDamageShownSingle = shieldLostSingle + hpLostSingle;
-
-                if (performanceTracker != null)
-                    performanceTracker.RecordDamageTaken(targetStats, dealtSingle);
-
-                if (intent.stunsTarget)
-                    targetStats.StunForNextPlayerPhases(intent.stunPlayerPhases);
-
-                if (intent.appliesBleed && intent.bleedStacks > 0)
-                    ApplyBleedStacksToHero(targetStats, intent.bleedStacks);
-
-                if (intent.appliesCorrosion && reelSpinSystem != null)
-                {
-                    reelSpinSystem.ApplyCorrosionToReel(targetIdx, Mathf.Max(1, intent.corrosionIconCount));
-                    ApplyPartyHiddenVisuals();
-                }
-targetStats.ApplyShadowFadeConcealIfPending();
-                if (logFlow) Debug.Log($"[Battle][EnemyAtk] Damage result. dealtToHp={dealtSingle} targetShieldAfter={targetStats.Shield}", this);
-
-                if (targetGO != null)
-                    SpawnDamageNumber(GetHeroCenterWorldPosition(targetStats, targetGO != null ? targetGO.transform : null), totalDamageShownSingle);
             });
-            NotifyPartyChanged();
 
+            if (summoned)
+                Debug.Log($"[Summon][EXEC] FINISHED intent enemy={intent.enemy.name}", intent.enemy);
+
+            // Small pacing delay so multiple enemies don’t feel instantaneous
+            yield return new WaitForSeconds(0.12f);
+
+            if (_state == BattleState.BattleEnd) yield break;
             if (IsPartyDefeated())
             {
                 Debug.Log("[BattleManager] Party defeated (enemy phase).", this);
                 SetState(BattleState.BattleEnd);
-                _enemyTurnRoutine = null;
-                yield break;
+yield break;
             }
         }
 
-        ResetPartyRoundFlags();
-        // NOTE: Substitution is a once-per-battle "first cashout" effect.
-        // Do NOT reset its battle counters on turn transitions (EnemyPhase -> PlayerPhase),
-        // or it will incorrectly be able to trigger again on the next spin.
-        PlanEnemyIntents();
-
-        SetState(BattleState.PlayerPhase);
-
-        PlayerTurnNumber++;
-
-        BeginPlayerTurnSaveState();
-
-        if (reelSpinSystem != null)
-            reelSpinSystem.BeginTurn();
-
-        _activePartyIndex = GetFirstAlivePartyIndex();
-        OnActivePartyMemberChanged?.Invoke(_activePartyIndex);
-
-        NotifyPartyChanged();
-
         _enemyTurnRoutine = null;
+        if (_state != BattleState.BattleEnd)
+            SetState(BattleState.PlayerPhase);
     }
+
 
     private bool IsPartyDefeated()
     {
@@ -2574,12 +2611,21 @@ targetStats.ApplyShadowFadeConcealIfPending();
                 out bool appliesBleed,
                 out int bleedStacks,
                 out bool appliesCorrosion,
-                out int corrosionIconCount);
+                out int corrosionIconCount,
+                out bool isSummon,
+                out int summonCount,
+                out int maxSummonsPerBattle);
+            Debug.Log(
+                $"[SUMMON][PLAN] Monster={m.name} " +
+                $"atkIdx={attackIndex} isSummon={isSummon} " +
+                $"summonCount={summonCount} maxPerBattle={maxSummonsPerBattle}",
+                m
+            );
 
             _plannedIntents.Add(new EnemyIntent
             {
-                type = isAoe ? IntentType.AoEAttack : IntentType.Attack,
-                category = ComputeIntentCategory(damage, isAoe, stunsTarget, appliesBleed, appliesCorrosion),
+                type = isSummon ? IntentType.Summon : (isAoe ? IntentType.AoEAttack : IntentType.Attack),
+                category = ComputeIntentCategory(damage, isAoe, stunsTarget, appliesBleed, appliesCorrosion, isSummon),
                 enemy = m,
                 targetPartyIndex = targetIdx,
 
@@ -2594,12 +2640,18 @@ targetStats.ApplyShadowFadeConcealIfPending();
                 bleedStacks = bleedStacks,
 
                 appliesCorrosion = appliesCorrosion,
-                corrosionIconCount = corrosionIconCount
+                corrosionIconCount = corrosionIconCount,
+
+                isSummon = isSummon,
+                summonCount = summonCount,
+                maxSummonsPerBattle = maxSummonsPerBattle
             });
         }
 
         OnEnemyIntentsPlanned?.Invoke(new List<EnemyIntent>(_plannedIntents));
         NotifyPartyChanged();
+        Debug.Log($"[SUMMON][PLAN] PlanEnemyIntents END. _plannedIntents.Count={_plannedIntents.Count}", this);
+
     }
 
     private void ChooseMonsterAttackForIntent(Monster m,
@@ -2611,7 +2663,10 @@ targetStats.ApplyShadowFadeConcealIfPending();
         out bool appliesBleed,
         out int bleedStacks,
         out bool appliesCorrosion,
-        out int corrosionIconCount)
+        out int corrosionIconCount,
+        out bool isSummon,
+        out int summonCount,
+        out int maxSummonsPerBattle)
     {
         attackIndex = -1;
         damage = 0;
@@ -2622,6 +2677,10 @@ targetStats.ApplyShadowFadeConcealIfPending();
         bleedStacks = 0;
         appliesCorrosion = false;
         corrosionIconCount = 1;
+
+        isSummon = false;
+        summonCount = 1;
+        maxSummonsPerBattle = 1;
 
         if (m == null) return;
 
@@ -2658,11 +2717,35 @@ targetStats.ApplyShadowFadeConcealIfPending();
             return;
         }
 
-        attackIndex = UnityEngine.Random.Range(0, count);
-        var atk = attacksArray.GetValue(attackIndex);
-        if (atk == null) return;
+        // Pick an attack. If we roll a summon attack that has no remaining uses, re-roll a few times.
+        object atk = null;
+        Type atkType = null;
 
-        var atkType = atk.GetType();
+        const int MAX_REROLL_ATTEMPTS = 8;
+        int attempts = 0;
+
+        while (attempts < MAX_REROLL_ATTEMPTS)
+        {
+            attempts++;
+            attackIndex = UnityEngine.Random.Range(0, count);
+            atk = attacksArray.GetValue(attackIndex);
+            if (atk == null) continue;
+
+            atkType = atk.GetType();
+
+            bool candidateIsSummon = ReadBool(atk, atkType, "isSummon", false);
+            if (!candidateIsSummon)
+                break;
+
+            int candidateMax = ReadInt(atk, atkType, "maxSummonsPerBattle", 1);
+            if (m.CanUseSummonAttack(attackIndex, candidateMax))
+                break;
+
+            atk = null;
+            atkType = null;
+        }
+
+        if (atk == null || atkType == null) return;
         damage = ReadInt(atk, atkType, "damage", 0);
         isAoe = ReadBool(atk, atkType, "isAoe", false);
 
@@ -2679,6 +2762,31 @@ targetStats.ApplyShadowFadeConcealIfPending();
         if (!appliesCorrosion) appliesCorrosion = ReadBool(atk, atkType, "corrodesReel", false);
 
         corrosionIconCount = Mathf.Max(1, ReadInt(atk, atkType, "corrosionIconCount", 1));
+
+        // Summon support (optional attack behavior).
+        isSummon = ReadBool(atk, atkType, "isSummon", false);
+        summonCount = Mathf.Max(1, ReadInt(atk, atkType, "summonCount", 1));
+        maxSummonsPerBattle = ReadInt(atk, atkType, "maxSummonsPerBattle", 1);
+
+        if (isSummon)
+        {
+            // Summon attacks don't deal damage by default; they are their own intent category.
+            damage = 0;
+            isAoe = false;
+
+            stunsTarget = false;
+            stunPlayerPhases = 1;
+            appliesBleed = false;
+            bleedStacks = 0;
+            appliesCorrosion = false;
+            corrosionIconCount = 1;
+            Debug.Log(
+                $"[SUMMON][CHOOSE] Monster={m.name} selected SUMMON attack " +
+                $"atkIdx={attackIndex} count={summonCount} max={maxSummonsPerBattle}",
+                m
+            );
+        }
+
         if (corrosionIconCount == 1) corrosionIconCount = Mathf.Max(1, ReadInt(atk, atkType, "corrosionCount", 1));
         if (corrosionIconCount == 1) corrosionIconCount = Mathf.Max(1, ReadInt(atk, atkType, "corrodeCount", 1));
     }
@@ -2701,6 +2809,152 @@ targetStats.ApplyShadowFadeConcealIfPending();
         var pi = t.GetProperty(name, flags);
         if (pi != null && pi.PropertyType == typeof(bool)) return (bool)pi.GetValue(obj, null);
         return fallback;
+    }
+
+
+
+    // =======================
+    // Summon support (Monsters)
+    // =======================
+    private void ExecuteMonsterSummonIntent(EnemyIntent intent)
+    {
+        if (intent.enemy == null) return;
+
+        if (!TryGetSummonAttackData(intent.enemy, intent.attackIndex, out GameObject prefab, out int count, out int maxPerBattle))
+            return;
+
+        if (!intent.enemy.CanUseSummonAttack(intent.attackIndex, maxPerBattle))
+            return;
+
+        int spawnCount = Mathf.Max(1, count);
+
+        for (int i = 0; i < spawnCount; i++)
+        {
+            Debug.Log(
+                $"[SUMMON][SPAWN] Spawning {spawnCount} monster(s) " +
+                $"for {intent.enemy.name}",
+                intent.enemy
+            );
+
+            Vector3 pos = GetSummonSpawnPosition();
+            GameObject go = Instantiate(prefab, pos, Quaternion.identity);
+
+            Monster summoned = go.GetComponentInChildren<Monster>(true);
+            if (summoned == null)
+            {
+                Debug.LogWarning($"[BattleManager][Summon] Summon prefab '{prefab.name}' did not have a Monster component in children.", this);
+                Destroy(go);
+                continue;
+            }
+
+            summoned.gameObject.SetActive(true);
+            summoned.ResetSummonTrackingForBattle();
+
+
+            summoned.isSummonedMonster = true;
+            Debug.Log($"[SUMMON][SPAWN] Marked summoned monster as isSummonedMonster=true name={summoned.name}", summoned);
+            _activeMonsters.Add(summoned);
+            if (!_encounterMonsters.Contains(summoned)) _encounterMonsters.Add(summoned);
+
+            // If the summon spawns dead for some reason, remove it.
+            if (summoned.IsDead)
+            {
+                summoned.gameObject.SetActive(false);
+                _activeMonsters.Remove(summoned);
+            }
+        }
+
+        intent.enemy.RegisterSummonAttackUse(intent.attackIndex);
+        NotifyPartyChanged();
+    }
+
+    private bool TryGetSummonAttackData(Monster m, int attackIndex, out GameObject summonPrefab, out int summonCount, out int maxSummonsPerBattle)
+    {
+        Debug.Log(
+            $"[SUMMON][DATA] Reading summon data. " +
+            $"Monster={m.name} atkIdx={attackIndex}",
+            m
+        );
+
+        summonPrefab = null;
+        summonCount = 1;
+        maxSummonsPerBattle = 1;
+
+        if (m == null) return false;
+        if (attackIndex < 0) return false;
+
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        var t = m.GetType();
+
+        var fiAttacks = t.GetField("attacks", flags);
+        if (fiAttacks == null) return false;
+
+        var attacksObj = fiAttacks.GetValue(m);
+        var attacksArray = attacksObj as Array;
+        if (attacksArray == null) return false;
+        if (attackIndex >= attacksArray.Length) return false;
+
+        var atk = attacksArray.GetValue(attackIndex);
+        if (atk == null) return false;
+
+        var atkType = atk.GetType();
+        bool isSummon = ReadBool(atk, atkType, "isSummon", false);
+        if (!isSummon) return false;
+
+        // Prefab field/property
+        var fiPrefab = atkType.GetField("summonPrefab", flags);
+        if (fiPrefab != null && typeof(GameObject).IsAssignableFrom(fiPrefab.FieldType))
+            summonPrefab = fiPrefab.GetValue(atk) as GameObject;
+
+        var piPrefab = atkType.GetProperty("summonPrefab", flags);
+        if (summonPrefab == null && piPrefab != null && typeof(GameObject).IsAssignableFrom(piPrefab.PropertyType))
+            summonPrefab = piPrefab.GetValue(atk, null) as GameObject;
+
+        if (summonPrefab == null)
+        {
+            Debug.LogWarning($"[BattleManager][Summon] Monster '{m.name}' used a summon attack but summonPrefab was null (attackIndex={attackIndex}).", this);
+            return false;
+        }
+
+        summonCount = Mathf.Max(1, ReadInt(atk, atkType, "summonCount", 1));
+        maxSummonsPerBattle = ReadInt(atk, atkType, "maxSummonsPerBattle", 1);
+
+        return true;
+    }
+
+    private Vector3 GetSummonSpawnPosition()
+    {
+        if (monsterSpawnPoints != null && monsterSpawnPoints.Length > 0)
+        {
+            // Pick the first spawn point that isn't already occupied by a live monster.
+            for (int i = 0; i < monsterSpawnPoints.Length; i++)
+            {
+                var sp = monsterSpawnPoints[i];
+                if (sp == null) continue;
+
+                bool occupied = false;
+                for (int j = 0; j < _activeMonsters.Count; j++)
+                {
+                    var m = _activeMonsters[j];
+                    if (m == null || m.IsDead) continue;
+
+                    if (Vector3.SqrMagnitude(m.transform.position - sp.position) < 0.01f)
+                    {
+                        occupied = true;
+                        break;
+                    }
+                }
+
+                if (!occupied)
+                    return sp.position;
+            }
+
+            var last = monsterSpawnPoints[monsterSpawnPoints.Length - 1];
+            if (last != null)
+                return last.position + new Vector3(UnityEngine.Random.Range(-0.35f, 0.35f), 0f, UnityEngine.Random.Range(-0.35f, 0.35f));
+        }
+
+        return Vector3.zero;
     }
 
     private static void ApplyBleedStacksToHero(HeroStats hs, int stacksToAdd)
@@ -4309,7 +4563,10 @@ private static List<ItemOptionSO> RollUnique(List<ItemOptionSO> pool, int count)
                 appliesBleed = it.appliesBleed,
                 bleedStacks = it.bleedStacks,
                 appliesCorrosion = it.appliesCorrosion,
-                    corrosionIconCount = Mathf.Max(1, it.corrosionIconCount)
+                    corrosionIconCount = Mathf.Max(1, it.corrosionIconCount),
+                    isSummon = it.isSummon,
+                    summonCount = Mathf.Max(1, it.summonCount),
+                    maxSummonsPerBattle = it.maxSummonsPerBattle
                 });
         }
 
@@ -4389,7 +4646,7 @@ private static List<ItemOptionSO> RollUnique(List<ItemOptionSO> pool, int count)
                 _plannedIntents.Add(new EnemyIntent
                 {
                     type = it.type,
-                    category = ComputeIntentCategory(it.damage, it.isAoe, it.stunsTarget, it.appliesBleed, it.appliesCorrosion),
+                    category = ComputeIntentCategory(it.damage, it.isAoe, it.stunsTarget, it.appliesBleed, it.appliesCorrosion, it.isSummon),
                     enemy = em,
                     targetPartyIndex = it.targetPartyIndex,
                     attackIndex = it.attackIndex,
@@ -4769,11 +5026,7 @@ if (logPassiveBridge)
         }
     }
 }
-
-
 ////////////////////////////////////////////////////////////
 
-
-////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////

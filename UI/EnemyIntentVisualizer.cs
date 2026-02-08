@@ -41,6 +41,7 @@ public class EnemyIntentVisualizer : MonoBehaviour
     [Header("Legacy Icons (fallback if IntentIconSet is not assigned)")]
     [SerializeField] private Sprite attackIcon;
     [SerializeField] private Sprite aoeAttackIcon;
+    [SerializeField] private Sprite summonIcon;
     [SerializeField] private Vector2 intentIconSize = new Vector2(56f, 56f);
     [SerializeField] private Vector2 intentIconScreenOffset = new Vector2(0f, 90f);
     [SerializeField] private Sprite targetDotSprite;
@@ -303,6 +304,7 @@ public class EnemyIntentVisualizer : MonoBehaviour
 
     private Sprite GetLegacyIconForIntentType(BattleManager.IntentType type)
     {
+        if (type == BattleManager.IntentType.Summon) return summonIcon != null ? summonIcon : attackIcon;
         return type == BattleManager.IntentType.AoEAttack ? aoeAttackIcon : attackIcon;
     }
 

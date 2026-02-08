@@ -13,6 +13,7 @@ public class IntentIconSetSO : ScriptableObject
     public Sprite aoe;
     public Sprite statusAndAoe;
     public Sprite selfBuff;
+    public Sprite summon;
 
     public Sprite Get(IntentCategory category)
     {
@@ -32,6 +33,9 @@ public class IntentIconSetSO : ScriptableObject
 
             case IntentCategory.SelfBuff:
                 return selfBuff;
+
+            case IntentCategory.Summon:
+                return summon != null ? summon : selfBuff;
 
             case IntentCategory.Normal:
             default:

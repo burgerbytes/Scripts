@@ -1,4 +1,3 @@
-// PATH: Assets/Scripts/Encounters/Monster.cs
 // GUID: ea47960c4ce364a4980645e51f542a03
 ////////////////////////////////////////////////////////////
 using System;
@@ -43,12 +42,28 @@ public class Monster : MonoBehaviour
         [Min(1)]
         public int corrosionIconCount = 1;
 
+        [Header("Summon")]
+        [Tooltip("If true, this attack summons one or more monsters instead of dealing damage.")]
+        public bool isSummon = false;
+
+        [Tooltip("The monster prefab to summon when this attack is used.")]
+        public GameObject summonPrefab;
+
+        [Tooltip("How many monsters to summon per use.")]
+        [Min(1)]
+        public int summonCount = 1;
+
+        [Tooltip("Max uses of this summon attack per battle for THIS monster instance. 0 = never, 1 = once, -1 = unlimited.")]
+        public int maxSummonsPerBattle = 1;
+
     }
 
     public event Action<int, int> OnHpChanged;
     public event Action OnStatusChanged;
 
     
+
+    [HideInInspector] public bool isSummonedMonster = false;
     public enum MonsterTag
     {
         Beast,
@@ -208,6 +223,9 @@ public class Monster : MonoBehaviour
 
     private BattleManager _battleManager;
 
+    // Summon tracking (per battle, per attack index)
+    private readonly System.Collections.Generic.Dictionary<int, int> _summonUsesThisBattle = new System.Collections.Generic.Dictionary<int, int>();
+
     private void Awake()
     {
         _battleManager = BattleManager.Instance != null ? BattleManager.Instance : FindFirstObjectByType<BattleManager>();
@@ -215,7 +233,33 @@ public class Monster : MonoBehaviour
         if (_currentHp <= 0) _currentHp = maxHp;
         _currentHp = Mathf.Clamp(_currentHp, 0, maxHp);
         OnHpChanged?.Invoke(_currentHp, maxHp);
+
+        ResetSummonTrackingForBattle();
     }
+
+    // =======================
+    // Summons (per battle)
+    // =======================
+    public void ResetSummonTrackingForBattle()
+    {
+        _summonUsesThisBattle.Clear();
+    }
+
+    public bool CanUseSummonAttack(int attackIndex, int maxSummonsPerBattle)
+    {
+        if (maxSummonsPerBattle == 0) return false;
+        if (maxSummonsPerBattle < 0) return true;
+
+        _summonUsesThisBattle.TryGetValue(attackIndex, out int used);
+        return used < maxSummonsPerBattle;
+    }
+
+    public void RegisterSummonAttackUse(int attackIndex)
+    {
+        _summonUsesThisBattle.TryGetValue(attackIndex, out int used);
+        _summonUsesThisBattle[attackIndex] = used + 1;
+    }
+
 
     // ✅ Click-to-target: if an ability is pending, this click selects the target and resolves damage.
     private void OnMouseDown()
@@ -609,7 +653,7 @@ public class Monster : MonoBehaviour
         SetStasis(0);
     }
 
-public void SetCurrentHp(int hp)
+    public void SetCurrentHp(int hp)
     {
         _currentHp = Mathf.Clamp(hp, 0, maxHp);
         OnHpChanged?.Invoke(_currentHp, maxHp);
@@ -624,3 +668,6 @@ public void SetCurrentHp(int hp)
 
 
 
+
+
+////////////////////////////////////////////////////////////
