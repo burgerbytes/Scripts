@@ -1,5 +1,7 @@
 // GUID: 30f201f35d336bf4d840162cd6fd1fde
 ////////////////////////////////////////////////////////////
+// GUID: 30f201f35d336bf4d840162cd6fd1fde
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -1678,8 +1680,18 @@ private bool TryRunLevel5EvolutionNow()
             {
                 Debug.Log("[BattleManager] Party defeated (enemy phase).", this);
                 SetState(BattleState.BattleEnd);
-yield break;
+                yield break;
             }
+        }
+
+        // Plan next-turn intents so the player sees them during the upcoming PlayerPhase.
+        // This also ensures newly-summoned monsters get an intent immediately.
+        if (_state != BattleState.BattleEnd)
+        {
+            PlanEnemyIntents();
+            Debug.Log($"[EnemyPhase] Planned next-turn intents. count={_plannedIntents.Count}", this);
+            OnEnemyIntentsPlanned?.Invoke(new List<EnemyIntent>(_plannedIntents));
+            NotifyPartyChanged();
         }
 
         _enemyTurnRoutine = null;
