@@ -65,9 +65,8 @@ public class HeroStatsPanelUI : MonoBehaviour
 
     private void HandleReelPhaseChanged(bool inReelPhase)
     {
-        // Status/stats panel should be hidden during reel phase.
-        if (inReelPhase)
-            Hide();
+        // Reel phase and player phase are unified. Keep stats visible.
+        // No-op.
     }
 
     public void SetHero(HeroStats hero)
@@ -147,6 +146,9 @@ public class HeroStatsPanelUI : MonoBehaviour
         }
     }
 }
+
+
+////////////////////////////////////////////////////////////
 
 
 ////////////////////////////////////////////////////////////

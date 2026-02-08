@@ -1,6 +1,3 @@
-// PATH: Assets/Scripts/UI/PartyHUD.cs
-// GUID: 5a8a06222baaa2b4883d4bb71239e8a6
-////////////////////////////////////////////////////////////
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -184,42 +181,8 @@ public class PartyHUD : MonoBehaviour
 
     private void HandleReelPhaseChanged(bool inReelPhase)
     {
-        if (!hideMenusDuringReelPhase) return;
-
-        if (inReelPhase)
-        {
-            // Hide menus while the player is interacting with the reels.
-            if (abilityMenu != null) abilityMenu.Close();
-            if (statsPanel != null) statsPanel.Hide();
-            _menusWereHiddenForReelPhase = true;
-            return;
-        }
-
-        // Reel phase ended -> restore if the player had a hero selected.
-        if (!_menusWereHiddenForReelPhase) return;
-        _menusWereHiddenForReelPhase = false;
-
-        // Only re-open if the user had previously opened these panels.
-        if (_selectedIndex >= 0 && battleManager != null)
-        {
-            var snap = battleManager.GetPartyMemberSnapshot(_selectedIndex);
-            if (!snap.IsDead)
-            {
-                // Stats panel: respect "show after click" behavior.
-                if (statsPanel != null && (!showStatsOnlyAfterPickAllyClick || _hasShownStatsOnce))
-                {
-                    HeroStats hero = battleManager.GetHeroAtPartyIndex(_selectedIndex);
-                    if (hero != null)
-                        statsPanel.ShowForHero(hero);
-                }
-
-                // Ability menu: only re-open if it was visible before.
-                if (abilityMenu != null && _panelVisible)
-                    OpenAbilityMenuForSelectedHero();
-            }
-        }
-
-        RefreshAllSlots();
+        // Reel phase and player phase are unified. Do not auto-hide/restore menus.
+        // No-op.
     }
 
     private void OpenAbilityMenuForSelectedHero()
@@ -367,41 +330,8 @@ void OnSlotClicked(int index)
             return;
         }
 
-        // During reel phase, clicking a portrait should ONLY open Reelcraft.
-        if (reelSpinSystem != null && reelSpinSystem.InReelPhase)
-        {
-            EnsureReelcraftPanelRef();
-
-            battleManager.SetActivePartyMember(index);
-            _selectedIndex = index;
-            _panelVisible = false;
-
-            if (abilityMenu != null) abilityMenu.Close();
-            if (statsPanel != null) statsPanel.Hide();
-
-            if (reelcraftPanel != null)
-            {
-                reelcraftPanel.ShowForHero(index);
-                ForceShowReelcraftPanelNow();
-            }
-            else
-            {
-                Debug.LogWarning("[PartyHUD] Reel phase click, but ReelcraftPanelUI was not found (even including inactive).");
-            }
-
-            // Highlight selection, but do not show the normal action panel.
-            for (int i = 0; i < slots.Length; i++)
-            {
-                if (slots[i] == null) continue;
-                slots[i].SetSelected(i == _selectedIndex);
-                slots[i].SetActionPanelVisible(false);
-            }
-
-            RefreshAllSlots();
-            return;
-        }
-
-        // Not in reel phase -> ensure Reelcraft panel is hidden.
+        // Reels are always active now; clicking a portrait should behave normally.
+        // Keep Reelcraft panel hidden unless explicitly opened.
         if (reelcraftPanel != null) reelcraftPanel.Hide();
 
         battleManager.SetActivePartyMember(index);
@@ -489,6 +419,9 @@ void OnSlotClicked(int index)
         return null;
     }
 }
+
+
+////////////////////////////////////////////////////////////
 
 
 ////////////////////////////////////////////////////////////

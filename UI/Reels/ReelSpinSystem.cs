@@ -1,6 +1,3 @@
-// PATH: Assets/Scripts/UI/Reels/ReelSpinSystem.cs
-// GUID: 1b9947b6d65d049459a446a098bd7cb3
-////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -50,7 +47,12 @@ public class ReelSpinSystem : MonoBehaviour
     [Tooltip("Cashout/Stop button (same as your Cashout button).")]
     [SerializeField] private Button stopSpinningButton;
 
-    [Header("Cashout Behavior")]
+    public enum PayoutMode { CashoutOnly, AutoPayoutOnSpin }
+
+    [Header("Payout Mode")]
+    [Tooltip("CashoutOnly: resources are only granted when the player presses Cashout. AutoPayoutOnSpin: each time a spin (or reelcraft edit) updates the landed symbols, the delta is immediately applied to the ResourcePool.")]
+    [SerializeField] private PayoutMode payoutMode = PayoutMode.AutoPayoutOnSpin;
+
     [Tooltip("If true, cashing out will NOT disable/hide the 3D reel objects. This keeps the reels available for future mid-battle spins.")]
     [SerializeField] private bool keepReelsEnabledAfterCashout = true;
 
@@ -579,11 +581,20 @@ for (int qi = 0; qi < quadCount; qi++)
     private bool spinning;
     private int spinsRemaining;
 
-    // Pending payout (deferred until stop/collect or out of spins)
+    // Pending payout (current computed totals for the currently-landed symbols)
+    // In CashoutOnly mode, these are collected on Cashout.
+    // In AutoPayoutOnSpin mode, we apply the delta to ResourcePool immediately whenever these totals change.
     private int pendingA;
     private int pendingD;
     private int pendingM;
     private int pendingW;
+
+    // Auto-payout tracking (combat only)
+    private bool _autoPayoutAppliedForCurrentLanded = false;
+    private int _autoPaidA;
+    private int _autoPaidD;
+    private int _autoPaidM;
+    private int _autoPaidW;
 
     // Reelcraft integration: keep track of the last landed symbols so we can nudge/transform without re-spinning.
     private List<ReelSymbolSO> _currentLandedSymbols;
@@ -630,8 +641,10 @@ for (int qi = 0; qi < quadCount; qi++)
 
         BuildSymbolMapCache();
 
+        // Cashout mechanic removed: payouts happen on every spin and abilities are usable at all times.
+        // If the Cashout button still exists in a prefab/scene, disable it to avoid accidental gating.
         if (stopSpinningButton != null)
-            stopSpinningButton.onClick.AddListener(StopSpinningAndCollect);
+            stopSpinningButton.gameObject.SetActive(false);
 
         // Optional: wire Spin button automatically.
         if (spinButton == null)
@@ -674,8 +687,7 @@ for (int qi = 0; qi < quadCount; qi++)
 
     private void OnDestroy()
     {
-        if (stopSpinningButton != null)
-            stopSpinningButton.onClick.RemoveListener(StopSpinningAndCollect);
+        // Cashout mechanic removed (button disabled in Awake).
 
         if (spinButton != null)
             spinButton.onClick.RemoveListener(TrySpin);
@@ -683,28 +695,72 @@ for (int qi = 0; qi < quadCount; qi++)
 
     public void BeginTurn()
     {
-        spinsRemaining = spinsPerTurn;
-        OnSpinsRemainingChanged?.Invoke(spinsRemaining);
-
-        // Cashout must always be available during reel phase.
+        // Spins are per-battle now. BattleManager calls BeginBattle() once at encounter start.
+        // Do NOT reset spinsRemaining here.
+        // Cashout mechanic removed.
         if (stopSpinningButton != null)
-            stopSpinningButton.interactable = true;
+            stopSpinningButton.interactable = false;
 
-        // Spin is enabled at the start of each turn.
+        // Spin is enabled at the start of each turn if spins remain.
         if (spinButton != null)
-            spinButton.interactable = true;
+            spinButton.interactable = (spinsRemaining > 0);
 
         // New reel phase -> clear any previous landed state.
         _currentLandedSymbols = null;
         _currentLandedMultipliers = null;
+        pendingA = pendingD = pendingM = pendingW = 0;
+        ResetAutoPayoutTracking();
         OnCurrentLandedChanged?.Invoke(default);
-
+        OnPendingPayoutChanged?.Invoke(pendingA, pendingD, pendingM, pendingW);
         SetReelPhase(true);
 
         // New turn = open shutters (reveal reels) and re-enable 3D reels.
         Set3DReelsActive(true);
         if (shutterController != null)
             shutterController.OpenShutters();
+    }
+
+
+    /// <summary>
+    /// Called by BattleManager at the start of each battle/encounter.
+    /// Resets spinsRemaining to the inspector value (spinsPerTurn). During the battle,
+    /// mechanics can modify spinsRemaining via ModifySpinsRemaining().
+    /// </summary>
+    public void BeginBattle()
+    {
+        spinsRemaining = Mathf.Max(0, spinsPerTurn);
+        OnSpinsRemainingChanged?.Invoke(spinsRemaining);
+
+        // Clear any previous landed state / pending payout.
+        _currentLandedSymbols = null;
+        _currentLandedMultipliers = null;
+        pendingA = pendingD = pendingM = pendingW = 0;
+        ResetAutoPayoutTracking();
+        OnCurrentLandedChanged?.Invoke(default);
+        OnPendingPayoutChanged?.Invoke(pendingA, pendingD, pendingM, pendingW);
+
+        // Battle start = reel phase begins.
+        SetReelPhase(true);
+
+        // Reveal reels.
+        Set3DReelsActive(true);
+        if (shutterController != null)
+            shutterController.OpenShutters();
+    }
+
+    /// <summary>
+    /// Modify remaining spins mid-battle (bonuses, penalties, items, etc.). Pass negative to remove spins.
+    /// </summary>
+    public void ModifySpinsRemaining(int delta)
+    {
+        // Reward mode uses gold-limited spins; don't interfere.
+        if (_rewardModeActive) return;
+
+        spinsRemaining = Mathf.Max(0, spinsRemaining + delta);
+        OnSpinsRemainingChanged?.Invoke(spinsRemaining);
+
+        if (spinButton != null)
+            spinButton.interactable = (spinsRemaining > 0);
     }
 
     private void SetReelPhase(bool value)
@@ -1083,6 +1139,7 @@ for (int qi = 0; qi < quadCount; qi++)
         }
 
         OnPendingPayoutChanged?.Invoke(pendingA, pendingD, pendingM, pendingW);
+        ApplyAutoPayoutDeltaIfEnabled();
     }
 
     /// <summary>
@@ -1185,6 +1242,7 @@ for (int qi = 0; qi < quadCount; qi++)
         }
 
         OnPendingPayoutChanged?.Invoke(pendingA, pendingD, pendingM, pendingW);
+        ApplyAutoPayoutDeltaIfEnabled();
         return true;
     }
 
@@ -1216,6 +1274,7 @@ for (int qi = 0; qi < quadCount; qi++)
         }
 
         OnPendingPayoutChanged?.Invoke(pendingA, pendingD, pendingM, pendingW);
+        ApplyAutoPayoutDeltaIfEnabled();
         return true;
     }
 
@@ -1422,6 +1481,7 @@ for (int qi = 0; qi < quadCount; qi++)
                 Debug.Log($"[ReelSpinSystem][PassiveBridge] OnCurrentLandedChanged invoke: symbols={(info.symbols != null ? info.symbols.Count : 0)} A={info.attackCount} D={info.defendCount} M={info.magicCount} W={info.wildCount}", this);
             OnCurrentLandedChanged?.Invoke(info);
 
+            ResetAutoPayoutTracking();
             SetPendingFromSymbols(landed, multipliers);
         }
 
@@ -1462,6 +1522,13 @@ for (int qi = 0; qi < quadCount; qi++)
         else
         {
             if (spinsRemaining <= 0) return;
+
+            // ✅ Consume a spin immediately when the spin begins.
+            spinsRemaining = Mathf.Max(0, spinsRemaining - 1);
+            OnSpinsRemainingChanged?.Invoke(spinsRemaining);
+
+            if (spinButton != null)
+                spinButton.interactable = (spinsRemaining > 0);
         }
 
         spinning = true;
@@ -1684,21 +1751,8 @@ ReelSymbolSO wild = GetDefaultWildSymbol();
 
     public void StopSpinningAndCollect()
     {
-        // Track cashout presses per battle (for Substitution gating + debugging).
-        bool wasPressedBefore = _cashoutPressedThisBattle;
-        _cashoutPressedThisBattle = true;
-        _cashoutPressCountThisBattle++;
-        bool firstCashoutThisBattle = !wasPressedBefore;
-        Debug.Log($"[ReelSpinSystem][Cashout] Press #{_cashoutPressCountThisBattle} this battle. firstCashout={firstCashoutThisBattle} InReelPhase={InReelPhase} rewardMode={_rewardModeActive} spinning={spinning}", this);
-
-        // After cashout, disable both Spin + Cashout.
-        if (stopSpinningButton != null)
-            stopSpinningButton.interactable = false;
-
-        if (spinButton != null)
-            spinButton.interactable = false;
-
-        StartCoroutine(StopSpinningAndCollectRoutine(firstCashoutThisBattle));
+        // Cashout mechanic removed.
+        Debug.LogWarning("[ReelSpinSystem] StopSpinningAndCollect called, but Cashout has been removed from gameplay. Ignoring.", this);
     }
 
     private IEnumerator StopSpinningAndCollectRoutine(bool firstCashoutThisBattle)
@@ -1753,8 +1807,59 @@ ReelSymbolSO wild = GetDefaultWildSymbol();
         }
     }
 
+
+    private void ResetAutoPayoutTracking()
+    {
+        _autoPayoutAppliedForCurrentLanded = false;
+        _autoPaidA = _autoPaidD = _autoPaidM = _autoPaidW = 0;
+    }
+
+    private void ApplyAutoPayoutDeltaIfEnabled()
+    {
+        if (payoutMode != PayoutMode.AutoPayoutOnSpin) return;
+        if (_rewardModeActive) return;
+        if (resourcePool == null) return;
+
+        if (!_autoPayoutAppliedForCurrentLanded)
+        {
+            if (pendingA != 0 || pendingD != 0 || pendingM != 0 || pendingW != 0)
+                resourcePool.Add(pendingA, pendingD, pendingM, pendingW);
+
+            _autoPaidA = pendingA;
+            _autoPaidD = pendingD;
+            _autoPaidM = pendingM;
+            _autoPaidW = pendingW;
+            _autoPayoutAppliedForCurrentLanded = true;
+            return;
+        }
+
+        int da = pendingA - _autoPaidA;
+        int dd = pendingD - _autoPaidD;
+        int dm = pendingM - _autoPaidM;
+        int dw = pendingW - _autoPaidW;
+
+        if (da != 0 || dd != 0 || dm != 0 || dw != 0)
+            resourcePool.Add(da, dd, dm, dw);
+
+        _autoPaidA = pendingA;
+        _autoPaidD = pendingD;
+        _autoPaidM = pendingM;
+        _autoPaidW = pendingW;
+    }
+
     private void CollectPendingPayout()
     {
+        if (payoutMode == PayoutMode.AutoPayoutOnSpin)
+        {
+            // In auto mode, resources are already applied as the pending totals change.
+            pendingA = pendingD = pendingM = pendingW = 0;
+            _currentLandedSymbols = null;
+            _currentLandedMultipliers = null;
+            ResetAutoPayoutTracking();
+            OnPendingPayoutChanged?.Invoke(pendingA, pendingD, pendingM, pendingW);
+            return;
+        }
+
         Debug.Log($"[ReelSpinSystem] CollectPendingPayout CALLED. pendingA={pendingA}, pendingD={pendingD}, pendingM={pendingM}, pendingW={pendingW}, spinsRemaining={spinsRemaining}");
         if (pendingA == 0 && pendingD == 0 && pendingM == 0 && pendingW == 0)
             return;
@@ -1768,6 +1873,7 @@ ReelSymbolSO wild = GetDefaultWildSymbol();
         _currentLandedSymbols = null;
         _currentLandedMultipliers = null;
         OnPendingPayoutChanged?.Invoke(pendingA, pendingD, pendingM, pendingW);
+        ApplyAutoPayoutDeltaIfEnabled();
     }
 
     public void ClearAllTemporaryDoubles()
@@ -1819,10 +1925,5 @@ ReelSymbolSO wild = GetDefaultWildSymbol();
         _sleepRoutine = null;
     }
 }
-////////////////////////////////////////////////////////////
-
-////////////////////////////////////////////////////////////
-
-
 
 ////////////////////////////////////////////////////////////

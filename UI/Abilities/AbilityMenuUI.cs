@@ -68,9 +68,8 @@ private void OnDisable()
 
 private void HandleReelPhaseChanged(bool inReelPhase)
 {
-    // Ability menu should be hidden during reel phase.
-    if (inReelPhase)
-        Close();
+    // Reel phase and player phase are unified. Abilities remain usable while reels are active.
+    // No-op.
 }
 
 private void Update()
@@ -300,6 +299,9 @@ private void Update()
 }
 
 
+
+
+////////////////////////////////////////////////////////////
 
 
 ////////////////////////////////////////////////////////////

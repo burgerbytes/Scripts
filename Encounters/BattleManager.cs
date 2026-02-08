@@ -1,6 +1,3 @@
-// PATH: Assets/Scripts/Encounters/BattleManager.cs
-// GUID: 30f201f35d336bf4d840162cd6fd1fde
-////////////////////////////////////////////////////////////
 // GUID: 30f201f35d336bf4d840162cd6fd1fde
 ////////////////////////////////////////////////////////////
 using System;
@@ -495,7 +492,13 @@ public class BattleManager : MonoBehaviour
 
         if (confirmText != null)
             confirmText.gameObject.SetActive(false); // disabled by default
-        if (stopSpinningButton != null) stopSpinningButton.onClick.AddListener(OnStopSpinningPressed);
+        // Cashout mechanic removed (payouts happen on every spin, and abilities are always usable).
+        // If the Cashout button still exists in the scene, disable it to prevent accidental gating.
+        if (stopSpinningButton != null)
+        {
+            stopSpinningButton.onClick.RemoveListener(OnStopSpinningPressed);
+            stopSpinningButton.gameObject.SetActive(false);
+        }
     }
 
     private void Start()
@@ -1757,6 +1760,9 @@ targetStats.ApplyShadowFadeConcealIfPending();
         {
             reelSpinSystem.ResetBattleSubstitutionState();
             reelSpinSystem.ResetBattleCorrosionState();
+
+            // Spins are per-battle: initialize spinsRemaining from inspector value at encounter start.
+            reelSpinSystem.BeginBattle();
         }
 
         // Ensure any per-battle-only statuses (e.g., Conceal/Hidden) are cleared before a new encounter begins.
@@ -4767,5 +4773,7 @@ if (logPassiveBridge)
 
 ////////////////////////////////////////////////////////////
 
+
+////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////
