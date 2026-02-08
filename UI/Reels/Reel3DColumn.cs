@@ -1,3 +1,4 @@
+// PATH: Assets/Scripts/UI/Reels/Reel3DColumn.cs
 // GUID: bf5e02a1e0e38924facba44bb1cf2fc2
 ////////////////////////////////////////////////////////////
 using System;
@@ -137,7 +138,47 @@ public class Reel3DColumn : MonoBehaviour
 
     private float _globalWhiteGlow01 = 0f;
 
+    [Header("Corrosion Tint")]
+    [SerializeField] private Color corrosionTintColor = new Color(0.6f, 1f, 0.6f, 1f);
+    [Range(0f, 1f)]
+    [SerializeField] private float corrosionTintStrength = 0.55f;
+
+    private HashSet<int> _corrodedQuadIndices;
+
+
     /// <summary>
+    /// Marks specific quad indices as corroded (green-tinted). Pass null/empty to clear.
+    /// </summary>
+    public void SetCorrodedQuadIndices(ICollection<int> quadIndices)
+    {
+        EnsureBuilt();
+
+        if (quadIndices == null || quadIndices.Count == 0)
+        {
+            _corrodedQuadIndices = null;
+        }
+        else
+        {
+            if (_corrodedQuadIndices == null) _corrodedQuadIndices = new HashSet<int>();
+            else _corrodedQuadIndices.Clear();
+
+            foreach (var i in quadIndices)
+                _corrodedQuadIndices.Add(i);
+        }
+
+        // Re-apply tints (corrosion + any active glow)
+        for (int i = 0; i < _quads.Count; i++)
+        {
+            ApplyCombinedTintToRenderer(_quads[i].frontMr, i);
+            if (_quads[i].back != null)
+                ApplyCombinedTintToRenderer(_quads[i].back.GetComponent<MeshRenderer>(), i);
+        }
+
+        foreach (var kv in _shadowRenderers)
+            ApplyCombinedTintToRenderer(kv.Value, kv.Key, isShadow: true);
+    }
+
+/// <summary>
     /// Sets a simple white "glow" by tinting all reel icon quads toward white.
     /// Shader-agnostic: uses MaterialPropertyBlock and writes both _Color/_BaseColor.
     /// 0 = no tint, 1 = fully white.
@@ -149,16 +190,16 @@ public class Reel3DColumn : MonoBehaviour
 
         for (int i = 0; i < _quads.Count; i++)
         {
-            ApplyGlobalGlowToRenderer(_quads[i].frontMr);
+            ApplyCombinedTintToRenderer(_quads[i].frontMr, i);
             if (_quads[i].back != null)
-                ApplyGlobalGlowToRenderer(_quads[i].back.GetComponent<MeshRenderer>());
+                ApplyCombinedTintToRenderer(_quads[i].back.GetComponent<MeshRenderer>(), i);
         }
 
         foreach (var kv in _shadowRenderers)
-            ApplyGlobalGlowToRenderer(kv.Value);
+            ApplyCombinedTintToRenderer(kv.Value, kv.Key, isShadow: true);
     }
 
-    private void ApplyGlobalGlowToRenderer(MeshRenderer mr)
+    private void ApplyCombinedTintToRenderer(MeshRenderer mr, int quadIndex, bool isShadow = false)
     {
         if (mr == null) return;
 
@@ -171,7 +212,14 @@ public class Reel3DColumn : MonoBehaviour
                 baseCol = mr.sharedMaterial.color;
         }
 
-        Color outCol = Color.Lerp(baseCol, Color.white, _globalWhiteGlow01);
+        Color outCol = baseCol;
+
+        // Corrosion tint (only for icon quads, not shadows).
+        if (!isShadow && _corrodedQuadIndices != null && _corrodedQuadIndices.Contains(quadIndex))
+            outCol = Color.Lerp(outCol, corrosionTintColor, Mathf.Clamp01(corrosionTintStrength));
+
+        // White glow is applied last so it remains readable.
+        outCol = Color.Lerp(outCol, Color.white, _globalWhiteGlow01);
 
         var mpb = new MaterialPropertyBlock();
         mr.GetPropertyBlock(mpb);
@@ -179,7 +227,6 @@ public class Reel3DColumn : MonoBehaviour
         mpb.SetColor("_BaseColor", outCol);
         mr.SetPropertyBlock(mpb);
     }
-
 
     /// <summary>
     /// Nudges the reel by an integer number of steps while stopped.
@@ -886,9 +933,11 @@ public class Reel3DColumn : MonoBehaviour
         }
         else
         {
-            mpb.SetColor("_Color", Color.white);
-            mpb.SetColor("_BaseColor", Color.white);
+            // Preserve corrosion + global glow tint when clearing per-quad glow.
             mpb.SetColor("_EmissionColor", Color.black);
+            mr.SetPropertyBlock(mpb);
+            ApplyCombinedTintToRenderer(mr, quadIndex);
+            return;
         }
 
         mr.SetPropertyBlock(mpb);
@@ -985,33 +1034,33 @@ public class Reel3DColumn : MonoBehaviour
     }
 
     
-private float GetPrimaryAxisAngle()
-{
-    // We track the unwrapped angle ourselves (in degrees) to avoid Euler wrap-around
-    // causing apparent direction flips or aliasing.
-    return _primaryAxisAngleUnwrapped;
-}
-
-private void SetPrimaryAxisAngle(float ang)
-{
-    EnsureBuilt();
-
-    if (!_baseRotationInitialized)
+    private float GetPrimaryAxisAngle()
     {
-        _baseLocalRotation = transform.localRotation;
-        _baseRotationInitialized = true;
+        // We track the unwrapped angle ourselves (in degrees) to avoid Euler wrap-around
+        // causing apparent direction flips or aliasing.
+        return _primaryAxisAngleUnwrapped;
     }
 
-    _primaryAxisAngleUnwrapped = ang;
+    private void SetPrimaryAxisAngle(float ang)
+    {
+        EnsureBuilt();
 
-    Vector3 a = localSpinAxis;
-    if (a.sqrMagnitude < 0.0001f) a = Vector3.right;
-    a.Normalize();
+        if (!_baseRotationInitialized)
+        {
+            _baseLocalRotation = transform.localRotation;
+            _baseRotationInitialized = true;
+        }
 
-    // Apply rotation around the configured local spin axis without Euler angle wrapping.
-    transform.localRotation = _baseLocalRotation * Quaternion.AngleAxis(ang, a);
-}
-private static int Mod(int x, int m)
+        _primaryAxisAngleUnwrapped = ang;
+
+        Vector3 a = localSpinAxis;
+        if (a.sqrMagnitude < 0.0001f) a = Vector3.right;
+        a.Normalize();
+
+        // Apply rotation around the configured local spin axis without Euler angle wrapping.
+        transform.localRotation = _baseLocalRotation * Quaternion.AngleAxis(ang, a);
+    }
+    private static int Mod(int x, int m)
     {
         if (m <= 0) return 0;
         int r = x % m;
@@ -1068,15 +1117,31 @@ private static int Mod(int x, int m)
             return;
         }
 
+        // Update both the authoritative mapping (fixed) and the runtime visible mapping (current).
+        _fixedSymbolOnQuad[quadIndex] = newSymbol;
+
+        if (quadIndex >= 0 && quadIndex < _currentSymbolOnQuad.Count)
+            _currentSymbolOnQuad[quadIndex] = newSymbol;
+
+        // Update visible quad(s) + any doubled/shadow visuals.
+        ApplySymbolToQuad(quadIndex, newSymbol);
+
+        // Re-apply combined tint so corrosion/glow remains correct after swaps.
+        ApplyCombinedTintToRenderer(_quads[quadIndex].frontMr, quadIndex);
+        if (_quads[quadIndex].back != null)
+            ApplyCombinedTintToRenderer(_quads[quadIndex].back.GetComponent<MeshRenderer>(), quadIndex);
+        if (_shadowRenderers.TryGetValue(quadIndex, out var smr) && smr != null)
+            ApplyCombinedTintToRenderer(smr, quadIndex, isShadow: true);
+
         _fixedSymbolOnQuad[quadIndex] = newSymbol;
 
         // Update visible quad(s)
         var qp = _quads[quadIndex];
         if (qp.front != null) qp.front.SetSymbol(newSymbol);
         if (qp.back != null) qp.back.SetSymbol(newSymbol);
+        
     }
 }
 
 
 ////////////////////////////////////////////////////////////
-

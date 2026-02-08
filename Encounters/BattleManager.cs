@@ -1,3 +1,6 @@
+// PATH: Assets/Scripts/Encounters/BattleManager.cs
+// GUID: 30f201f35d336bf4d840162cd6fd1fde
+////////////////////////////////////////////////////////////
 // GUID: 30f201f35d336bf4d840162cd6fd1fde
 ////////////////////////////////////////////////////////////
 using System;
@@ -54,11 +57,15 @@ public class BattleManager : MonoBehaviour
 
         public bool appliesBleed;
         public int bleedStacks;
+    
+        
+        public bool appliesCorrosion;
+        public int corrosionIconCount;
     }
 
-    private static IntentCategory ComputeIntentCategory(int damage, bool isAoe, bool stunsTarget, bool appliesBleed)
+    private static IntentCategory ComputeIntentCategory(int damage, bool isAoe, bool stunsTarget, bool appliesBleed, bool appliesCorrosion)
     {
-        bool hasStatus = stunsTarget || appliesBleed;
+        bool hasStatus = stunsTarget || appliesBleed || appliesCorrosion;
 
         if (isAoe)
         {
@@ -122,6 +129,8 @@ public class BattleManager : MonoBehaviour
 
         public bool appliesBleed;
         public int bleedStacks;
+        public bool appliesCorrosion;
+        public int corrosionIconCount;
     }
 
     [Serializable]
@@ -441,9 +450,11 @@ public class BattleManager : MonoBehaviour
 
         if (reelSpinSystem == null) reelSpinSystem = FindInSceneIncludingInactive<ReelSpinSystem>();
         if (reelSpinSystem != null)
+        {
             reelSpinSystem.OnCurrentLandedChanged += HandleCurrentLandedChanged;
-        if (reelSpinSystem != null)
             reelSpinSystem.OnSpinLanded += HandleSpinLandedBattle;
+            reelSpinSystem.OnCorrosionChanged += HandleCorrosionChanged;
+        }
 
         if (undoButton == null)
         {
@@ -1546,7 +1557,14 @@ private bool TryRunLevel5EvolutionNow()
 
                         if (intent.appliesBleed && intent.bleedStacks > 0)
                             ApplyBleedStacksToHero(hs, intent.bleedStacks);
-                        if (hs.IsHidden) hs.SetHidden(false);
+
+                        if (intent.appliesCorrosion && reelSpinSystem != null)
+                        {
+                            reelSpinSystem.ApplyCorrosionToReel(pi, Mathf.Max(1, intent.corrosionIconCount));
+                        }
+
+                        ApplyPartyHiddenVisuals();
+if (hs.IsHidden) hs.SetHidden(false);
                         hs.ApplyShadowFadeConcealIfPending();
 
                         if (pm.avatarGO != null)
@@ -1585,7 +1603,12 @@ private bool TryRunLevel5EvolutionNow()
                 if (intent.appliesBleed && intent.bleedStacks > 0)
                     ApplyBleedStacksToHero(targetStats, intent.bleedStacks);
 
-                targetStats.ApplyShadowFadeConcealIfPending();
+                if (intent.appliesCorrosion && reelSpinSystem != null)
+                {
+                    reelSpinSystem.ApplyCorrosionToReel(targetIdx, Mathf.Max(1, intent.corrosionIconCount));
+                    ApplyPartyHiddenVisuals();
+                }
+targetStats.ApplyShadowFadeConcealIfPending();
                 if (logFlow) Debug.Log($"[Battle][EnemyAtk] Damage result. dealtToHp={dealtSingle} targetShieldAfter={targetStats.Shield}", this);
 
                 if (targetGO != null)
@@ -1730,7 +1753,11 @@ private bool TryRunLevel5EvolutionNow()
         SetState(BattleState.BattleStart);
 
         ResetPartyRoundFlags();
-        if (reelSpinSystem != null) reelSpinSystem.ResetBattleSubstitutionState();
+        if (reelSpinSystem != null)
+        {
+            reelSpinSystem.ResetBattleSubstitutionState();
+            reelSpinSystem.ResetBattleCorrosionState();
+        }
 
         // Ensure any per-battle-only statuses (e.g., Conceal/Hidden) are cleared before a new encounter begins.
         if (_party != null)
@@ -2539,12 +2566,14 @@ private bool TryRunLevel5EvolutionNow()
                 out bool stunsTarget,
                 out int stunPlayerPhases,
                 out bool appliesBleed,
-                out int bleedStacks);
+                out int bleedStacks,
+                out bool appliesCorrosion,
+                out int corrosionIconCount);
 
             _plannedIntents.Add(new EnemyIntent
             {
                 type = isAoe ? IntentType.AoEAttack : IntentType.Attack,
-                category = ComputeIntentCategory(damage, isAoe, stunsTarget, appliesBleed),
+                category = ComputeIntentCategory(damage, isAoe, stunsTarget, appliesBleed, appliesCorrosion),
                 enemy = m,
                 targetPartyIndex = targetIdx,
 
@@ -2556,7 +2585,10 @@ private bool TryRunLevel5EvolutionNow()
                 stunPlayerPhases = stunPlayerPhases,
 
                 appliesBleed = appliesBleed,
-                bleedStacks = bleedStacks
+                bleedStacks = bleedStacks,
+
+                appliesCorrosion = appliesCorrosion,
+                corrosionIconCount = corrosionIconCount
             });
         }
 
@@ -2571,7 +2603,9 @@ private bool TryRunLevel5EvolutionNow()
         out bool stunsTarget,
         out int stunPlayerPhases,
         out bool appliesBleed,
-        out int bleedStacks)
+        out int bleedStacks,
+        out bool appliesCorrosion,
+        out int corrosionIconCount)
     {
         attackIndex = -1;
         damage = 0;
@@ -2580,6 +2614,8 @@ private bool TryRunLevel5EvolutionNow()
         stunPlayerPhases = 1;
         appliesBleed = false;
         bleedStacks = 0;
+        appliesCorrosion = false;
+        corrosionIconCount = 1;
 
         if (m == null) return;
 
@@ -2632,6 +2668,13 @@ private bool TryRunLevel5EvolutionNow()
 
         bleedStacks = Mathf.Max(0, ReadInt(atk, atkType, "bleedStacks", 0));
         if (bleedStacks == 0) bleedStacks = Mathf.Max(0, ReadInt(atk, atkType, "bleedAmount", 0));
+
+        appliesCorrosion = ReadBool(atk, atkType, "appliesCorrosion", false);
+        if (!appliesCorrosion) appliesCorrosion = ReadBool(atk, atkType, "corrodesReel", false);
+
+        corrosionIconCount = Mathf.Max(1, ReadInt(atk, atkType, "corrosionIconCount", 1));
+        if (corrosionIconCount == 1) corrosionIconCount = Mathf.Max(1, ReadInt(atk, atkType, "corrosionCount", 1));
+        if (corrosionIconCount == 1) corrosionIconCount = Mathf.Max(1, ReadInt(atk, atkType, "corrodeCount", 1));
     }
 
     private static int ReadInt(object obj, Type t, string name, int fallback)
@@ -3395,6 +3438,11 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
         if (s == BattleState.BattleEnd)
             Debug.Log($"[Battle] Battle ended. state={s} time={Time.time:0.00}", this);
 
+        // Undo any per-battle reel symbol mutations (e.g., corrosion converting landed tokens to NULL).
+        if (s == BattleState.BattleEnd && reelSpinSystem != null)
+            reelSpinSystem.RestoreReelsAfterBattle();
+
+
         OnBattleStateChanged?.Invoke(_state);
     }
 
@@ -3416,6 +3464,7 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
     [SerializeField] private Sprite statusIconFocusRuneSprite;
     [SerializeField] private Sprite statusIconIgnitionSprite;
     [SerializeField] private Sprite statusIconStasisSprite;
+    [SerializeField] private Sprite statusIconCorrosionSprite;
 
     [Header("Status Icon Layout")]
     [SerializeField] private Vector3 statusIconLocalOffset = new Vector3(0f, 1.2f, 0f);
@@ -3509,7 +3558,8 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
                 var rootSr = iconTf.GetComponent<SpriteRenderer>();
                 if (rootSr != null) rootSr.enabled = false;
 
-                RefreshHeroStatusIcons(iconTf, hs);
+                int corrosionCount = (reelSpinSystem != null) ? reelSpinSystem.GetCorrosionCountForReel(i) : 0;
+                RefreshHeroStatusIcons(iconTf, hs, corrosionCount);
                 LayoutHeroStatusIcons(iconTf);
             }
         }
@@ -3521,7 +3571,7 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
 /// Ensures hero status icons are shown simultaneously by maintaining one child icon GameObject per status.
 /// The root is expected to be the "_StatusIcon" transform (anchored under the hero CenterPoint).
 /// </summary>
-private void RefreshHeroStatusIcons(Transform statusIconRoot, HeroStats hs)
+private void RefreshHeroStatusIcons(Transform statusIconRoot, HeroStats hs, int corrosionCount)
 {
     if (statusIconRoot == null) return;
 
@@ -3531,6 +3581,9 @@ private void RefreshHeroStatusIcons(Transform statusIconRoot, HeroStats hs)
     bool bleeding = hs != null && hs.IsBleeding;
     int bleedStacks = (hs != null) ? hs.BleedStacks : 0;
 
+    bool corrosion = corrosionCount > 0;
+    int corrosionStacks = Mathf.Max(0, corrosionCount);
+
     // Disable any legacy root-level "Stacks" label; stacks now live under the Bleeding icon.
     var legacyStacks = statusIconRoot.Find("Stacks");
     if (legacyStacks != null)
@@ -3539,6 +3592,10 @@ private void RefreshHeroStatusIcons(Transform statusIconRoot, HeroStats hs)
     EnsureHeroStatusIcon(statusIconRoot, "Hidden", statusIconHiddenSprite, hidden);
     EnsureHeroStatusIcon(statusIconRoot, "Stunned", statusIconStunnedSprite, stunned);
     EnsureHeroStatusIcon(statusIconRoot, "TripleBlade", statusIconTripleBladeEmpoweredSprite, triple);
+
+    var corrosionIcon = EnsureHeroStatusIcon(statusIconRoot, "Corrosion", statusIconCorrosionSprite, corrosion);
+    if (corrosionIcon != null)
+        EnsureHeroStatusStacks(corrosionIcon, corrosion ? corrosionStacks : 0);
 
     var bleedIcon = EnsureHeroStatusIcon(statusIconRoot, "Bleeding", statusIconBleedingSprite, bleeding);
     if (bleedIcon != null)
@@ -4244,8 +4301,10 @@ private static List<ItemOptionSO> RollUnique(List<ItemOptionSO> pool, int count)
                 stunsTarget = it.stunsTarget,
                 stunPlayerPhases = it.stunPlayerPhases,
                 appliesBleed = it.appliesBleed,
-                bleedStacks = it.bleedStacks
-            });
+                bleedStacks = it.bleedStacks,
+                appliesCorrosion = it.appliesCorrosion,
+                    corrosionIconCount = Mathf.Max(1, it.corrosionIconCount)
+                });
         }
 
         _saveStates.Add(s);
@@ -4324,7 +4383,7 @@ private static List<ItemOptionSO> RollUnique(List<ItemOptionSO> pool, int count)
                 _plannedIntents.Add(new EnemyIntent
                 {
                     type = it.type,
-                    category = ComputeIntentCategory(it.damage, it.isAoe, it.stunsTarget, it.appliesBleed),
+                    category = ComputeIntentCategory(it.damage, it.isAoe, it.stunsTarget, it.appliesBleed, it.appliesCorrosion),
                     enemy = em,
                     targetPartyIndex = it.targetPartyIndex,
                     attackIndex = it.attackIndex,
@@ -4333,7 +4392,8 @@ private static List<ItemOptionSO> RollUnique(List<ItemOptionSO> pool, int count)
                     stunsTarget = it.stunsTarget,
                     stunPlayerPhases = it.stunPlayerPhases,
                     appliesBleed = it.appliesBleed,
-                    bleedStacks = it.bleedStacks
+                    bleedStacks = it.bleedStacks,
+                    appliesCorrosion = it.appliesCorrosion
                 });
             }
         }
@@ -4384,12 +4444,24 @@ private static List<ItemOptionSO> RollUnique(List<ItemOptionSO> pool, int count)
             SetUndoButtonEnabled(false);
     }
 
+    /// <summary>
+    /// Reel corrosion is tracked in ReelSpinSystem. When corrosion count changes, refresh party status icon visuals
+    /// so the Corrosion status icon (and stacks) appears above the affected hero immediately.
+    /// </summary>
+    private void HandleCorrosionChanged(int partyIndex, int newCount)
+    {
+        // We currently render corrosion as a status icon above heroes; this refresh handles both add/remove.
+        ApplyPartyHiddenVisuals();
+    }
+
+
     private void OnDestroy()
     {
         if (reelSpinSystem != null)
         {
             reelSpinSystem.OnCurrentLandedChanged -= HandleCurrentLandedChanged;
             reelSpinSystem.OnSpinLanded -= HandleSpinLandedBattle;
+            reelSpinSystem.OnCorrosionChanged -= HandleCorrosionChanged;
         }
     }
 
@@ -4691,6 +4763,9 @@ if (logPassiveBridge)
         }
     }
 }
+
+
+////////////////////////////////////////////////////////////
 
 
 ////////////////////////////////////////////////////////////

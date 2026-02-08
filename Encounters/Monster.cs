@@ -34,6 +34,15 @@ public class Monster : MonoBehaviour
 
         [Tooltip("How many Bleeding stacks are applied when this attack lands.")]
         public int bleedStacks = 1;
+
+        [Header("Attack Attributes")]
+                [Tooltip("If true, this attack applies Corrosion: a random token on the target hero's reel becomes corroded (green tint). If that token would grant resources, it is treated as a NUL token for this battle.")]
+        public bool appliesCorrosion = false;
+
+        [Tooltip("How many reel icons to corrode when this attack hits. Unique indices are chosen (up to the reel strip length).")]
+        [Min(1)]
+        public int corrosionIconCount = 1;
+
     }
 
     public event Action<int, int> OnHpChanged;
@@ -612,4 +621,6 @@ public void SetCurrentHp(int hp)
 
 
 ////////////////////////////////////////////////////////////
+
+
 

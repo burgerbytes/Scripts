@@ -1,3 +1,6 @@
+// PATH: Assets/Scripts/UI/Reels/ReelSpinSystem.cs
+// GUID: 1b9947b6d65d049459a446a098bd7cb3
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -145,6 +148,13 @@ public class ReelSpinSystem : MonoBehaviour
     /// </summary>
     public event Action<int, int, int, int> OnPendingPayoutChanged;
 
+    /// <summary>
+    /// Fired whenever corrosion count changes on a reel.
+    /// Args: (reelIndex, corrodedTokenCount).
+    /// BattleManager can listen to refresh status icons above heroes.
+    /// </summary>
+    public event Action<int, int> OnCorrosionChanged;
+
     // --- Cashout hooks (BattleManager can inject passive logic without modifying core spin flow elsewhere) ---
     [Tooltip("If true, StopSpinningAndCollect will attempt to apply the 'Substitution' (NULL -> WILD) mutation before collecting payout.")]
     [SerializeField] private bool enableSubstitutionOnCashout = true;
@@ -164,6 +174,15 @@ public class ReelSpinSystem : MonoBehaviour
     private bool _cashoutPressedThisBattle = false;
     private int _cashoutPressCountThisBattle = 0;
     private int _substitutionTriggerCountThisBattle = 0;
+    // ---------------- Corrosion (battle-only) ----------------
+    // Tracks which quad indices on each reel are corroded (per battle).
+    private readonly Dictionary<int, HashSet<int>> _corrodedQuadsByReelIndex = new Dictionary<int, HashSet<int>>();
+
+    [Header("Debug")]
+    [SerializeField] private bool logCorrosion = true;
+    [SerializeField] private bool logCorrosionConversionProbe = true;
+
+
 /// <summary>Called by BattleManager at the start of each battle.</summary>
     public void ResetBattleSubstitutionState()
     {
@@ -173,6 +192,332 @@ public class ReelSpinSystem : MonoBehaviour
         _substitutionTriggerCountThisBattle = 0;
         Debug.Log($"[ReelSpinSystem][SubstitutionDebug] ResetBattleSubstitutionState -> cashoutPressCount=0 substitutionTriggerCount=0", this);
     }
+
+    /// <summary>Called by BattleManager at the start of each battle.</summary>
+    public void ResetBattleCorrosionState()
+    {
+        _corrodedQuadsByReelIndex.Clear();
+
+        // Clear visual tint on 3D reels (if present).
+        if (reels != null)
+        {
+            for (int i = 0; i < reels.Count; i++)
+            {
+                var e = reels[i];
+                if (e == null || e.reel3d == null) continue;
+                e.reel3d.SetCorrodedQuadIndices(null);
+            }
+        }
+
+        if (logCorrosion)
+            Debug.Log("[ReelSpinSystem][Corrosion] ResetBattleCorrosionState -> cleared all corroded indices.", this);
+    }
+
+    /// <summary>
+    /// Called by BattleManager when an encounter ends (victory/defeat) to undo any per-battle
+    /// symbol swaps (like corrosion converting a landed token to NULL). This ensures the reel
+    /// returns to its original strip for post-battle panels and the next encounter.
+    /// </summary>
+    public void RestoreReelsAfterBattle()
+    {
+        // Undo any per-battle symbol replacements by rebuilding from the current strip.
+        if (reels != null)
+        {
+            for (int i = 0; i < reels.Count; i++)
+            {
+                var e = reels[i];
+                if (e == null) continue;
+
+                // Restore 3D reel symbols back to strip defaults (clears ReplaceSymbolAtQuadIndex state).
+                if (e.reel3d != null && e.strip != null)
+                    e.reel3d.SetStrip(e.strip, rebuildNow: true);
+
+                // Clear corrosion tint, regardless.
+                if (e.reel3d != null)
+                    e.reel3d.SetCorrodedQuadIndices(null);
+
+                // Optional: refresh 2D UI strip view too (safe even if already correct).
+                if (e.ui != null && e.strip != null)
+                    e.ui.SetStrip(e.strip, startIndex: 0, refreshNow: true);
+            }
+        }
+
+        // Clear corrosion bookkeeping.
+        _corrodedQuadsByReelIndex.Clear();
+
+        if (logCorrosion)
+            Debug.Log("[ReelSpinSystem][Corrosion] RestoreReelsAfterBattle -> rebuilt reels from strip + cleared corrosion state.", this);
+    }
+
+    public int GetCorrosionCountForReel(int reelIndex)
+    {
+        if (_corrodedQuadsByReelIndex.TryGetValue(reelIndex, out var set) && set != null)
+            return set.Count;
+        return 0;
+    }
+
+    private bool IsReelQuadCorroded(int reelIndex, int quadIndex)
+{
+    // We store corroded STRIP token indices per reel.
+    // A physical quad maps to a strip token via (quadIndex % stripCount).
+    if (reels == null || reelIndex < 0 || reelIndex >= reels.Count)
+        return false;
+
+    var entry = reels[reelIndex];
+    if (entry == null || entry.strip == null || entry.strip.symbols == null || entry.strip.symbols.Count == 0)
+        return false;
+
+    int stripCount = entry.strip.symbols.Count;
+    int tokenIndex = Mod(quadIndex, stripCount);
+
+    if (_corrodedQuadsByReelIndex.TryGetValue(reelIndex, out var set) && set != null)
+        return set.Contains(tokenIndex);
+
+    return false;
+}
+
+    private bool SymbolGrantsResources(ReelSymbolSO sym)
+    {
+        if (sym == null) return false;
+        if (TryMapSymbol(sym, out ResourceType rt, out int amt))
+            return rt != ResourceType.Null && amt > 0;
+        return false;
+    }
+
+    private ReelSymbolSO ApplyCorrosionIfNeeded(int reelIndex, int quadIndex, ReelSymbolSO sym)
+{
+    // UPDATED CORROSION BEHAVIOR:
+    // - Corrosion does NOT prevent payout on the landing spin.
+    // - If a corroded token lands on midrow, it pays out normally, THEN becomes NULL for future spins.
+    // So we do NOT change the symbol here.
+    return sym;
+}
+
+    /// <summary>
+    /// Applies corrosion to a random quad index on the given reel index (per battle). Returns true if a NEW index was corroded.
+    /// </summary>
+    public bool ApplyCorrosionToReel(int reelIndex)
+    {
+        return ApplyCorrosionToReel(reelIndex, 1);
+    }
+
+    /// <summary>
+    /// Apply corrosion to multiple unique icon indices on this reel.
+    /// Returns true if at least one new index was corroded.
+    /// </summary>
+    public bool ApplyCorrosionToReel(int reelIndex, int iconCount)
+{
+    if (reels == null || reelIndex < 0 || reelIndex >= reels.Count)
+        return false;
+
+    var entry = reels[reelIndex];
+    if (entry == null || entry.reel3d == null)
+        return false;
+
+    ReelStripSO strip = entry.strip;
+    if (strip == null || strip.symbols == null || strip.symbols.Count == 0)
+        return false;
+
+    int stripCount = strip.symbols.Count;
+    int quadCount = Mathf.Max(1, entry.reel3d.QuadCount);
+
+    if (!_corrodedQuadsByReelIndex.TryGetValue(reelIndex, out var tokenSet) || tokenSet == null)
+    {
+        tokenSet = new HashSet<int>();
+        _corrodedQuadsByReelIndex[reelIndex] = tokenSet;
+    }
+
+    iconCount = Mathf.Max(1, iconCount);
+
+    // Build eligible token indices: not already corroded AND not currently NULL.
+    List<int> eligible = new List<int>(stripCount);
+    for (int ti = 0; ti < stripCount; ti++)
+    {
+        if (tokenSet.Contains(ti))
+            continue;
+
+        // Representative quad for this token
+        int repQuad = Mod(ti, quadCount);
+        ReelSymbolSO sym = entry.reel3d.GetSymbolOnQuad(repQuad);
+
+        // Skip NULL tokens (either originally NULL or previously converted)
+        if (sym != null && TryMapSymbol(sym, out ResourceType rt, out int amt) && rt == ResourceType.Null)
+            continue;
+
+        if (_rewardConfig != null && _rewardConfig.nullSymbol != null && sym == _rewardConfig.nullSymbol)
+            continue;
+
+        eligible.Add(ti);
+    }
+
+    if (eligible.Count == 0)
+        return false;
+
+    bool anyAdded = false;
+    int toApply = Mathf.Min(iconCount, eligible.Count);
+
+    for (int k = 0; k < toApply; k++)
+    {
+        int pick = UnityEngine.Random.Range(0, eligible.Count);
+        int tokenIndex = eligible[pick];
+        eligible.RemoveAt(pick);
+
+        if (tokenSet.Add(tokenIndex))
+        {
+            anyAdded = true;
+            if (logCorrosion)
+            {
+                string id = !string.IsNullOrEmpty(entry.reelId) ? entry.reelId : $"slot{reelIndex}";
+                Debug.Log($"[ReelSpinSystem][Corrosion] ApplyCorrosionToReel reel={id} tokenIndex={tokenIndex} totalTokensCorroded={tokenSet.Count}", this);
+            }
+        }
+    }
+
+    UpdateCorrosionVisualsForReel(reelIndex);
+    return anyAdded;
+}
+
+    /// <summary>
+    /// Rebuilds and pushes corroded PHYSICAL quad indices to the 3D reel based on stored STRIP token indices.
+    /// (Example: 6 tokens, 12 quads => each token tints 2 quads.)
+    /// Also fires OnCorrosionChanged(reelIndex, tokenCount).
+    /// </summary>
+    private void UpdateCorrosionVisualsForReel(int reelIndex)
+    {
+        if (reels == null || reelIndex < 0 || reelIndex >= reels.Count)
+            return;
+
+        var entry = reels[reelIndex];
+        if (entry == null || entry.reel3d == null || entry.strip == null || entry.strip.symbols == null || entry.strip.symbols.Count == 0)
+            return;
+
+        int stripCount = entry.strip.symbols.Count;
+        int quadCount = Mathf.Max(1, entry.reel3d.QuadCount);
+
+        if (!_corrodedQuadsByReelIndex.TryGetValue(reelIndex, out var tokenSet) || tokenSet == null || tokenSet.Count == 0)
+        {
+            entry.reel3d.SetCorrodedQuadIndices(null);
+            OnCorrosionChanged?.Invoke(reelIndex, 0);
+            return;
+        }
+
+        HashSet<int> quadSet = new HashSet<int>();
+        for (int qi = 0; qi < quadCount; qi++)
+        {
+            int ti = Mod(qi, stripCount);
+            if (tokenSet.Contains(ti))
+                quadSet.Add(qi);
+        }
+
+        entry.reel3d.SetCorrodedQuadIndices(quadSet);
+        OnCorrosionChanged?.Invoke(reelIndex, tokenSet.Count);
+    }
+
+
+/// <summary>
+/// Resolves the project's NULL symbol. In combat mode, _rewardConfig may be null,
+/// so we fall back to defaultRewardConfig.
+/// </summary>
+private ReelSymbolSO ResolveNullSymbol()
+{
+    // Active reward config (e.g., reward reel mode)
+    if (_rewardConfig != null && _rewardConfig.nullSymbol != null)
+        return _rewardConfig.nullSymbol;
+
+    // Default config used in battle/combat mode
+    if (defaultRewardConfig != null && defaultRewardConfig.nullSymbol != null)
+        return defaultRewardConfig.nullSymbol;
+
+    return null;
+}
+
+    /// <summary>
+    /// After payout is computed for a spin, if the landed quad maps to a corroded token,
+    /// convert that token into the NULL symbol for future spins.
+    /// (Token still paid out for THIS spin.)
+    /// </summary>
+    
+    /// <summary>
+    /// After payout is computed for a spin, if the landed quad maps to a corroded token,
+    /// convert that token into the NULL symbol for future spins.
+    /// (Token still paid out for THIS spin.)
+    /// </summary>
+    private void ConvertCorrodedLandedTokenToNull(int reelIndex, int landedQuadIndex)
+    {
+        // Probe line: shows this method is actually being hit every spin.
+        if (logCorrosionConversionProbe)
+            Debug.Log($"[ReelSpinSystem][Corrosion][Probe] ConvertCheck reelIndex={reelIndex} landedQuadIndex={landedQuadIndex}", this);
+
+        if (reels == null || reelIndex < 0 || reelIndex >= reels.Count)
+        {
+            if (logCorrosionConversionProbe)
+                Debug.Log($"[ReelSpinSystem][Corrosion] Convert skipped: reels null or reelIndex out of range (reelIndex={reelIndex})", this);
+            return;
+        }
+
+        var entry = reels[reelIndex];
+        if (entry == null || entry.reel3d == null || entry.strip == null || entry.strip.symbols == null || entry.strip.symbols.Count == 0)
+        {
+            if (logCorrosionConversionProbe)
+                Debug.Log($"[ReelSpinSystem][Corrosion] Convert skipped: missing entry/reel3d/strip for reelIndex={reelIndex}", this);
+            return;
+        }
+int stripCount = entry.strip.symbols.Count;
+        int quadCount = Mathf.Max(1, entry.reel3d.QuadCount);
+
+        int tokenIndex = Mod(landedQuadIndex, stripCount);
+
+        if (!_corrodedQuadsByReelIndex.TryGetValue(reelIndex, out var tokenSet) || tokenSet == null || tokenSet.Count == 0)
+        {
+            if (logCorrosionConversionProbe)
+                Debug.Log($"[ReelSpinSystem][Corrosion] Convert skipped: no corroded tokens on reelIndex={reelIndex}", this);
+            return;
+        }
+
+        if (logCorrosionConversionProbe)
+            Debug.Log($"[ReelSpinSystem][Corrosion][Probe] reelIndex={reelIndex} tokenIndex={tokenIndex} corrodedCount={tokenSet.Count} isCorroded={tokenSet.Contains(tokenIndex)}", this);
+
+        if (!tokenSet.Contains(tokenIndex))
+        {
+            // No conversion this spin (landed token wasn't one of the corroded tokens).
+            return;
+        }
+// Landed token IS corroded -> convert this token index into NULL for future spins/moves.
+ReelSymbolSO nullSym = ResolveNullSymbol();
+if (nullSym == null)
+{
+    Debug.LogWarning("[ReelSpinSystem][Corrosion] Convert skipped: NULL symbol could not be resolved. Assign nullSymbol on defaultRewardConfig (and/or active reward config).", this);
+    return;
+}
+
+ReelSymbolSO landedSym = entry.reel3d.GetSymbolOnQuad(landedQuadIndex);
+
+if (logCorrosionConversionProbe)
+    Debug.Log($"[ReelSpinSystem][Corrosion] CONVERT tokenIndex={tokenIndex} landedQuad={landedQuadIndex} reel={reelIndex} sym='{(landedSym != null ? landedSym.name : "<null>")}' -> NULL '{nullSym.name}'", this);
+
+// Replace all quads that correspond to this token index.
+for (int qi = 0; qi < quadCount; qi++)
+{
+    if (Mod(qi, stripCount) == tokenIndex)
+    {
+        entry.reel3d.ReplaceSymbolAtQuadIndex(qi, nullSym);
+        if (logCorrosion)
+            Debug.Log($"[ReelSpinSystem][Corrosion]   -> Replaced quad {qi} with NULL (tokenIndex={tokenIndex})", this);
+    }
+}
+
+
+
+        // Remove corrosion marker (it is now permanently NULL).
+        tokenSet.Remove(tokenIndex);
+
+        UpdateCorrosionVisualsForReel(reelIndex);
+    }
+
+
+
+
+
 
     [Serializable]
     public struct SpinLandedInfo
@@ -201,6 +546,32 @@ public class ReelSpinSystem : MonoBehaviour
 
     /// <summary>Read-only view of the most recent landed multipliers for this reel phase (parallel to CurrentLandedSymbols).</summary>
     public IReadOnlyList<int> CurrentLandedMultipliers => _currentLandedMultipliers;
+
+    /// <summary>
+    /// Recomputes pending payout based on the currently-landed symbols/multipliers.
+    /// Used when an external effect (e.g., Corrosion) changes the effective meaning of a landed symbol
+    /// without requiring a new spin.
+    /// </summary>
+    private void RecalculatePendingFromCurrentLanded()
+    {
+        if (_currentLandedSymbols == null || _currentLandedSymbols.Count < 3)
+            return;
+
+        // Ensure multipliers list exists and is sized.
+        if (_currentLandedMultipliers == null)
+            _currentLandedMultipliers = new List<int> { 1, 1, 1 };
+
+        while (_currentLandedMultipliers.Count < 3)
+            _currentLandedMultipliers.Add(1);
+
+        SetPendingFromSymbols(_currentLandedSymbols, _currentLandedMultipliers);
+        // Notify any listeners that depend on the effective landed state.
+        SpinLandedInfo info = BuildSpinLandedInfo(_currentLandedSymbols);
+        if (logPassiveBridge)
+            Debug.Log($"[ReelSpinSystem][PassiveBridge] RecalculatePendingFromCurrentLanded: symbols={(info.symbols != null ? info.symbols.Count : 0)} A={info.attackCount} D={info.defendCount} M={info.magicCount} W={info.wildCount}", this);
+
+        OnCurrentLandedChanged?.Invoke(info);
+    }
 
     // (duplicate event declaration removed)
 
@@ -471,15 +842,29 @@ public class ReelSpinSystem : MonoBehaviour
     private void BuildSymbolMapCache()
     {
         _symbolMap = new Dictionary<ReelSymbolSO, SymbolMapValue>();
-        foreach (var e in symbolToResourceMap)
-        {
-            if (e == null || e.symbol == null) continue;
 
-            int amt = Mathf.Max(1, e.amount);
-            _symbolMap[e.symbol] = new SymbolMapValue
+        if (symbolToResourceMap != null)
+        {
+            foreach (var e in symbolToResourceMap)
             {
-                type = e.resourceType,
-                amount = amt
+                if (e == null || e.symbol == null) continue;
+
+                int amt = Mathf.Max(1, e.amount);
+                _symbolMap[e.symbol] = new SymbolMapValue
+                {
+                    type = e.resourceType,
+                    amount = amt
+                };
+            }
+        }
+
+        // Ensure Null symbol is mapped (used by corrosion and other systems).
+        if (_rewardConfig != null && _rewardConfig.nullSymbol != null)
+        {
+            _symbolMap[_rewardConfig.nullSymbol] = new SymbolMapValue
+            {
+                type = ResourceType.Null,
+                amount = 0
             };
         }
     }
@@ -510,7 +895,7 @@ public class ReelSpinSystem : MonoBehaviour
         if (_symbolMap.TryGetValue(sym, out var v))
         {
             rt = v.type;
-            amount = Mathf.Max(1, v.amount);
+            amount = (v.type == ResourceType.Null) ? 0 : Mathf.Max(1, v.amount);
             return true;
         }
         return false;
@@ -741,11 +1126,21 @@ public class ReelSpinSystem : MonoBehaviour
         if (sym == null)
             return false;
 
+        // Corrosion: a reel move can also be a payout-affecting event. Apply conversion now so payout treats midrow as NULL.
+        ConvertCorrodedLandedTokenToNull(reelIndex, qi);
+
+        // Refresh symbol after possible conversion.
+        sym = entry.reel3d.GetMidrowSymbolAndMultiplier(midrowPlane, out qi, out mult);
+        if (sym == null)
+            return false;
+
+        ReelSymbolSO effectiveSym = sym;
+
         // Ensure list size >= 3
         while (_currentLandedSymbols.Count < 3)
             _currentLandedSymbols.Add(null);
 
-        _currentLandedSymbols[reelIndex] = sym;
+        _currentLandedSymbols[reelIndex] = effectiveSym;
         if (_currentLandedMultipliers == null) _currentLandedMultipliers = new List<int> { 1, 1, 1 };
         while (_currentLandedMultipliers.Count < 3) _currentLandedMultipliers.Add(1);
         _currentLandedMultipliers[reelIndex] = Mathf.Max(1, mult);
@@ -950,7 +1345,7 @@ public class ReelSpinSystem : MonoBehaviour
             int qi;
             int mult;
             ReelSymbolSO sym = entry.reel3d.GetMidrowSymbolAndMultiplier(midrowPlane, out qi, out mult);
-            landed.Add(sym);
+                        landed.Add(sym);
             multipliers.Add(Mathf.Max(1, mult));
 
             if (log3DAdjacentSymbolsEachSpin && entry != null && entry.reel3d != null)
@@ -974,6 +1369,8 @@ public class ReelSpinSystem : MonoBehaviour
 
             string id = !string.IsNullOrEmpty(entry.reelId) ? entry.reelId : $"slot{i}";
             string name = sym != null ? sym.name : "<null>";
+            if (IsReelQuadCorroded(i, qi) && SymbolGrantsResources(sym))
+                name += " (CORRODED)";
             parts.Add($"{id}={name}(quad {qi})");
         }
 
@@ -990,6 +1387,30 @@ public class ReelSpinSystem : MonoBehaviour
         }
         else
         {
+
+            // Corrosion: if a corroded token is in the midrow during payout, convert it into NULL NOW
+            // and refresh the landed symbols so this payout treats it as NULL.
+            for (int ci = 0; ci < three.Count; ci++)
+            {
+                int cqi; int cm;
+                ReelSymbolSO before = three[ci].reel3d.GetMidrowSymbolAndMultiplier(midrowPlane, out cqi, out cm);
+
+                ConvertCorrodedLandedTokenToNull(ci, cqi);
+
+                // Refresh after possible conversion (midrow may now be NULL).
+                int rq; int rm;
+                ReelSymbolSO refreshed = three[ci].reel3d.GetMidrowSymbolAndMultiplier(midrowPlane, out rq, out rm);
+                if (refreshed != null)
+                {
+                    landed[ci] = refreshed;
+                    multipliers[ci] = Mathf.Max(1, rm);
+                }
+
+                if (logCorrosionConversionProbe && before != refreshed)
+                    Debug.Log($"[ReelSpinSystem][Corrosion] Midrow payout refresh reel={ci}: '{(before != null ? before.name : "<null>")}' -> '{(refreshed != null ? refreshed.name : "<null>")}'", this);
+            }
+
+
             // Build landed info and notify listeners (item synergies, UI, etc.)
             SpinLandedInfo info = BuildSpinLandedInfo(landed);
             OnSpinLanded?.Invoke(info);
@@ -1002,17 +1423,6 @@ public class ReelSpinSystem : MonoBehaviour
             OnCurrentLandedChanged?.Invoke(info);
 
             SetPendingFromSymbols(landed, multipliers);
-
-            spinsRemaining = Mathf.Max(0, spinsRemaining - 1);
-            OnSpinsRemainingChanged?.Invoke(spinsRemaining);
-
-            if (spinsRemaining <= 0)
-            {
-                // No auto-cashout: player must press Cashout so Reelcraft can still be used.
-                // Spin button should be disabled by UI via spinsRemaining == 0, but we keep reel phase active.
-                if (log3DMidRowSymbolsEachSpin)
-                    Debug.Log("[ReelSpinSystem] SpinsRemaining reached 0 (no auto-cashout). Waiting for player Cashout.");
-            }
         }
 
         spinning = false;
@@ -1082,9 +1492,14 @@ public class ReelSpinSystem : MonoBehaviour
             int qi;
             int mult;
             ReelSymbolSO currentMid = entry.reel3d.GetMidrowSymbolAndMultiplier(midrowPlane, out qi, out mult);
-            entry.reel3d.SetQuadTemporarilyTransmutedTo(wild, qi);
 
             int idx = FindReelIndexForColumn(entry.reel3d);
+            // Corrosion can nullify resource-granting tokens; treat corroded resources as NUL for logic.
+            ReelSymbolSO effectiveMid = (idx >= 0) ? ApplyCorrosionIfNeeded(idx, qi, currentMid) : currentMid;
+
+            entry.reel3d.SetQuadTemporarilyTransmutedTo(wild, qi);
+
+            
             if (idx >= 0) TryNudgeReel(idx, 0);
             else
             {
@@ -1214,10 +1629,11 @@ ReelSymbolSO wild = GetDefaultWildSymbol();
         int qi;
         int mult;
         ReelSymbolSO sym = entry.reel3d.GetMidrowSymbolAndMultiplier(midrowPlane, out qi, out mult);
-        if (sym == null)
+        ReelSymbolSO effectiveSym = sym;
+        if (effectiveSym == null)
             yield break;
 
-        if (!TryMapSymbol(sym, out ResourceType rt, out int amt))
+        if (!TryMapSymbol(effectiveSym, out ResourceType rt, out int amt))
             yield break;
 
         int total = Mathf.Max(0, amt) * Mathf.Max(1, mult);
@@ -1233,7 +1649,7 @@ ReelSymbolSO wild = GetDefaultWildSymbol();
         while (_currentLandedSymbols.Count < 3)
             _currentLandedSymbols.Add(null);
 
-        _currentLandedSymbols[reelIndex] = sym;
+        _currentLandedSymbols[reelIndex] = effectiveSym;
 
         if (_currentLandedMultipliers == null)
             _currentLandedMultipliers = new List<int> { 1, 1, 1 };
@@ -1407,3 +1823,6 @@ ReelSymbolSO wild = GetDefaultWildSymbol();
 
 ////////////////////////////////////////////////////////////
 
+
+
+////////////////////////////////////////////////////////////
