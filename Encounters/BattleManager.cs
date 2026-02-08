@@ -1,7 +1,3 @@
-// GUID: 30f201f35d336bf4d840162cd6fd1fde
-////////////////////////////////////////////////////////////
-// GUID: 30f201f35d336bf4d840162cd6fd1fde
-////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -345,6 +341,18 @@ public class BattleManager : MonoBehaviour
     private BattleState _state = BattleState.Idle;
 
     private readonly List<Monster> _activeMonsters = new List<Monster>();
+
+    [Header("Enemy Spawn Limit")]
+    [Tooltip("Maximum number of enemy monsters that can be active on-screen at once. Summons beyond this are queued.")]
+    [SerializeField] private int maxActiveEnemiesOnScreen = 3;
+
+    // Summoned enemies beyond the cap are queued and spawned immediately when a slot frees up.
+    private readonly Queue<GameObject> _summonedEnemyQueue = new Queue<GameObject>();
+
+    /// <summary>Raised whenever the summon queue size changes.</summary>
+    public event Action<int> OnEnemySummonQueueChanged;
+
+    public int EnemySummonQueueCount => _summonedEnemyQueue != null ? _summonedEnemyQueue.Count : 0;
 
     // Runtime-spawned / cached target indicators (one per monster).
     private readonly Dictionary<Monster, TargetIndicatorUI> _enemyTargetIndicators = new Dictionary<Monster, TargetIndicatorUI>(16);
@@ -2848,36 +2856,82 @@ private bool TryRunLevel5EvolutionNow()
                 intent.enemy
             );
 
-            Vector3 pos = GetSummonSpawnPosition();
-            GameObject go = Instantiate(prefab, pos, Quaternion.identity);
-
-            Monster summoned = go.GetComponentInChildren<Monster>(true);
-            if (summoned == null)
+            if (_activeMonsters.Count >= Mathf.Max(1, maxActiveEnemiesOnScreen))
             {
-                Debug.LogWarning($"[BattleManager][Summon] Summon prefab '{prefab.name}' did not have a Monster component in children.", this);
-                Destroy(go);
+                EnqueueSummonedEnemy(prefab);
                 continue;
             }
 
-            summoned.gameObject.SetActive(true);
-            summoned.ResetSummonTrackingForBattle();
-
-
-            summoned.isSummonedMonster = true;
-            Debug.Log($"[SUMMON][SPAWN] Marked summoned monster as isSummonedMonster=true name={summoned.name}", summoned);
-            _activeMonsters.Add(summoned);
-            if (!_encounterMonsters.Contains(summoned)) _encounterMonsters.Add(summoned);
-
-            // If the summon spawns dead for some reason, remove it.
-            if (summoned.IsDead)
-            {
-                summoned.gameObject.SetActive(false);
-                _activeMonsters.Remove(summoned);
-            }
+            SpawnSummonedEnemy(prefab);
         }
 
         intent.enemy.RegisterSummonAttackUse(intent.attackIndex);
         NotifyPartyChanged();
+    }
+
+    private void EnqueueSummonedEnemy(GameObject prefab)
+    {
+        if (prefab == null) return;
+        _summonedEnemyQueue.Enqueue(prefab);
+        NotifyEnemySummonQueueChanged();
+        Debug.Log($"[SUMMON][QUEUE] Enqueued summon prefab='{prefab.name}'. queueCount={_summonedEnemyQueue.Count}", this);
+    }
+
+    private void TrySpawnQueuedSummonsToFillCap()
+    {
+        int cap = Mathf.Max(1, maxActiveEnemiesOnScreen);
+        bool spawnedAny = false;
+
+        while (_activeMonsters.Count < cap && _summonedEnemyQueue.Count > 0)
+        {
+            GameObject prefab = _summonedEnemyQueue.Dequeue();
+            NotifyEnemySummonQueueChanged();
+
+            if (prefab == null) continue;
+
+            Debug.Log($"[SUMMON][QUEUE] Dequeued summon prefab='{prefab.name}'. remaining={_summonedEnemyQueue.Count}", this);
+            SpawnSummonedEnemy(prefab);
+            spawnedAny = true;
+        }
+
+        if (spawnedAny)
+            NotifyPartyChanged();
+    }
+
+    private void SpawnSummonedEnemy(GameObject prefab)
+    {
+        if (prefab == null) return;
+
+        Vector3 pos = GetSummonSpawnPosition();
+        GameObject go = Instantiate(prefab, pos, Quaternion.identity);
+
+        Monster summoned = go.GetComponentInChildren<Monster>(true);
+        if (summoned == null)
+        {
+            Debug.LogWarning($"[BattleManager][Summon] Summon prefab '{prefab.name}' did not have a Monster component in children.", this);
+            Destroy(go);
+            return;
+        }
+
+        summoned.gameObject.SetActive(true);
+        summoned.ResetSummonTrackingForBattle();
+
+        summoned.isSummonedMonster = true;
+        Debug.Log($"[SUMMON][SPAWN] Marked summoned monster as isSummonedMonster=true name={summoned.name}", summoned);
+        _activeMonsters.Add(summoned);
+        if (!_encounterMonsters.Contains(summoned)) _encounterMonsters.Add(summoned);
+
+        // If the summon spawns dead for some reason, remove it.
+        if (summoned.IsDead)
+        {
+            summoned.gameObject.SetActive(false);
+            _activeMonsters.Remove(summoned);
+        }
+    }
+
+    private void NotifyEnemySummonQueueChanged()
+    {
+        OnEnemySummonQueueChanged?.Invoke(EnemySummonQueueCount);
     }
 
     private bool TryGetSummonAttackData(Monster m, int attackIndex, out GameObject summonPrefab, out int summonCount, out int maxSummonsPerBattle)
@@ -3087,8 +3141,11 @@ private bool TryRunLevel5EvolutionNow()
     {
         _activeMonsters.Clear();
         _encounterMonsters.Clear();
+        _summonedEnemyQueue.Clear();
+        NotifyEnemySummonQueueChanged();
 
         int maxSlots = (monsterSpawnPoints != null && monsterSpawnPoints.Length > 0) ? monsterSpawnPoints.Length : 1;
+        maxSlots = Mathf.Clamp(maxSlots, 1, Mathf.Max(1, maxActiveEnemiesOnScreen));
 
         EnemyPartyCompositionSO chosen = null;
 
@@ -3272,8 +3329,15 @@ private bool TryRunLevel5EvolutionNow()
         if (m.gameObject != null)
             m.gameObject.SetActive(false);
 
+        // If we have queued summons waiting for a slot, spawn them immediately.
+        TrySpawnQueuedSummonsToFillCap();
+
         if (_activeMonsters.Count == 0)
         {
+            // Only end the encounter if no more enemies are active AND none are waiting in the summon queue.
+            if (EnemySummonQueueCount > 0)
+                return;
+
             if (resourcePool != null)
                 resourcePool.ClearAll();
             StartCoroutine(HandleEncounterVictoryRoutine());
@@ -3640,6 +3704,8 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
 
         _activeMonsters.Clear();
         _encounterMonsters.Clear();
+        _summonedEnemyQueue.Clear();
+        NotifyEnemySummonQueueChanged();
         _plannedIntents.Clear();
 
         _activeEnemyParty = null;
@@ -4620,6 +4686,8 @@ private static List<ItemOptionSO> RollUnique(List<ItemOptionSO> pool, int count)
 
         _activeMonsters.Clear();
         _encounterMonsters.Clear();
+        _summonedEnemyQueue.Clear();
+        NotifyEnemySummonQueueChanged();
 
         for (int i = 0; i < s.monsters.Count; i++)
         {
@@ -5038,7 +5106,3 @@ if (logPassiveBridge)
         }
     }
 }
-////////////////////////////////////////////////////////////
-
-
-////////////////////////////////////////////////////////////
