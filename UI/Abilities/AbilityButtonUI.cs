@@ -175,7 +175,17 @@ public class AbilityButtonUI : MonoBehaviour
         if (ability == null || resourcePool == null) return false;
 
         // Base rule: resource affordability.
-        if (!resourcePool.CanAfford(ability.cost)) return false;
+        ResourceCost effectiveCost = ability.cost;
+
+        // Special: consume-all-ATK abilities (e.g., Fighter "Heavy Strike")
+        if (ability.spendAllAttackResources)
+        {
+            long atk = resourcePool.Attack;
+            if (atk <= 0) return false;
+            effectiveCost.attack = atk;
+        }
+
+        if (!resourcePool.CanAfford(effectiveCost)) return false;
 
         // Optional extra rule (e.g., once-per-turn, attack-per-turn limits, etc.)
         if (canUseExtraPredicate != null && !canUseExtraPredicate.Invoke(ability))
@@ -195,7 +205,8 @@ public class AbilityButtonUI : MonoBehaviour
 
         var parts = new List<string>(4);
 
-        if (cA > 0) parts.Add($"{Sprite(attackSpriteIndex)} {cA}");
+        if (ability.spendAllAttackResources) parts.Add($"{Sprite(attackSpriteIndex)} ALL");
+        else if (cA > 0) parts.Add($"{Sprite(attackSpriteIndex)} {cA}");
         if (cD > 0) parts.Add($"{Sprite(defenseSpriteIndex)} {cD}");
         if (cM > 0) parts.Add($"{Sprite(magicSpriteIndex)} {cM}");
         if (cW > 0) parts.Add($"{Sprite(wildSpriteIndex)} {cW}");
@@ -205,6 +216,9 @@ public class AbilityButtonUI : MonoBehaviour
 
     private static string Sprite(int index) => $"<sprite index={index}>";
 }
+
+
+////////////////////////////////////////////////////////////
 
 
 ////////////////////////////////////////////////////////////

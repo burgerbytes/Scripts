@@ -1966,14 +1966,73 @@ private bool TryRunLevel5EvolutionNow()
         PushSaveStateSnapshot();
 
         ResourceCost cost = GetEffectiveCost(actorStats, ability);
-        if (resourcePool == null || !resourcePool.TrySpend(cost))
-        {
-            if (logFlow) Debug.Log($"[Battle][Resolve] Cancel: insufficient resources or missing resourcePool. cost={cost}", this);
-            CancelPendingAbility();
-            yield break;
-        }
 
-        // Mark once-per-turn ability usage only after the cast is truly committed (cost successfully spent).
+        int bonusDamageFromSpentAtk = 0;
+        if (ability != null && (ability.spendAllAttackResources || ability.name == "Heavy Strike"))
+        {
+            // Cost.attack was set to current ResourcePool ATK in GetEffectiveCost().
+            long spentAtk = cost.attack;
+            // Clamp to int range for damage math.
+            long rawBonus = spentAtk * (long)Mathf.Max(0, ability.bonusDamagePerAttackResource);
+            if (rawBonus > int.MaxValue) rawBonus = int.MaxValue;
+            bonusDamageFromSpentAtk = (int)rawBonus;
+            if (logFlow) Debug.Log($"[Battle][HeavyStrike] spendAllAttackResources=true spentAtk={spentAtk} bonusPerAtk={ability.bonusDamagePerAttackResource} bonusDamage={bonusDamageFromSpentAtk}", this);
+        }
+        // Spend resources (special-case: spend ALL ATK for abilities like Heavy Strike).
+        // ResourcePool.TrySpend may treat WILD as a flexible payment source; for "spend all ATK" we must force ATK to zero.
+        bool isHeavyStrike = (ability != null) && (ability.spendAllAttackResources || ability.name == "Heavy Strike");
+        long heavyStrikeSpentAtk = 0;
+
+        if (isHeavyStrike)
+        {
+            if (resourcePool == null)
+            {
+                Debug.Log($"[Battle][HeavyStrike][Cancel] Missing resourcePool.", this);
+                CancelPendingAbility();
+                yield break;
+            }
+
+            long atkBefore = resourcePool.Attack;
+            long defBefore = resourcePool.Defense;
+            long magBefore = resourcePool.Magic;
+            long wildBefore = resourcePool.Wild;
+
+            heavyStrikeSpentAtk = Math.Max(0L, atkBefore);
+            if (heavyStrikeSpentAtk <= 0)
+            {
+                Debug.Log($"[Battle][HeavyStrike][Cancel] No ATK to spend. attack={atkBefore}", this);
+                CancelPendingAbility();
+                yield break;
+            }
+
+            // Force ATK to 0 up-front so it cannot be paid via WILD or left partially unspent.
+            resourcePool.SetAmounts(0, defBefore, magBefore, wildBefore);
+
+            // Spend remaining costs (with attack cost zeroed so we don't double-spend).
+            var remainingCost = cost;
+            remainingCost.attack = 0;
+
+            if (!resourcePool.TrySpend(remainingCost))
+            {
+                // Revert if spending the remaining cost fails.
+                resourcePool.SetAmounts(atkBefore, defBefore, magBefore, wildBefore);
+                Debug.Log($"[Battle][HeavyStrike][Cancel] Could not pay remainingCost={remainingCost}. Reverted resources.", this);
+                CancelPendingAbility();
+                yield break;
+            }
+
+            Debug.Log($"[Battle][HeavyStrike][Spend] spentAtk={heavyStrikeSpentAtk} bonusPerAtk={ability.bonusDamagePerAttackResource} bonusDamage={bonusDamageFromSpentAtk} poolAfter(atk={resourcePool.Attack},def={resourcePool.Defense},mag={resourcePool.Magic},wild={resourcePool.Wild})", this);
+        }
+        else
+        {
+            if (resourcePool == null || !resourcePool.TrySpend(cost))
+            {
+                if (logFlow) Debug.Log($"[Battle][Resolve] Cancel: insufficient resources or missing resourcePool. cost={cost}", this);
+                CancelPendingAbility();
+                yield break;
+            }
+        }
+// Mark once-per-turn ability usage only after the cast is truly committed (cost successfully spent).
         actorStats.RegisterAbilityUsedThisTurn(ability);
 
         if (logFlow) Debug.Log($"[Battle][Resolve] Resources spent. cost={cost}. Proceeding to apply ability effects.", this);
@@ -2156,7 +2215,8 @@ private bool TryRunLevel5EvolutionNow()
                 totalBaseDamage =
                     Mathf.Max(0, actorStats.Attack) +
                     Mathf.Max(0, ability.baseDamage) +
-                    Mathf.Max(0, passiveBonus);
+                    Mathf.Max(0, passiveBonus) +
+                    Mathf.Max(0, bonusDamageFromSpentAtk);
 
                 // Damage numbers should show computed formula damage, not clamped HP lost.
                 shownDamage = enemyTarget.CalculateDamageFromAbility(
@@ -2164,6 +2224,19 @@ private bool TryRunLevel5EvolutionNow()
                     classAttackModifier: 1f,
                     element: ability.element,
                     abilityTags: ability.tags);
+
+                if (isHeavyStrike)
+
+
+                {
+
+
+                    Debug.Log($"[Battle][HeavyStrike][Damage] caster={actorStats.name} target={(enemyTarget!=null?enemyTarget.name:"<null>")} spentAtk={heavyStrikeSpentAtk} bonusDamage={bonusDamageFromSpentAtk} totalBaseDamage={totalBaseDamage} shownDamage={shownDamage}", this);
+
+
+                }
+
+
 
                 dealt = enemyTarget.TakeDamageFromAbility(
                     abilityBaseDamage: totalBaseDamage,
@@ -2410,7 +2483,20 @@ private bool TryRunLevel5EvolutionNow()
     private ResourceCost GetEffectiveCost(HeroStats actor, AbilityDefinitionSO ability)
     {
         if (ability == null) return default;
-        return ability.cost;
+
+        // NOTE: Costs are normally static (from the asset).
+        // Some abilities have dynamic costs based on current resource amounts.
+        ResourceCost c = ability.cost;
+
+        // Heavy Strike-style: spend ALL current ATK resources when cast.
+        // This keeps the behavior data-driven via the AbilityDefinitionSO flag.
+        if (ability != null && (ability.spendAllAttackResources || ability.name == "Heavy Strike"))
+        {
+            long atk = (resourcePool != null) ? resourcePool.Attack : 0;
+            c.attack = Math.Max(0L, atk);
+        }
+
+        return c;
     }
 
     // ============================
@@ -2491,10 +2577,30 @@ private bool TryRunLevel5EvolutionNow()
                 previewPassiveBonus = actor.stats.BonusDamageNextAttack;
         }
 
+        int previewBonusFromSpentAtk = 0;
+        // Heavy Strike preview: include bonus damage based on CURRENT ATK in the pool (without spending it).
+        // This mirrors ResolvePendingAbility logic where spend-all-ATK is forced and bonusDamageFromSpentAtk is added into totalBaseDamage.
+        bool previewSpendAllAtk = false;
+        try
+        {
+            previewSpendAllAtk = (_pendingAbility != null && (_pendingAbility.spendAllAttackResources || string.Equals(_pendingAbility.name, "Heavy Strike", StringComparison.OrdinalIgnoreCase)));
+        }
+        catch { previewSpendAllAtk = false; }
+
+        if (previewSpendAllAtk && resourcePool != null && _pendingAbility != null)
+        {
+            long atkInPool = Math.Max(0L, resourcePool.Attack);
+            int perAtk = Mathf.Max(0, _pendingAbility.bonusDamagePerAttackResource);
+            long raw = atkInPool * (long)perAtk;
+            if (raw > int.MaxValue) raw = int.MaxValue;
+            previewBonusFromSpentAtk = (int)raw;
+        }
+
         int totalBaseDamage =
             Mathf.Max(0, actor.stats.Attack) +
             Mathf.Max(0, _pendingAbility.baseDamage) +
-            Mathf.Max(0, previewPassiveBonus);
+            Mathf.Max(0, previewPassiveBonus) +
+            Mathf.Max(0, previewBonusFromSpentAtk);
 
         int predictedDamage = 0;
 
@@ -5201,3 +5307,6 @@ if (logPassiveBridge)
 }
 
 
+
+
+////////////////////////////////////////////////////////////

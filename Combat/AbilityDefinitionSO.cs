@@ -88,6 +88,14 @@ public class AbilityDefinitionSO : ScriptableObject
     public List<AbilityTag> tags = new List<AbilityTag>();
 
     [Header("Special Rules")]
+
+[Tooltip("If true, this ability consumes ALL current Attack resources (ATK) from the shared ResourcePool when cast. The ability is unusable if ATK is 0.")]
+public bool spendAllAttackResources = false;
+
+[Tooltip("If spendAllAttackResources is true, this many bonus damage is added per Attack resource consumed.")]
+public int bonusDamagePerAttackResource = 2;
+
+
     [Tooltip("If true, this ability costs 0 Attack while the user is Hidden.")]
     public bool freeIfHidden = false;
 
@@ -122,5 +130,7 @@ public class AbilityDefinitionSO : ScriptableObject
     public int summonCount = 1;
 }
 
+
+////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////
