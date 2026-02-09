@@ -175,6 +175,26 @@ public class BattleManager : MonoBehaviour
     [Header("Run / Resources")]
     [SerializeField] private ResourcePool resourcePool;
 
+
+
+[Header("Audio / Music")]
+[Tooltip("Optional audio source used for battle music. If null, BattleManager will create one at runtime.")]
+[SerializeField] private AudioSource battleMusicSource;
+
+[Tooltip("Music clip to play for battles (e.g., Area 1 battle theme).")]
+[SerializeField] private AudioClip battleMusicClip;
+
+[Range(0f, 1f)]
+[SerializeField] private float battleMusicVolume = 0.7f;
+
+[Tooltip("Fade in/out duration in seconds. Set to 0 for instant.")]
+[SerializeField] private float battleMusicFadeSeconds = 0.5f;
+
+[Tooltip("If true, music loops while the battle is active.")]
+[SerializeField] private bool loopBattleMusic = true;
+
+private Coroutine _battleMusicFadeRoutine;
+
     [Header("Party (Run Instance)")]
     [SerializeField] private Transform[] partySpawnPoints;
     [SerializeField] private GameObject[] partyMemberPrefabs = new GameObject[3];
@@ -4051,10 +4071,114 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
 
     private bool IsValidPartyIndex(int index) => _party != null && index >= 0 && index < _party.Count;
 
+
+
+// ---------------- Battle Music ----------------
+private void EnsureBattleMusicSource()
+{
+    if (battleMusicSource == null)
+    {
+        battleMusicSource = GetComponent<AudioSource>();
+        if (battleMusicSource == null)
+            battleMusicSource = gameObject.AddComponent<AudioSource>();
+    }
+
+    battleMusicSource.playOnAwake = false;
+    battleMusicSource.spatialBlend = 0f; // 2D
+    battleMusicSource.loop = loopBattleMusic;
+    battleMusicSource.volume = battleMusicVolume;
+
+    if (battleMusicClip != null && battleMusicSource.clip != battleMusicClip)
+        battleMusicSource.clip = battleMusicClip;
+}
+
+private void StartBattleMusic()
+{
+    if (battleMusicClip == null && battleMusicSource == null) return;
+
+    EnsureBattleMusicSource();
+
+    if (battleMusicSource.clip == null) return;
+
+    // If it's already playing, don't restart it.
+    if (battleMusicSource.isPlaying)
+    {
+        // Ensure volume/loop reflect current inspector values.
+        battleMusicSource.loop = loopBattleMusic;
+        battleMusicSource.volume = battleMusicVolume;
+        return;
+    }
+
+    // Fade-in or instant play.
+    if (battleMusicFadeSeconds <= 0f)
+    {
+        battleMusicSource.volume = battleMusicVolume;
+        battleMusicSource.Play();
+        return;
+    }
+
+    if (_battleMusicFadeRoutine != null)
+        StopCoroutine(_battleMusicFadeRoutine);
+
+    _battleMusicFadeRoutine = StartCoroutine(FadeMusicRoutine(battleMusicSource, 0f, battleMusicVolume, battleMusicFadeSeconds, playIfStopped: true));
+}
+
+private void StopBattleMusic()
+{
+    if (battleMusicSource == null) return;
+
+    if (!battleMusicSource.isPlaying)
+        return;
+
+    if (battleMusicFadeSeconds <= 0f)
+    {
+        battleMusicSource.Stop();
+        return;
+    }
+
+    if (_battleMusicFadeRoutine != null)
+        StopCoroutine(_battleMusicFadeRoutine);
+
+    _battleMusicFadeRoutine = StartCoroutine(FadeMusicRoutine(battleMusicSource, battleMusicSource.volume, 0f, battleMusicFadeSeconds, playIfStopped: false, stopAtEnd: true));
+}
+
+private IEnumerator FadeMusicRoutine(AudioSource src, float from, float to, float duration, bool playIfStopped, bool stopAtEnd = false)
+{
+    if (src == null) yield break;
+
+    if (playIfStopped && !src.isPlaying)
+        src.Play();
+
+    float t = 0f;
+    duration = Mathf.Max(0.0001f, duration);
+
+    // Set the starting volume explicitly.
+    src.volume = from;
+
+    while (t < duration)
+    {
+        t += Time.deltaTime;
+        float a = Mathf.Clamp01(t / duration);
+        src.volume = Mathf.Lerp(from, to, a);
+        yield return null;
+    }
+
+    src.volume = to;
+
+    if (stopAtEnd && Mathf.Approximately(to, 0f))
+        src.Stop();
+}
+
     private void SetState(BattleState s)
     {
         if (_state == s) return;
         _state = s;
+
+        // Battle music: start when battle begins, stop when battle ends.
+        if (s == BattleState.BattleStart)
+            StartBattleMusic();
+        else if (s == BattleState.BattleEnd)
+            StopBattleMusic();
 
         if (s == BattleState.BattleEnd)
             Debug.Log($"[Battle] Battle ended. state={s} time={Time.time:0.00}", this);
