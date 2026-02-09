@@ -1630,7 +1630,10 @@ private bool TryRunLevel5EvolutionNow()
             if (summoned)
                 Debug.Log($"[Summon][EXEC] START ATTACK enemy={intent.enemy.name} targets={targets.Count}", intent.enemy);
 
-            // Do the enemy lunge animation, then apply results.
+                        // Do the enemy lunge animation, then apply results.
+            // Resolve (passive): queue reel spins for heroes that are attacked by this intent (can't yield inside callback).
+            var resolveSpinQueue = new List<int>();
+
             yield return EnemyLungeAttack(intent.enemy, lungeTarget, () =>
             {
                 if (summoned)
@@ -1674,10 +1677,33 @@ private bool TryRunLevel5EvolutionNow()
                         for (int c = 0; c < intent.corrosionIconCount; c++)
                             reelSpinSystem.ApplyCorrosionToReel(partyIndex);
                     }
+
+                    // Resolve (passive): whenever this hero is attacked by an enemy intent, spin their reel once.
+                    if (reelSpinSystem != null && hs.HasAbilityUnlocked("Resolve"))
+                    {
+                        if (!resolveSpinQueue.Contains(partyIndex))
+                            resolveSpinQueue.Add(partyIndex);
+
+                        if (logFlow) Debug.Log($"[Battle][ResolvePassive] Queued Resolve spin. target={hs.name} partyIndex={partyIndex}", hs);
+                    }
                 }
             });
 
-            if (summoned)
+            // Execute queued Resolve spins AFTER the lunge + damage application completes.
+            if (reelSpinSystem != null && resolveSpinQueue.Count > 0)
+            {
+                for (int r = 0; r < resolveSpinQueue.Count; r++)
+                {
+                    int ri = resolveSpinQueue[r];
+                    if (!IsValidPartyIndex(ri)) continue;
+
+                    var pm = _party[ri];
+                    if (pm == null || pm.stats == null || pm.IsDead) continue;
+
+                    yield return StartCoroutine(reelSpinSystem.MomentumSpinAndInstantCollect(ri));
+                }
+            }
+if (summoned)
                 Debug.Log($"[Summon][EXEC] FINISHED intent enemy={intent.enemy.name}", intent.enemy);
 
             // Small pacing delay so multiple enemies don’t feel instantaneous
@@ -2277,6 +2303,14 @@ private bool TryRunLevel5EvolutionNow()
 
                 if (totalBaseDamage > 0)
                     actorStats.RegisterDamageAttackCommitted();
+
+                // Bloodlust (passive): whenever this hero deals damage, spin ONLY their reel once and instantly collect that reel's payout.
+                // Uses the same "momentum" spin helper (does not consume spinsRemaining and does not touch normal pending payout state).
+                if (dealt > 0 && actorStats != null && actorStats.HasAbilityUnlocked("Bloodlust") && reelSpinSystem != null)
+                {
+                    if (logFlow) Debug.Log($"[Battle][Bloodlust] Triggered. caster={actorStats.name} dealt={dealt} -> reelIndex={_pendingActorIndex}", this);
+                    yield return StartCoroutine(reelSpinSystem.MomentumSpinAndInstantCollect(_pendingActorIndex));
+                }
             }
             else
             {
@@ -2865,6 +2899,9 @@ private bool TryRunLevel5EvolutionNow()
                 summonCount = summonCount,
                 maxSummonsPerBattle = maxSummonsPerBattle
             });
+
+
+
         }
 
         OnEnemyIntentsPlanned?.Invoke(new List<EnemyIntent>(_plannedIntents));
@@ -4002,6 +4039,7 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
     [SerializeField] private Sprite statusIconIgnitionSprite;
     [SerializeField] private Sprite statusIconStasisSprite;
     [SerializeField] private Sprite statusIconCorrosionSprite;
+    [SerializeField] private Sprite statusIconAttackBoostSprite;
 
     [Header("Status Icon Layout")]
     [SerializeField] private Vector3 statusIconLocalOffset = new Vector3(0f, 1.2f, 0f);
@@ -4115,6 +4153,9 @@ private void RefreshHeroStatusIcons(Transform statusIconRoot, HeroStats hs, int 
     bool hidden = hs != null && hs.IsHidden;
     bool stunned = hs != null && hs.IsStunned;
     bool triple = hs != null && hs.IsTripleBladeEmpoweredThisTurn;
+
+    int attackBoost = (hs != null) ? hs.BonusDamageNextAttack : 0;
+    bool attackBoostActive = attackBoost > 0;
     bool bleeding = hs != null && hs.IsBleeding;
     int bleedStacks = (hs != null) ? hs.BleedStacks : 0;
 
@@ -4129,6 +4170,10 @@ private void RefreshHeroStatusIcons(Transform statusIconRoot, HeroStats hs, int 
     EnsureHeroStatusIcon(statusIconRoot, "Hidden", statusIconHiddenSprite, hidden);
     EnsureHeroStatusIcon(statusIconRoot, "Stunned", statusIconStunnedSprite, stunned);
     EnsureHeroStatusIcon(statusIconRoot, "TripleBlade", statusIconTripleBladeEmpoweredSprite, triple);
+
+    var attackBoostIcon = EnsureHeroStatusIcon(statusIconRoot, "AttackBoost", statusIconAttackBoostSprite, attackBoostActive);
+    if (attackBoostIcon != null)
+        EnsureHeroStatusStacks(attackBoostIcon, attackBoostActive ? attackBoost : 0);
 
     var corrosionIcon = EnsureHeroStatusIcon(statusIconRoot, "Corrosion", statusIconCorrosionSprite, corrosion);
     if (corrosionIcon != null)
