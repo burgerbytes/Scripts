@@ -1,23 +1,51 @@
 using UnityEngine;
 using UnityEngine.Serialization;
+using System.Reflection;
 
-/// <summary>
-/// Receives animation events (AttackImpact / AttackFinished) and fans them out to BattleManager + impact SFX.
-/// ZERO per-attack wiring: on AttackImpact it asks BattleManager whether the current impact should be treated as magic.
-/// 
-/// NOTE: This file includes FormerlySerializedAs attributes so your previously-assigned Inspector fields
-/// (from the old single-clip version) don't get wiped when upgrading.
-/// </summary>
 public class AnimatorImpactEvents : MonoBehaviour
 {
-    [Header("SFX")]
-    // Back-compat: this used to be named "attackImpactSfx" (single-clip version)
+    public enum ImpactSfxType
+    {
+        Melee,
+        Block,
+        AttackMagic,
+        HealingMagic,
+
+        FireMagic,
+        IceMagic,
+        ThunderMagic,
+        WaterMagic,
+        WindMagic,
+        EarthMagic,
+
+        AtkBuff,
+        DefBuff,
+        Charge,
+        Poison
+    }
+
+    [Header("Impact SFX Clips")]
     [FormerlySerializedAs("attackImpactSfx")]
     [SerializeField] private AudioClip meleeImpactSfx;
+    [SerializeField] private AudioClip blockSfx;
+    [SerializeField] private AudioClip attackMagicImpactSfx;
+    [SerializeField] private AudioClip healingMagicImpactSfx;
 
-    [SerializeField] private AudioClip magicImpactSfx;
+    [Header("Elemental Magic")]
+    [SerializeField] private AudioClip fireMagicSfx;
+    [SerializeField] private AudioClip iceMagicSfx;
+    [SerializeField] private AudioClip thunderMagicSfx;
+    [SerializeField] private AudioClip waterMagicSfx;
+    [SerializeField] private AudioClip windMagicSfx;
+    [SerializeField] private AudioClip earthMagicSfx;
 
-    // Back-compat: this used to be named "attackImpactVolume"
+    [Header("Buff / Status")]
+    [SerializeField] private AudioClip atkBuffSfx;
+    [SerializeField] private AudioClip defBuffSfx;
+    [SerializeField] private AudioClip chargeSfx;
+    [SerializeField] private AudioClip poisonSfx;
+
+    [Header("Audio Settings")]
     [FormerlySerializedAs("attackImpactVolume")]
     [SerializeField, Range(0f, 1f)] private float impactVolume = 1f;
 
@@ -25,8 +53,7 @@ public class AnimatorImpactEvents : MonoBehaviour
     [SerializeField] private Vector2 pitchRange = new Vector2(0.95f, 1.05f);
 
     [Header("Fallback")]
-    [Tooltip("If BattleManager cannot be found, which clip should we use?")]
-    [SerializeField] private bool fallbackToMagic = false;
+    [SerializeField] private ImpactSfxType fallbackType = ImpactSfxType.Melee;
 
     [Header("Debug")]
     [SerializeField] private bool logMissingClips = false;
@@ -34,46 +61,81 @@ public class AnimatorImpactEvents : MonoBehaviour
     private BattleManager _bm;
     private AudioSource _audioSource;
 
+    private bool _hasPendingOverride;
+    private ImpactSfxType _pendingOverride;
+
     private void Awake()
     {
-        // Cache BattleManager once (instead of searching every animation event call)
         _bm = FindObjectOfType<BattleManager>();
 
-        // Prefer an AudioSource on this same object (or parent). If none exists, we’ll fall back gracefully.
         _audioSource = GetComponent<AudioSource>();
         if (_audioSource == null)
             _audioSource = GetComponentInParent<AudioSource>();
     }
 
-    // Animation Event hook (impact frame)
+    // ============================
+    // PUBLIC API (CALL BEFORE ANIM)
+    // ============================
+
+    public void SetImpactSfx(ImpactSfxType type)
+    {
+        _hasPendingOverride = true;
+        _pendingOverride = type;
+    }
+
+    // Convenience helpers (optional but nice)
+    public void SetImpactSfxMelee()        => SetImpactSfx(ImpactSfxType.Melee);
+    public void SetImpactSfxBlock()        => SetImpactSfx(ImpactSfxType.Block);
+    public void SetImpactSfxFire()          => SetImpactSfx(ImpactSfxType.FireMagic);
+    public void SetImpactSfxIce()           => SetImpactSfx(ImpactSfxType.IceMagic);
+    public void SetImpactSfxThunder()       => SetImpactSfx(ImpactSfxType.ThunderMagic);
+    public void SetImpactSfxWater()         => SetImpactSfx(ImpactSfxType.WaterMagic);
+    public void SetImpactSfxWind()          => SetImpactSfx(ImpactSfxType.WindMagic);
+    public void SetImpactSfxEarth()         => SetImpactSfx(ImpactSfxType.EarthMagic);
+    public void SetImpactSfxAtkBuff()       => SetImpactSfx(ImpactSfxType.AtkBuff);
+    public void SetImpactSfxDefBuff()       => SetImpactSfx(ImpactSfxType.DefBuff);
+    public void SetImpactSfxCharge()        => SetImpactSfx(ImpactSfxType.Charge);
+    public void SetImpactSfxPoison()        => SetImpactSfx(ImpactSfxType.Poison);
+    public void SetImpactSfxHealing()       => SetImpactSfx(ImpactSfxType.HealingMagic);
+
+    public void ClearImpactOverride() => _hasPendingOverride = false;
+
+    // ============================
+    // ANIMATION EVENTS
+    // ============================
+
     public void AttackImpact()
     {
-        // Existing behavior
-        if (_bm != null) _bm.NotifyAttackImpact();
+        if (_bm != null)
+            _bm.NotifyAttackImpact();
 
-        // Impact SFX (auto-select melee vs magic)
-        bool isMagic = (_bm != null) ? _bm.IsCurrentImpactMagic() : fallbackToMagic;
-        PlayImpactSfx(isMagic);
+        ImpactSfxType type = _hasPendingOverride ? _pendingOverride : fallbackType;
+        _hasPendingOverride = false;
+
+        PlayImpactSfx(type);
     }
 
-    // Optional Animation Event hook (end of animation)
     public void AttackFinished()
     {
-        if (_bm != null) _bm.NotifyAttackFinished();
+        if (_bm != null)
+            _bm.NotifyAttackFinished();
     }
 
-    private void PlayImpactSfx(bool magic)
+    // ============================
+    // INTERNAL
+    // ============================
+
+    private void PlayImpactSfx(ImpactSfxType type)
     {
-        AudioClip clip = magic ? magicImpactSfx : meleeImpactSfx;
+        AudioClip clip = GetClip(type);
 
         if (clip == null)
         {
             if (logMissingClips)
-                Debug.LogWarning($"[AnimatorImpactEvents] Missing {(magic ? "magic" : "melee")}ImpactSfx on {name}.", this);
+                Debug.LogWarning($"[AnimatorImpactEvents] Missing SFX for {type}", this);
             return;
         }
 
-        // Best path: use a cached AudioSource (no temp objects, no searches)
         if (_audioSource != null)
         {
             float originalPitch = _audioSource.pitch;
@@ -83,17 +145,37 @@ public class AnimatorImpactEvents : MonoBehaviour
 
             _audioSource.PlayOneShot(clip, impactVolume);
 
-            // Restore pitch so other sounds (or subsequent clips) aren’t affected
             if (randomizePitch)
                 _audioSource.pitch = originalPitch;
+        }
+        else
+        {
+            AudioSource.PlayClipAtPoint(clip, transform.position, impactVolume);
+        }
+    }
 
-            return;
+    private AudioClip GetClip(ImpactSfxType type)
+    {
+        switch (type)
+        {
+            case ImpactSfxType.Melee:        return meleeImpactSfx;
+            case ImpactSfxType.Block:        return blockSfx;
+            case ImpactSfxType.AttackMagic:  return attackMagicImpactSfx;
+            case ImpactSfxType.HealingMagic: return healingMagicImpactSfx;
+
+            case ImpactSfxType.FireMagic:    return fireMagicSfx;
+            case ImpactSfxType.IceMagic:     return iceMagicSfx;
+            case ImpactSfxType.ThunderMagic: return thunderMagicSfx;
+            case ImpactSfxType.WaterMagic:   return waterMagicSfx;
+            case ImpactSfxType.WindMagic:    return windMagicSfx;
+            case ImpactSfxType.EarthMagic:   return earthMagicSfx;
+
+            case ImpactSfxType.AtkBuff:      return atkBuffSfx;
+            case ImpactSfxType.DefBuff:      return defBuffSfx;
+            case ImpactSfxType.Charge:       return chargeSfx;
+            case ImpactSfxType.Poison:       return poisonSfx;
         }
 
-        // Fallback: play at camera position if no AudioSource exists on the attacker
-        if (Camera.main != null)
-            AudioSource.PlayClipAtPoint(clip, Camera.main.transform.position, impactVolume);
-        else if (logMissingClips)
-            Debug.LogWarning($"[AnimatorImpactEvents] No AudioSource and no Camera.main to play clip at point on {name}.", this);
+        return null;
     }
 }
