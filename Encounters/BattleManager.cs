@@ -2406,7 +2406,7 @@ if (summoned)
                 if (ability != null && ability.momentumOnKill && reelSpinSystem != null)
                     yield return StartCoroutine(reelSpinSystem.MomentumSpinAndInstantCollect(_pendingActorIndex));
                     
-                RemoveMonster(enemyTarget);
+                HandleMonsterKilled(enemyTarget);
             }
         }
 
@@ -3651,13 +3651,15 @@ if (summoned)
     {
         if (m == null) return;
 
-        // Prevent double-processing if something calls this twice.
         if (!_activeMonsters.Contains(m))
             return;
 
-        // Optionally play death FX here if you want.
-        // (Your RemoveMonster currently just deactivates.)
-        // m.PlayDeathEffects();
+        // 🔊 Play death SFX BEFORE deactivation
+        var sfx = m.GetComponent<MonsterSFX>();
+        if (sfx != null)
+        {
+            sfx.PlayDeathSFX();
+        }
 
         RemoveMonster(m);
     }

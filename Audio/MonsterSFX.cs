@@ -1,66 +1,41 @@
-// PATH: Assets/Scripts/Audio/MonsterSFX.cs
 using UnityEngine;
-using System.Collections;
 
 public class MonsterSFX : MonoBehaviour
 {
     [Header("Death SFX")]
     [SerializeField] private AudioClip[] deathClips;
+    [SerializeField, Range(0f, 1f)] private float deathVolume = 1f;
 
-    [Tooltip("Optional volume multiplier for death sounds.")]
-    [Range(0f, 1f)]
-    [SerializeField] private float deathVolume = 1f;
-
-    private AudioSource _audioSource;
-
-    private void Awake()
-    {
-        _audioSource = GetComponent<AudioSource>();
-        if (_audioSource == null)
-            _audioSource = gameObject.AddComponent<AudioSource>();
-
-        _audioSource.playOnAwake = false;
-        _audioSource.spatialBlend = 0f; // 2D by default
-    }
+    [Header("Audio Settings")]
+    [Tooltip("0 = 2D (recommended for UI-style combat), 1 = full 3D")]
+    [SerializeField, Range(0f, 1f)] private float spatialBlend = 0f;
 
     /// <summary>
-    /// Plays a death clip (random if multiple). Returns clip length in seconds (0 if none).
+    /// Plays a monster death sound that survives the monster being deactivated.
+    /// Safe to call right before RemoveMonster().
     /// </summary>
-    public float PlayDeathSFX(float trimSeconds = 2.2f)
+    public void PlayDeathSFX()
     {
-        if (deathClips == null || deathClips.Length == 0 || _audioSource == null)
-            return 0f;
+        if (deathClips == null || deathClips.Length == 0)
+            return;
 
-        AudioClip clip = deathClips[Random.Range(0, deathClips.Length)];
+        var clip = deathClips[Random.Range(0, deathClips.Length)];
         if (clip == null)
-            return 0f;
+            return;
 
-        _audioSource.clip = clip;
-        _audioSource.volume = deathVolume;
-        _audioSource.Play();
+        // Create a temporary GameObject that is NOT tied to the monster lifetime
+        GameObject oneShot = new GameObject($"MonsterDeathSFX_{clip.name}");
+        oneShot.transform.position = transform.position;
 
-        float playTime = Mathf.Max(0f, clip.length - trimSeconds);
-        StartCoroutine(FadeOutAfter(playTime, 0.08f));
+        AudioSource source = oneShot.AddComponent<AudioSource>();
+        source.clip = clip;
+        source.volume = deathVolume;
+        source.spatialBlend = spatialBlend;
+        source.playOnAwake = false;
 
-        return playTime;
+        source.Play();
+
+        // Clean up after the clip finishes
+        Destroy(oneShot, clip.length + 0.1f);
     }
-
-    private IEnumerator FadeOutAfter(float delay, float fadeDuration)
-    {
-        yield return new WaitForSeconds(delay);
-
-        float startVol = _audioSource.volume;
-        float t = 0f;
-
-        while (t < fadeDuration)
-        {
-            _audioSource.volume = Mathf.Lerp(startVol, 0f, t / fadeDuration);
-            t += Time.deltaTime;
-            yield return null;
-        }
-
-        _audioSource.Stop();
-        _audioSource.volume = startVol;
-    }
-
 }
