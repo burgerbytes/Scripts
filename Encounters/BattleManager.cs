@@ -634,6 +634,53 @@ public class BattleManager : MonoBehaviour
         if (logFlow) Debug.Log("[Battle][AnimEvent] AttackFinished received.");
         _attackFinished = true;
     }
+    /// <summary>
+    /// Used by animation-event receivers (e.g., AnimatorImpactEvents) to choose the correct impact SFX
+    /// without requiring per-attack wiring. Returns true when the currently resolving/pending ability is considered magic.
+    /// Heuristic: checks ability tags first, then falls back to element name (non-Physical/non-None treated as magic).
+    /// </summary>
+    public bool IsCurrentImpactMagic()
+    {
+        AbilityDefinitionSO a = _pendingAbility;
+        if (a == null) return false;
+
+        // 1) Tags-based check (most explicit). Works whether tags are strings or enums.
+        try
+        {
+            if (a.tags != null)
+            {
+                foreach (var t in a.tags)
+                {
+                    if (t == null) continue;
+                    string ts = t.ToString();
+                    if (string.IsNullOrEmpty(ts)) continue;
+
+                    // Explicit magic-ish tags
+                    if (ts.IndexOf("magic", System.StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                    if (ts.IndexOf("spell", System.StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                    if (ts.IndexOf("arcane", System.StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                    if (ts.IndexOf("element", System.StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                    if (ts.IndexOf("holy", System.StringComparison.OrdinalIgnoreCase) >= 0) return true;
+
+                    // Explicit melee/physical-ish tags
+                    if (ts.IndexOf("melee", System.StringComparison.OrdinalIgnoreCase) >= 0) return false;
+                    if (ts.IndexOf("physical", System.StringComparison.OrdinalIgnoreCase) >= 0) return false;
+                }
+            }
+        }
+        catch { /* ignore tag iteration issues */ }
+
+        // 2) Element-based fallback. Treat anything other than 'Physical'/'None'/'Neutral' as magic.
+        string eName = (a.element != null) ? a.element.ToString() : "";
+        if (string.IsNullOrEmpty(eName)) return false;
+
+        if (eName.Equals("Physical", System.StringComparison.OrdinalIgnoreCase)) return false;
+        if (eName.Equals("None", System.StringComparison.OrdinalIgnoreCase)) return false;
+        if (eName.Equals("Neutral", System.StringComparison.OrdinalIgnoreCase)) return false;
+
+        return true;
+    }
+
 
     public void StartNewRun()
     {
