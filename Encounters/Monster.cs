@@ -223,6 +223,35 @@ public class Monster : MonoBehaviour
 
     private BattleManager _battleManager;
 
+    // ------------------------
+    // Targeting override (Taunt)
+    // ------------------------
+    [Header("Targeting Override (Taunt)")]
+    [Tooltip("If >= 0, this monster will target that party index the next time BattleManager plans its intent. Cleared after the intent is planned.")]
+    [SerializeField] private int _forcedTargetPartyIndex = -1;
+
+    public bool HasForcedTargetPartyIndex => _forcedTargetPartyIndex >= 0;
+    public int ForcedTargetPartyIndex => _forcedTargetPartyIndex;
+
+    public void SetForcedTargetPartyIndex(int partyIndex)
+    {
+        _forcedTargetPartyIndex = partyIndex;
+        if (debugStatusLogs)
+            Debug.Log($"[Monster][Taunt] Forced target set to partyIndex={partyIndex} monster={name}", this);
+    }
+
+    public bool TryGetForcedTargetPartyIndex(out int partyIndex)
+    {
+        partyIndex = _forcedTargetPartyIndex;
+        return partyIndex >= 0;
+    }
+
+    public void ClearForcedTargetPartyIndex()
+    {
+        _forcedTargetPartyIndex = -1;
+    }
+
+
     // Summon tracking (per battle, per attack index)
     private readonly System.Collections.Generic.Dictionary<int, int> _summonUsesThisBattle = new System.Collections.Generic.Dictionary<int, int>();
 
@@ -671,3 +700,4 @@ public class Monster : MonoBehaviour
 
 
 ////////////////////////////////////////////////////////////
+

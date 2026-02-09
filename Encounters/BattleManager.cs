@@ -2093,7 +2093,57 @@ private bool TryRunLevel5EvolutionNow()
                 if (logFlow) Debug.Log($"[Battle][Resolve] Done waiting for impact. impactFired={_impactFired} elapsed={elapsed:0.000}s", this);
             }
 
-            bool doesDamage = ability.isDamaging;
+            // Taunt: force this enemy to target the casting fighter on its next intent, and immediately
+            // update any already-planned intent for this enemy so UI + execution reflect the new target.
+            if (IsTauntAbility(ability))
+            {
+                // Force this enemy to target the casting hero (typically the Fighter) immediately.
+                int tauntCasterIndex = _pendingActorIndex;
+                // _party is a list of PartyMemberRuntime, so we must locate the index by matching stats.
+                if (tauntCasterIndex < 0 && actorStats != null && _party != null)
+                {
+                    for (int i = 0; i < _party.Count; i++)
+                    {
+                        if (_party[i] != null && _party[i].stats == actorStats)
+                        {
+                            tauntCasterIndex = i;
+                            break;
+                        }
+                    }
+                }
+
+                if (tauntCasterIndex >= 0)
+                {
+                    enemyTarget.SetForcedTargetPartyIndex(tauntCasterIndex);
+
+                    // If intents were already planned for the upcoming enemy phase, retarget them now
+                    // so the UI updates immediately (player sees the taunt right away).
+                    if (_plannedIntents.Count == 0)
+                        PlanEnemyIntents();
+
+                    RetargetPlannedIntentsForEnemy(enemyTarget, tauntCasterIndex);
+
+                    // Broadcast updated intents for UI listeners.
+                    OnEnemyIntentsPlanned?.Invoke(new List<EnemyIntent>(_plannedIntents));
+                }
+
+                // Taunt also grants the caster block (shield) even though this is an enemy-target ability.
+                if (ability.shieldAmount > 0 && actorStats != null)
+                {
+                    if (logFlow) Debug.Log($"[Battle][Taunt] Granting block to caster. amount={ability.shieldAmount} caster={actorStats.name} shieldBefore={actorStats.Shield}", this);
+                    actorStats.AddShield(ability.shieldAmount);
+                    if (logFlow) Debug.Log($"[Battle][Taunt] Block granted. caster={actorStats.name} shieldAfter={actorStats.Shield}", this);
+                }
+
+                NotifyPartyChanged();
+            }
+
+            // Non-damaging abilities (isDamaging == false) should NEVER apply any damage by default.
+            // This makes utility abilities like Taunt/Focus Rune safe even if the caster has high Attack.
+            bool doesDamage = (ability != null && ability.isDamaging);
+
+            if (!doesDamage && logFlow)
+                Debug.Log($"[Battle][Resolve] Non-damaging ability -> skipping damage application. ability={ability.abilityName}", this);
 
             int shownDamage = 0;
             int dealt = 0;
@@ -2610,6 +2660,34 @@ private bool TryRunLevel5EvolutionNow()
         OnPendingAbilityCleared?.Invoke();
     }
 
+
+    private static bool IsTauntAbility(AbilityDefinitionSO a)
+    {
+        if (a == null) return false;
+        // Support both the display field and the ScriptableObject asset name.
+        return string.Equals(a.abilityName, "Taunt", System.StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(a.name, "Taunt", System.StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void RetargetPlannedIntentsForEnemy(Monster enemy, int newTargetPartyIndex)
+    {
+        if (enemy == null) return;
+        if (_plannedIntents == null || _plannedIntents.Count == 0) return;
+
+        for (int i = 0; i < _plannedIntents.Count; i++)
+        {
+            var intent = _plannedIntents[i];
+            if (intent.enemy != enemy) continue;
+
+            // Only meaningful for single-target attack intents.
+            if (intent.isAoe) continue;
+            if (intent.type == IntentType.Summon) continue;
+
+            intent.targetPartyIndex = newTargetPartyIndex;
+            _plannedIntents[i] = intent;
+        }
+    }
+
     private void PlanEnemyIntents()
     {
         _plannedIntents.Clear();
@@ -2619,7 +2697,22 @@ private bool TryRunLevel5EvolutionNow()
             Monster m = _activeMonsters[i];
             if (m == null || m.IsDead) continue;
 
-            int targetIdx = GetRandomLivingTargetIndex();
+            int targetIdx = -1;
+
+            // Taunt support: if the monster has a forced target, use it (if alive) and clear it immediately.
+            if (m != null && m.TryGetForcedTargetPartyIndex(out int forcedIdx))
+            {
+                bool validForced = IsValidPartyIndex(forcedIdx) && _party != null && forcedIdx < _party.Count && _party[forcedIdx] != null && !_party[forcedIdx].IsDead;
+                if (validForced)
+                    targetIdx = forcedIdx;
+
+                // One-shot: clear regardless so stale taunts don't persist.
+                m.ClearForcedTargetPartyIndex();
+            }
+
+            if (targetIdx < 0)
+                targetIdx = GetRandomLivingTargetIndex();
+
             if (targetIdx < 0) continue;
 
             ChooseMonsterAttackForIntent(m,
@@ -5106,3 +5199,5 @@ if (logPassiveBridge)
         }
     }
 }
+
+
