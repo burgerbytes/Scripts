@@ -21,6 +21,44 @@ public class ReelSpinSystem : MonoBehaviour
         [Header("UI")]
         [Tooltip("Image on the pick-ally button that shows which hero this reel belongs to.")]
         public Image pickAllyPortraitImage;
+
+        [Header("Spin Tuning (Per Reel)")]
+        [Tooltip("If enabled, overrides this reel's 3D spin speed (degrees/second).")]
+        public bool overrideSpinSpeed = false;
+
+        [Tooltip("Spin speed in degrees/second when overrideSpinSpeed is enabled.")]
+        public float spinDegreesPerSecond = 720f;
+
+        [Tooltip("If enabled, overrides this reel's minimum spin duration (seconds). This effectively controls how long the reel spins for.")]
+        public bool overrideMinSpinDuration = false;
+
+        [Tooltip("Minimum spin duration (seconds) when overrideMinSpinDuration is enabled.")]
+        public float minSpinDurationSeconds = 1.5f;
+
+        [Header("Spin SFX (Per Reel)")]
+        [Tooltip("AudioSource used for THIS reel's spin loop SFX. If null, ReelSpinSystem will try to create one on the reel's 3D GameObject.")]
+        public AudioSource spinSfxSource;
+
+        [Tooltip("Optional clip override for THIS reel. If null, ReelSpinSystem will fall back to the global spinSfxClip / source clip.")]
+        public AudioClip spinSfxClip;
+
+        [Range(0f, 1f)]
+        [Tooltip("Volume for THIS reel's spin SFX.")]
+        public float spinSfxVolume = 0.7f;
+
+
+        [Range(0f, 1f)]
+        [Tooltip("Master volume multiplier for ALL SFX on THIS reel (applied on top of per-SFX volume).")]
+        public float reelSfxVolume = 1f;
+
+        [Tooltip("If true, the spin SFX will loop and be stopped automatically when the reel stops.")]
+        public bool loopSpinSfx = true;
+
+        [Tooltip("If true, randomizes pitch each spin for a little variety.")]
+        public bool randomizeSpinPitch = false;
+
+        [Tooltip("Pitch range used when randomizeSpinPitch is enabled.")]
+        public Vector2 spinPitchRange = new Vector2(0.95f, 1.05f);
     }
 
     [Serializable]
@@ -81,6 +119,11 @@ public class ReelSpinSystem : MonoBehaviour
     [Tooltip("Play the spin sound when a spin begins.")]
     [SerializeField] private bool playSpinSfx = true;
 
+
+    [Header("Reel SFX Volume")]
+    [Range(0f, 1f)]
+    [Tooltip("Master volume multiplier applied to all reel-related SFX (spin loops, match stingers, etc.).")]
+    [SerializeField] private float reelSfxMasterVolume = 1f;
     [Header("3-in-a-Row SFX")]
     [Tooltip("Play a special sound when the 3 landed midrow symbols match.")]
     [SerializeField] private bool playThreeMatchSfx = true;
@@ -184,6 +227,8 @@ public class ReelSpinSystem : MonoBehaviour
     [SerializeField] private bool logCorrosion = true;
     [SerializeField] private bool logCorrosionConversionProbe = true;
 
+
+    [SerializeField] private bool logFlow = false;
 
 /// <summary>Called by BattleManager at the start of each battle.</summary>
     public void ResetBattleSubstitutionState()
@@ -1334,6 +1379,106 @@ for (int qi = 0; qi < quadCount; qi++)
         spinSfxSource.PlayOneShot(clipToPlay);
     }
 
+// ---------------- Per-Reel Spin Tuning + SFX ----------------
+
+private void ApplyPerReelSpinTuning(ReelEntry entry)
+{
+    if (entry == null || entry.reel3d == null) return;
+
+    if (entry.overrideSpinSpeed)
+        entry.reel3d.SpinDegreesPerSecond = Mathf.Max(1f, entry.spinDegreesPerSecond);
+
+    if (entry.overrideMinSpinDuration)
+        entry.reel3d.MinSpinDurationSeconds = Mathf.Max(0f, entry.minSpinDurationSeconds);
+}
+
+private AudioSource EnsurePerReelSpinSfxSource(ReelEntry entry)
+{
+    if (entry == null) return null;
+
+    if (entry.spinSfxSource != null)
+        return entry.spinSfxSource;
+
+    // Prefer attaching the audio source to the 3D reel object (world-space reel).
+    if (entry.reel3d != null)
+    {
+        var src = entry.reel3d.GetComponent<AudioSource>();
+        if (src == null) src = entry.reel3d.gameObject.AddComponent<AudioSource>();
+        src.playOnAwake = false;
+        entry.spinSfxSource = src;
+        return src;
+    }
+
+    // Fallback: attach to the 2D UI object if present.
+    if (entry.ui != null)
+    {
+        var src = entry.ui.GetComponent<AudioSource>();
+        if (src == null) src = entry.ui.gameObject.AddComponent<AudioSource>();
+        src.playOnAwake = false;
+        entry.spinSfxSource = src;
+        return src;
+    }
+
+    return null;
+}
+
+private void StartPerReelSpinSfx(ReelEntry entry)
+{
+    if (!playSpinSfx) return;
+    if (entry == null) return;
+
+    var src = EnsurePerReelSpinSfxSource(entry);
+    if (src == null) return;
+
+    // Prefer per-reel clip, then global override, then whatever is on the source.
+    AudioClip clipToPlay = entry.spinSfxClip != null
+        ? entry.spinSfxClip
+        : (spinSfxClip != null ? spinSfxClip : src.clip);
+
+    // As a last resort, fall back to the global source's clip (if any).
+    if (clipToPlay == null && spinSfxSource != null)
+        clipToPlay = spinSfxSource.clip;
+
+    if (clipToPlay == null)
+    {
+        // Don't spam warnings every frame; only warn if we're about to spin this reel.
+        if (logFlow)
+            Debug.LogWarning($"[ReelSpinSystem] Per-reel spin SFX requested but no clip is assigned for reelId='{entry.reelId}'.", this);
+        return;
+    }
+
+    src.clip = clipToPlay;
+    src.loop = entry.loopSpinSfx;
+
+    src.volume = Mathf.Clamp01(entry.spinSfxVolume) * Mathf.Clamp01(entry.reelSfxVolume) * Mathf.Clamp01(reelSfxMasterVolume);
+if (entry.randomizeSpinPitch)
+    {
+        float lo = Mathf.Min(entry.spinPitchRange.x, entry.spinPitchRange.y);
+        float hi = Mathf.Max(entry.spinPitchRange.x, entry.spinPitchRange.y);
+        src.pitch = UnityEngine.Random.Range(lo, hi);
+    }
+    else
+    {
+        src.pitch = 1f;
+    }
+
+    // Restart cleanly.
+    if (src.isPlaying) src.Stop();
+    src.Play();
+}
+
+private void StopPerReelSpinSfx(ReelEntry entry)
+{
+    if (entry == null) return;
+    var src = entry.spinSfxSource;
+    if (src == null) return;
+
+    // Only stop if we're the ones looping (avoid interrupting other UI sounds).
+    if (src.isPlaying)
+        src.Stop();
+}
+
+
     private void PlayThreeMatchSfx()
     {
         if (!playThreeMatchSfx) return;
@@ -1351,8 +1496,8 @@ for (int qi = 0; qi < quadCount; qi++)
             return;
         }
 
-        src.PlayOneShot(threeMatchSfxClip);
-    }
+        src.PlayOneShot(threeMatchSfxClip, Mathf.Clamp01(reelSfxMasterVolume));
+}
 
     private static bool IsThreeOfAKind(List<ReelSymbolSO> landed)
     {
@@ -1385,14 +1530,48 @@ for (int qi = 0; qi < quadCount; qi++)
             }
         }
 
-        // ✅ Play spin SFX exactly when we instruct reels to spin
-        PlaySpinSfx();
+        // Per-reel tuning + per-reel looping SFX
+// (Audio loops are stopped automatically as each reel finishes.)
+bool[] sfxStopped = new bool[three.Count];
 
-        foreach (var e in three)
-            e.reel3d.SpinRandom(rng, minFullRotations3D);
+for (int i = 0; i < three.Count; i++)
+{
+    var entry = three[i];
+    if (entry == null || entry.reel3d == null) continue;
 
-        while (!All3DReelsFinished(three))
-            yield return null;
+    ApplyPerReelSpinTuning(entry);
+    StartPerReelSpinSfx(entry);
+    entry.reel3d.SpinRandom(rng, minFullRotations3D);
+}
+
+while (!All3DReelsFinished(three))
+{
+    // Stop each reel's spin SFX as soon as that reel completes.
+    for (int i = 0; i < three.Count; i++)
+    {
+        if (sfxStopped[i]) continue;
+
+        var entry = three[i];
+        if (entry == null || entry.reel3d == null)
+        {
+            sfxStopped[i] = true;
+            continue;
+        }
+
+        if (!entry.reel3d.IsSpinning)
+        {
+            StopPerReelSpinSfx(entry);
+            sfxStopped[i] = true;
+        }
+    }
+
+    yield return null;
+}
+
+// Safety: ensure all spin loops are stopped.
+for (int i = 0; i < three.Count; i++)
+    StopPerReelSpinSfx(three[i]);
+
 
         var landed = new List<ReelSymbolSO>(3);
         var multipliers = new List<int>(3);
