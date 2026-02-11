@@ -93,6 +93,22 @@ public class Reel3DColumn : MonoBehaviour
     [Tooltip("How long to shake the selected icon (seconds).")]
     [SerializeField] private float reelcraftIconShakeDuration = 0.12f;
 
+    [Header("Pop FX")]
+    [Tooltip("Scale multiplier used when popping the midrow icon.")]
+    [SerializeField] private float midrowPopScale = 1.18f;
+
+    [Tooltip("Duration (seconds) of the midrow icon pop (up + down).")]
+    [SerializeField] private float midrowPopDuration = 0.12f;
+
+    [Tooltip("Scale multiplier used when popping the whole reel (e.g., 3-of-a-kind).")]
+    [SerializeField] private float reelPopScale = 1.06f;
+
+    [Tooltip("Duration (seconds) of the reel pop (up + down).")]
+    [SerializeField] private float reelPopDuration = 0.16f;
+
+    private Coroutine _iconPopRoutine;
+    private Coroutine _reelPopRoutine;
+
     [Tooltip("How much to desaturate the doubled copy (0 = no desat, 1 = full gray).")]
     [SerializeField, Range(0f, 1f)] private float twofoldShadowDesaturation = 0.35f;
 
@@ -346,6 +362,98 @@ public class Reel3DColumn : MonoBehaviour
         }
 
         t.localPosition = start;
+    }
+
+    /// <summary>
+    /// Pops (scale punch) a specific icon quad. Used when a spin lands to emphasize the midrow result.
+    /// </summary>
+    public void PopIcon(int quadIndex, float? scaleOverride = null, float? durationOverride = null)
+    {
+        EnsureBuilt();
+        if (quadIndex < 0 || quadIndex >= _quads.Count) return;
+
+        float scale = scaleOverride.HasValue ? Mathf.Max(1f, scaleOverride.Value) : Mathf.Max(1f, midrowPopScale);
+        float dur = durationOverride.HasValue ? Mathf.Max(0.01f, durationOverride.Value) : Mathf.Max(0.01f, midrowPopDuration);
+
+        if (_iconPopRoutine != null) StopCoroutine(_iconPopRoutine);
+        _iconPopRoutine = StartCoroutine(PopIconRoutine(quadIndex, scale, dur));
+    }
+
+    private IEnumerator PopIconRoutine(int quadIndex, float scaleUp, float duration)
+    {
+        Transform t = _quads[quadIndex].frontT;
+        if (t == null) yield break;
+
+        Vector3 baseScale = t.localScale;
+        Vector3 upScale = baseScale * scaleUp;
+
+        float half = duration * 0.5f;
+        // Up
+        float e = 0f;
+        while (e < half)
+        {
+            e += Time.deltaTime;
+            float u = Mathf.Clamp01(e / Mathf.Max(0.0001f, half));
+            float eased = 1f - Mathf.Pow(1f - u, 2f);
+            t.localScale = Vector3.LerpUnclamped(baseScale, upScale, eased);
+            yield return null;
+        }
+
+        // Down
+        e = 0f;
+        while (e < half)
+        {
+            e += Time.deltaTime;
+            float u = Mathf.Clamp01(e / Mathf.Max(0.0001f, half));
+            float eased = u * u;
+            t.localScale = Vector3.LerpUnclamped(upScale, baseScale, eased);
+            yield return null;
+        }
+
+        t.localScale = baseScale;
+        _iconPopRoutine = null;
+    }
+
+    /// <summary>
+    /// Pops the entire reel object (scale punch). Useful for celebratory effects like 3-of-a-kind.
+    /// </summary>
+    public void PopReel(float? scaleOverride = null, float? durationOverride = null)
+    {
+        float scale = scaleOverride.HasValue ? Mathf.Max(1f, scaleOverride.Value) : Mathf.Max(1f, reelPopScale);
+        float dur = durationOverride.HasValue ? Mathf.Max(0.01f, durationOverride.Value) : Mathf.Max(0.01f, reelPopDuration);
+
+        if (_reelPopRoutine != null) StopCoroutine(_reelPopRoutine);
+        _reelPopRoutine = StartCoroutine(PopReelRoutine(scale, dur));
+    }
+
+    private IEnumerator PopReelRoutine(float scaleUp, float duration)
+    {
+        Vector3 baseScale = transform.localScale;
+        Vector3 upScale = baseScale * scaleUp;
+
+        float half = duration * 0.5f;
+        float e = 0f;
+        while (e < half)
+        {
+            e += Time.deltaTime;
+            float u = Mathf.Clamp01(e / Mathf.Max(0.0001f, half));
+            float eased = 1f - Mathf.Pow(1f - u, 2f);
+            transform.localScale = Vector3.LerpUnclamped(baseScale, upScale, eased);
+            yield return null;
+        }
+
+        e = 0f;
+        while (e < half)
+        {
+            e += Time.deltaTime;
+            float u = Mathf.Clamp01(e / Mathf.Max(0.0001f, half));
+            float eased = u * u;
+            transform.localScale = Vector3.LerpUnclamped(upScale, baseScale, eased);
+            yield return null;
+        }
+
+        transform.localScale = baseScale;
+        _reelPopRoutine = null;
     }
 
     /// <summary>

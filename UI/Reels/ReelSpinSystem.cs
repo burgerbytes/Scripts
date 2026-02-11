@@ -134,6 +134,37 @@ public class ReelSpinSystem : MonoBehaviour
     [Tooltip("Clip to play when 3-in-a-row happens.")]
     [SerializeField] private AudioClip threeMatchSfxClip;
 
+    [Header("Spin Feedback FX")]
+    [Tooltip("If true, when the reels stop the midrow icon on each reel will 'pop' (scale punch).")]
+    [SerializeField] private bool popMidrowOnStop = true;
+
+    [Tooltip("Scale multiplier for the midrow icon pop.")]
+    [SerializeField] private float midrowPopScale = 1.18f;
+
+    [Tooltip("Duration (seconds) of the midrow icon pop.")]
+    [SerializeField] private float midrowPopDuration = 0.12f;
+
+
+
+    [Tooltip("If true, resource gains will be applied (and popups will spawn) asynchronously as each reel stops, rather than waiting for all reels to finish.")]
+    [SerializeField] private bool asyncResourcePopupsPerReelStop = true;
+
+    [Tooltip("If true, 3-of-a-kind will also pop the whole reels for a celebratory effect.")]
+    [SerializeField] private bool popReelsOnThreeOfAKind = true;
+
+    [Tooltip("Scale multiplier for the whole-reel pop on 3-of-a-kind.")]
+    [SerializeField] private float threeOfAKindReelPopScale = 1.06f;
+
+    [Tooltip("Duration (seconds) for the whole-reel pop on 3-of-a-kind.")]
+    [SerializeField] private float threeOfAKindReelPopDuration = 0.16f;
+
+    [Tooltip("Optional extra shake (local position jitter) on 3-of-a-kind.")]
+    [SerializeField] private bool shakeReelsOnThreeOfAKind = true;
+
+    [SerializeField] private float threeOfAKindShakeDuration = 0.14f;
+    [SerializeField] private float threeOfAKindShakeMagnitude = 10f;
+
+
     [Header("Reward Reel Mode (Post-Battle)")]
     [Tooltip("Optional default reward config. BattleManager can override by calling EnterRewardMode(...)")]
     [SerializeField] private RewardReelConfigSO defaultRewardConfig;
@@ -1499,6 +1530,32 @@ private void StopPerReelSpinSfx(ReelEntry entry)
         src.PlayOneShot(threeMatchSfxClip, Mathf.Clamp01(reelSfxMasterVolume));
 }
 
+
+    private void TriggerThreeOfAKindFX(List<ReelEntry> three)
+    {
+        if (three == null) return;
+
+        if (popReelsOnThreeOfAKind)
+        {
+            for (int i = 0; i < three.Count; i++)
+            {
+                var e = three[i];
+                if (e != null && e.reel3d != null)
+                    e.reel3d.PopReel(threeOfAKindReelPopScale, threeOfAKindReelPopDuration);
+            }
+        }
+
+        if (shakeReelsOnThreeOfAKind)
+        {
+            for (int i = 0; i < three.Count; i++)
+            {
+                var e = three[i];
+                if (e != null && e.reel3d != null)
+                    StartCoroutine(e.reel3d.ShakeRoutine(threeOfAKindShakeDuration, threeOfAKindShakeMagnitude));
+            }
+        }
+    }
+
     private static bool IsThreeOfAKind(List<ReelSymbolSO> landed)
     {
         if (landed == null || landed.Count < 3) return false;
@@ -1534,6 +1591,17 @@ private void StopPerReelSpinSfx(ReelEntry entry)
 // (Audio loops are stopped automatically as each reel finishes.)
 bool[] sfxStopped = new bool[three.Count];
 
+// Async stop processing (resource popups can fire as each reel stops)
+bool[] reelProcessed = new bool[three.Count];
+ReelSymbolSO[] stoppedSymbols = new ReelSymbolSO[three.Count];
+int[] stoppedQuadIndices = new int[three.Count];
+int[] stoppedMultipliers = new int[three.Count];
+
+// Track what we've already paid this spin (so auto-payout doesn't double-add later)
+int asyncPaidA = 0, asyncPaidD = 0, asyncPaidM = 0, asyncPaidW = 0;
+
+bool asyncWillPayResources = asyncResourcePopupsPerReelStop && payoutMode == PayoutMode.AutoPayoutOnSpin && !_rewardModeActive && resourcePool != null;
+
 for (int i = 0; i < three.Count; i++)
 {
     var entry = three[i];
@@ -1546,35 +1614,139 @@ for (int i = 0; i < three.Count; i++)
 
 while (!All3DReelsFinished(three))
 {
-    // Stop each reel's spin SFX as soon as that reel completes.
+    // Stop each reel's spin SFX (and optionally fire resource gain) as soon as that reel completes.
     for (int i = 0; i < three.Count; i++)
     {
-        if (sfxStopped[i]) continue;
+        if (sfxStopped[i] && (!asyncResourcePopupsPerReelStop || reelProcessed[i]))
+            continue;
 
         var entry = three[i];
         if (entry == null || entry.reel3d == null)
         {
             sfxStopped[i] = true;
+            reelProcessed[i] = true;
             continue;
         }
 
         if (!entry.reel3d.IsSpinning)
         {
-            StopPerReelSpinSfx(entry);
-            sfxStopped[i] = true;
+            if (!sfxStopped[i])
+            {
+                StopPerReelSpinSfx(entry);
+                sfxStopped[i] = true;
+            }
+
+            if (asyncResourcePopupsPerReelStop && !reelProcessed[i])
+            {
+                int qi;
+                int mult;
+                ReelSymbolSO sym = entry.reel3d.GetMidrowSymbolAndMultiplier(midrowPlane, out qi, out mult);
+
+                stoppedSymbols[i] = sym;
+                stoppedQuadIndices[i] = qi;
+                stoppedMultipliers[i] = Mathf.Max(1, mult);
+
+                // Midrow emphasis pop immediately when this reel lands.
+                if (popMidrowOnStop)
+                    entry.reel3d.PopIcon(qi, midrowPopScale, midrowPopDuration);
+
+                // Apply resources immediately so popups spawn while other reels are still spinning.
+                if (asyncWillPayResources)
+                {
+                    if (TryMapSymbol(sym, out ResourceType rt, out int amt) && rt != ResourceType.Null && amt > 0)
+                    {
+                        int total = amt * stoppedMultipliers[i];
+
+                        switch (rt)
+                        {
+                            case ResourceType.Attack: asyncPaidA += total; resourcePool.Add(total, 0, 0, 0); break;
+                            case ResourceType.Defend: asyncPaidD += total; resourcePool.Add(0, total, 0, 0); break;
+                            case ResourceType.Magic:  asyncPaidM += total; resourcePool.Add(0, 0, total, 0); break;
+                            case ResourceType.Wild:   asyncPaidW += total; resourcePool.Add(0, 0, 0, total); break;
+                        }
+                    }
+                }
+
+                // Corrosion rule: pay out normally THIS spin, then convert to NULL for future spins.
+                if (IsReelQuadCorroded(i, qi) && SymbolGrantsResources(sym))
+                    ConvertCorrodedLandedTokenToNull(i, qi);
+
+                reelProcessed[i] = true;
+            }
         }
     }
 
     yield return null;
 }
 
-// Safety: ensure all spin loops are stopped.
-for (int i = 0; i < three.Count; i++)
-    StopPerReelSpinSfx(three[i]);
+// If the final reel stops between frames, the while-condition can exit before we process it.
+// Process any remaining reels now (only those that are actually stopped).
+if (asyncResourcePopupsPerReelStop)
+{
+    for (int i = 0; i < three.Count; i++)
+    {
+        if (reelProcessed[i]) continue;
 
+        var entry = three[i];
+        if (entry == null || entry.reel3d == null)
+        {
+            sfxStopped[i] = true;
+            reelProcessed[i] = true;
+            continue;
+        }
 
-        var landed = new List<ReelSymbolSO>(3);
+        // Safety: don't process while it's still spinning (shouldn't happen because the while-loop ended,
+        // but timing can be tricky if IsSpinning flips late).
+        if (entry.reel3d.IsSpinning)
+            continue;
+
+        // Stop per-reel SFX if still playing
+        if (!sfxStopped[i])
+        {
+            StopPerReelSpinSfx(entry);
+            sfxStopped[i] = true;
+        }
+
+        int qi;
+        int mult;
+        ReelSymbolSO sym = entry.reel3d.GetMidrowSymbolAndMultiplier(midrowPlane, out qi, out mult);
+
+        stoppedSymbols[i] = sym;
+        stoppedQuadIndices[i] = qi;
+        stoppedMultipliers[i] = Mathf.Max(1, mult);
+
+        // Midrow emphasis pop immediately when this reel lands.
+        if (popMidrowOnStop)
+            entry.reel3d.PopIcon(qi, midrowPopScale, midrowPopDuration);
+
+        // Apply resources immediately so popups spawn while other reels are still spinning.
+        if (asyncWillPayResources)
+        {
+            if (TryMapSymbol(sym, out ResourceType rt, out int amt) && rt != ResourceType.Null && amt > 0)
+            {
+                int total = amt * stoppedMultipliers[i];
+
+                switch (rt)
+                {
+                    case ResourceType.Attack: asyncPaidA += total; resourcePool.Add(total, 0, 0, 0); break;
+                    case ResourceType.Defend: asyncPaidD += total; resourcePool.Add(0, total, 0, 0); break;
+                    case ResourceType.Magic:  asyncPaidM += total; resourcePool.Add(0, 0, total, 0); break;
+                    case ResourceType.Wild:   asyncPaidW += total; resourcePool.Add(0, 0, 0, total); break;
+                }
+            }
+        }
+
+        // Corrosion rule: pay out normally THIS spin, then convert to NULL for future spins.
+        if (IsReelQuadCorroded(i, qi) && SymbolGrantsResources(sym))
+            ConvertCorrodedLandedTokenToNull(i, qi);
+
+        reelProcessed[i] = true;
+    }
+}
+
+var landed = new List<ReelSymbolSO>(3);
         var multipliers = new List<int>(3);
+        var landedQuadIndices = new List<int>(3);
         var parts = new List<string>(3);
 
         for (int i = 0; i < three.Count; i++)
@@ -1583,7 +1755,8 @@ for (int i = 0; i < three.Count; i++)
             int qi;
             int mult;
             ReelSymbolSO sym = entry.reel3d.GetMidrowSymbolAndMultiplier(midrowPlane, out qi, out mult);
-                        landed.Add(sym);
+            landed.Add(sym);
+            landedQuadIndices.Add(qi);
             multipliers.Add(Mathf.Max(1, mult));
 
             if (log3DAdjacentSymbolsEachSpin && entry != null && entry.reel3d != null)
@@ -1615,9 +1788,24 @@ for (int i = 0; i < three.Count; i++)
         if (log3DMidRowSymbolsEachSpin)
             Debug.Log($"[ReelSpinSystem] 3D MidRow (post-select): {string.Join(" | ", parts)}");
 
-        // ✅ Play special SFX if 3-in-a-row
-        if (IsThreeOfAKind(landed))
+        // Midrow emphasis pop (each reel)
+        if (popMidrowOnStop && !asyncResourcePopupsPerReelStop)
+        {
+            for (int i = 0; i < three.Count && i < landedQuadIndices.Count; i++)
+            {
+                var e = three[i];
+                if (e != null && e.reel3d != null)
+                    e.reel3d.PopIcon(landedQuadIndices[i], midrowPopScale, midrowPopDuration);
+            }
+        }
+
+        // ✅ 3-in-a-row feedback
+        bool isThreeOfAKind = IsThreeOfAKind(landed);
+        if (isThreeOfAKind)
+        {
             PlayThreeMatchSfx();
+            TriggerThreeOfAKindFX(three);
+        }
 
         if (_rewardModeActive)
         {
@@ -1625,6 +1813,9 @@ for (int i = 0; i < three.Count; i++)
         }
         else
         {
+            if (!asyncResourcePopupsPerReelStop)
+            {
+
 
             // Corrosion: if a corroded token is in the midrow during payout, convert it into NULL NOW
             // and refresh the landed symbols so this payout treats it as NULL.
@@ -1648,6 +1839,8 @@ for (int i = 0; i < three.Count; i++)
                     Debug.Log($"[ReelSpinSystem][Corrosion] Midrow payout refresh reel={ci}: '{(before != null ? before.name : "<null>")}' -> '{(refreshed != null ? refreshed.name : "<null>")}'", this);
             }
 
+            }
+
 
             // Build landed info and notify listeners (item synergies, UI, etc.)
             SpinLandedInfo info = BuildSpinLandedInfo(landed);
@@ -1660,7 +1853,19 @@ for (int i = 0; i < three.Count; i++)
                 Debug.Log($"[ReelSpinSystem][PassiveBridge] OnCurrentLandedChanged invoke: symbols={(info.symbols != null ? info.symbols.Count : 0)} A={info.attackCount} D={info.defendCount} M={info.magicCount} W={info.wildCount}", this);
             OnCurrentLandedChanged?.Invoke(info);
 
-            ResetAutoPayoutTracking();
+            if (asyncWillPayResources)
+            {
+                // We've already applied resources as each reel stopped; prevent auto-payout from double-adding.
+                _autoPayoutAppliedForCurrentLanded = true;
+                _autoPaidA = asyncPaidA;
+                _autoPaidD = asyncPaidD;
+                _autoPaidM = asyncPaidM;
+                _autoPaidW = asyncPaidW;
+            }
+            else
+            {
+                ResetAutoPayoutTracking();
+            }
             SetPendingFromSymbols(landed, multipliers);
         }
 
