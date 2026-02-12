@@ -1,5 +1,8 @@
+// GUID: 5a8a06222baaa2b4883d4bb71239e8a6
+////////////////////////////////////////////////////////////
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
 
 public class PartyHUD : MonoBehaviour
 {
@@ -7,6 +10,14 @@ public class PartyHUD : MonoBehaviour
     [SerializeField] private BattleManager battleManager;
     [SerializeField] private AbilityMenuUI abilityMenu;
     [SerializeField] private HeroStatsPanelUI statsPanel;
+    [SerializeField] private QuickAbilityMenuUI quickAbilityMenu;
+
+    [Header("Quick Ability Menu")]
+    [Tooltip("If true, the QuickAbilitiesButton will be enabled and will toggle the QuickAbilityMenuUI.\nPortrait click ability menu remains available either way.")]
+    [SerializeField] private bool enableQuickAbilityMenu = true;
+
+    [Tooltip("The single button that opens the Quick Ability Menu.")]
+    [SerializeField] private Button quickAbilitiesButton;
 
     [Header("Reelcraft")]
     [SerializeField] private ReelcraftPanelUI reelcraftPanel;
@@ -30,13 +41,12 @@ public class PartyHUD : MonoBehaviour
     private int _selectedIndex = -1;
     private bool _panelVisible = false;
     private bool _hasShownStatsOnce = false;
-    private bool _menusWereHiddenForReelPhase = false;
 
-    // Reelcraft icon forwarding is prone to race conditions (HUD enabling before party spawns,
-    // class selection/evolution swapping class defs, panel objects toggling inactive/active).
-    // We keep a cached list of forwarders and opportunistically poke them to resync.
-    private List<ReelcraftAbilityButtonForwarder> _reelcraftForwarders = new List<ReelcraftAbilityButtonForwarder>();
+    private readonly List<ReelcraftAbilityButtonForwarder> _reelcraftForwarders = new List<ReelcraftAbilityButtonForwarder>();
     private float _lastReelcraftResyncTime = -999f;
+
+    // Prevent double-toggle if you also wire the button in the inspector
+    private bool _addedQuickButtonListenerAtRuntime = false;
 
     private void Awake()
     {
@@ -52,26 +62,29 @@ public class PartyHUD : MonoBehaviour
         if (reelSpinSystem == null)
             reelSpinSystem = FindFirstObjectByType<ReelSpinSystem>();
 
-        // IMPORTANT: Reelcraft panel may start inactive, so we must find it including inactive objects.
+        if (quickAbilityMenu == null)
+            quickAbilityMenu = FindFirstObjectByType<QuickAbilityMenuUI>(FindObjectsInactive.Include);
+
+        if (quickAbilitiesButton == null)
+        {
+            var go = GameObject.Find("QuickAbilitiesButton");
+            if (go != null) quickAbilitiesButton = go.GetComponent<Button>();
+        }
+
         EnsureReelcraftPanelRef();
 
         if (slots == null || slots.Length == 0)
             slots = GetComponentsInChildren<PartyHUDSlot>(true);
 
-        // Keep the stats panel hidden on boot unless the player explicitly selects a hero.
         if (statsPanel != null && showStatsOnlyAfterPickAllyClick)
             statsPanel.Hide();
 
-        // Initialize slots
         if (slots != null)
         {
             for (int i = 0; i < slots.Length; i++)
             {
                 if (slots[i] == null) continue;
-
                 slots[i].Initialize(OnSlotClicked);
-
-                // assign portrait immediately
                 AssignPortraitToSlot(i);
             }
         }
@@ -91,15 +104,24 @@ public class PartyHUD : MonoBehaviour
         if (reelSpinSystem != null)
             reelSpinSystem.OnReelPhaseChanged += HandleReelPhaseChanged;
 
-        // Class selection -> battle scene transition can re-enable objects; keep stats hidden until user clicks.
+        // Only add runtime listener if the button has no persistent listeners
+        _addedQuickButtonListenerAtRuntime = false;
+        if (quickAbilitiesButton != null)
+        {
+            int persistent = quickAbilitiesButton.onClick.GetPersistentEventCount();
+            if (persistent == 0)
+            {
+                quickAbilitiesButton.onClick.AddListener(OnQuickAbilitiesButtonClicked);
+                _addedQuickButtonListenerAtRuntime = true;
+            }
+        }
+
         if (statsPanel != null && showStatsOnlyAfterPickAllyClick && !_hasShownStatsOnce)
             statsPanel.Hide();
 
         RefreshAllSlots();
-
-        // Kick the reelcraft icons immediately on enable. (Forwarders will keep retrying
-        // while enabled, but this ensures the first frame after enable gets a chance.)
         ForceResyncReelcraftForwarders();
+        UpdateQuickAbilitiesButtonInteractable();
     }
 
     private void OnDisable()
@@ -113,7 +135,46 @@ public class PartyHUD : MonoBehaviour
 
         if (reelSpinSystem != null)
             reelSpinSystem.OnReelPhaseChanged -= HandleReelPhaseChanged;
+
+        if (quickAbilitiesButton != null && _addedQuickButtonListenerAtRuntime)
+            quickAbilitiesButton.onClick.RemoveListener(OnQuickAbilitiesButtonClicked);
+
+        _addedQuickButtonListenerAtRuntime = false;
     }
+
+    private void Update()
+    {
+        // Keep the button state correct even if state events miss a transition frame.
+        UpdateQuickAbilitiesButtonInteractable();
+    }
+
+    private void OnQuickAbilitiesButtonClicked()
+    {
+        if (!enableQuickAbilityMenu) return;
+        if (quickAbilityMenu == null) return;
+
+        quickAbilityMenu.Toggle();
+    }
+
+    private void UpdateQuickAbilitiesButtonInteractable()
+    {
+        if (quickAbilitiesButton == null) return;
+
+        // If quick menu is not enabled, leave the button interactable as-is (don’t force-disable).
+        // This allows you to keep portrait clicks working without affecting button state.
+        if (!enableQuickAbilityMenu)
+            return;
+
+        if (battleManager == null)
+        {
+            quickAbilitiesButton.interactable = true;
+            return;
+        }
+
+        quickAbilitiesButton.interactable = battleManager.IsPlayerPhase;
+    }
+
+    // ------------------- existing behavior below -------------------
 
     private void CacheReelcraftForwarders()
     {
@@ -125,7 +186,6 @@ public class PartyHUD : MonoBehaviour
 
     private void ForceResyncReelcraftForwarders()
     {
-        // Throttle: RefreshAllSlots can be called multiple times per frame on state transitions.
         if (Time.unscaledTime - _lastReelcraftResyncTime < 0.25f)
             return;
 
@@ -145,77 +205,22 @@ public class PartyHUD : MonoBehaviour
     private void EnsureReelcraftPanelRef()
     {
         if (reelcraftPanel != null) return;
-
-        // Unity can’t find inactive objects with the default FindFirstObjectByType<T>().
-        // This prevents the “first click only wakes it up” issue.
         reelcraftPanel = FindFirstObjectByType<ReelcraftPanelUI>(FindObjectsInactive.Include);
-
-        if (debugLogs)
-            Debug.Log($"[PartyHUD] EnsureReelcraftPanelRef: found={(reelcraftPanel != null)}", this);
     }
 
-    private void ForceShowReelcraftPanelNow()
-    {
-        if (reelcraftPanel == null) return;
-
-        GameObject go = reelcraftPanel.gameObject;
-
-        if (!go.activeSelf)
-            go.SetActive(true);
-
-        // Make sure it is on top of other panels
-        go.transform.SetAsLastSibling();
-
-        // If you’re using CanvasGroup, make it visible and clickable immediately.
-        var cg = go.GetComponent<CanvasGroup>();
-        if (cg != null)
-        {
-            cg.alpha = 1f;
-            cg.interactable = true;
-            cg.blocksRaycasts = true;
-        }
-
-        // Forces layout + canvas rebuild this frame so it appears on the first click.
-        Canvas.ForceUpdateCanvases();
-    }
-
-    private void HandleReelPhaseChanged(bool inReelPhase)
-    {
-        // Reel phase and player phase are unified. Do not auto-hide/restore menus.
-        // No-op.
-    }
-
-    private void OpenAbilityMenuForSelectedHero()
-    {
-        if (battleManager == null || abilityMenu == null) return;
-        if (_selectedIndex < 0) return;
-
-        var heroStats = battleManager.GetHeroAtPartyIndex(_selectedIndex);
-        if (heroStats == null) return;
-
-        // Abilities are defined on the hero's active class definition (not on HeroStats).
-        // Prefer Advanced class if chosen, otherwise fall back to Base.
-        ClassDefinitionSO classDef = (heroStats.AdvancedClassDef != null) ? heroStats.AdvancedClassDef : heroStats.BaseClassDef;
-
-        // Filter by Starter Choice + unlock rules.
-        List<AbilityDefinitionSO> abilities = heroStats.GetUnlockedAbilitiesFromClassDef(classDef);
-
-        abilityMenu.OpenForHero(heroStats, abilities);
-    }
+    private void HandleReelPhaseChanged(bool inReelPhase) { }
 
     private void OnBattleStateChanged(BattleManager.BattleState _)
     {
-        // Any state change can affect previews/selection UI.
         RefreshAllSlots();
+        UpdateQuickAbilitiesButtonInteractable();
     }
 
     private void OnActivePartyMemberChanged(int newIndex)
     {
-        // Keep HUD selection in sync with battle manager.
         _selectedIndex = newIndex;
         _panelVisible = true;
 
-        // Update stats only if we're allowed to auto-show, or the player has already shown it at least once.
         if (statsPanel != null && battleManager != null)
         {
             HeroStats hero = battleManager.GetHeroAtPartyIndex(newIndex);
@@ -223,10 +228,11 @@ public class PartyHUD : MonoBehaviour
             if (!showStatsOnlyAfterPickAllyClick || _hasShownStatsOnce)
                 statsPanel.ShowForHero(hero);
             else
-                statsPanel.SetHero(null); // stay hidden until click
+                statsPanel.SetHero(null);
         }
 
         RefreshAllSlots();
+        UpdateQuickAbilitiesButtonInteractable();
     }
 
     private void AssignPortraitToSlot(int index)
@@ -237,7 +243,6 @@ public class PartyHUD : MonoBehaviour
         HeroStats hero = battleManager.GetHeroAtPartyIndex(index);
         if (hero == null) return;
 
-        // ✅ Use HERO prefab portrait, not class portrait
         slots[index].SetPortrait(hero.Portrait);
     }
 
@@ -251,92 +256,32 @@ public class PartyHUD : MonoBehaviour
             if (slot == null) continue;
 
             var snapshot = battleManager.GetPartyMemberSnapshot(i);
-
-            // Use planned intents for preview while in player phase.
             int incoming = battleManager.GetIncomingDamagePreviewForPartyIndex(i);
 
             bool isSelected = (i == _selectedIndex);
             slot.Render(snapshot, isSelected, incoming);
         }
 
-        // Party changed (including evolution) can happen after HUD enable; make sure icons catch up.
         ForceResyncReelcraftForwarders();
     }
 
-    // Called by ReelcraftAbilityButtonForwarder (and potentially other UI) to open Reelcraft for a given party index.
-    // This mirrors the reel-phase click behavior in OnSlotClicked, but does not depend on the portrait button.
-    public void OpenReelcraftForPartyIndex(int index)
+    private void OnSlotClicked(int index)
     {
-        if (debugLogs)
-            Debug.Log($"[PartyHUD] OpenReelcraftForPartyIndex(index={index})", this);
+        if (battleManager == null) return;
 
-        if (battleManager == null)
-        {
-            Debug.LogWarning("[PartyHUD] Missing BattleManager reference.");
-            return;
-        }
-
-        // Ensure we have a ReelSpinSystem ref even if inspector wiring is missing.
-        if (reelSpinSystem == null)
-            reelSpinSystem = FindFirstObjectByType<ReelSpinSystem>();
-
-        // Reelcraft is allowed outside reel phase (still once-per-battle and controller-gated).
-
-        EnsureReelcraftPanelRef();
-
-        battleManager.SetActivePartyMember(index);
-        _selectedIndex = index;
-        _panelVisible = false;
-
-        if (abilityMenu != null) abilityMenu.Close();
-        if (statsPanel != null) statsPanel.Hide();
-
-        if (reelcraftPanel != null)
-        {
-            reelcraftPanel.ShowForHero(index);
-            ForceShowReelcraftPanelNow();
-        }
-        else
-        {
-            Debug.LogWarning("[PartyHUD] ReelcraftPanelUI was not found (even including inactive).");
-        }
-
-        // Highlight selection, but do not show the normal action panel.
-        for (int i = 0; i < slots.Length; i++)
-        {
-            if (slots[i] == null) continue;
-            slots[i].SetSelected(i == _selectedIndex);
-            slots[i].SetActionPanelVisible(false);
-        }
-
-        RefreshAllSlots();
-    }
-
-void OnSlotClicked(int index)
-    {
-        if (debugLogs)
-            Debug.Log($"[PartyHUD] OnSlotClicked(index={index})", this);
-
-        if (battleManager == null)
-        {
-            Debug.LogWarning("[PartyHUD] Missing BattleManager reference.");
-            return;
-        }
-
-        // If we're currently casting a self/ally ability (e.g., Block), allow the click to confirm targeting.
         if (battleManager.TryHandlePartySlotClickForPendingAbility(index))
         {
             RefreshAllSlots();
             return;
         }
 
-        // Reels are always active now; clicking a portrait should behave normally.
-        // Keep Reelcraft panel hidden unless explicitly opened.
         if (reelcraftPanel != null) reelcraftPanel.Hide();
 
         battleManager.SetActivePartyMember(index);
 
-        // Update stats panel to match the clicked hero (and ensure it's visible).
+        // Clicking portraits should STILL work:
+        // - Show stats
+        // - Open the legacy ability menu (unchanged behavior)
         if (statsPanel != null)
         {
             HeroStats clickedHero = battleManager.GetHeroAtPartyIndex(index);
@@ -352,7 +297,6 @@ void OnSlotClicked(int index)
             _panelVisible = true;
         }
 
-        // Highlight + panel visibility
         for (int i = 0; i < slots.Length; i++)
         {
             if (slots[i] == null) continue;
@@ -360,54 +304,36 @@ void OnSlotClicked(int index)
             slots[i].SetActionPanelVisible(_panelVisible && i == _selectedIndex);
         }
 
-        // Open ability menu for that hero
-        HeroStats hero = battleManager.GetHeroAtPartyIndex(index);
-        if (hero == null) return;
-
-        ClassDefinitionSO classDef = hero.AdvancedClassDef != null ? hero.AdvancedClassDef : hero.BaseClassDef;
-
-        List<AbilityDefinitionSO> abilities = BuildAbilityListFromClassDef(hero, classDef);
-
+        // ✅ Always keep legacy portrait-click menu working.
         if (abilityMenu != null)
         {
-            if (debugLogs)
+            HeroStats hero = battleManager.GetHeroAtPartyIndex(index);
+            if (hero != null)
             {
-                Debug.Log(
-                    $"[PartyHUD] Opening ability menu for '{hero.name}'. " +
-                    $"classDef={(classDef ? classDef.className : "NULL")}, " +
-                    $"abilitiesCount={abilities.Count}",
-                    this);
+                ClassDefinitionSO classDef = hero.AdvancedClassDef != null ? hero.AdvancedClassDef : hero.BaseClassDef;
+                List<AbilityDefinitionSO> abilities = hero.GetUnlockedAbilitiesFromClassDef(classDef);
+                abilityMenu.OpenForHero(hero, abilities);
             }
-
-            abilityMenu.OpenForHero(hero, abilities);
         }
 
+        // Optional: if you want the quick menu to close when switching heroes:
+        if (quickAbilityMenu != null)
+            quickAbilityMenu.Close();
+
         RefreshAllSlots();
+        UpdateQuickAbilitiesButtonInteractable();
     }
 
-    private List<AbilityDefinitionSO> BuildAbilityListFromClassDef(HeroStats hero, ClassDefinitionSO classDef)
-    {
-        if (hero == null) return new List<AbilityDefinitionSO>();
-        return hero.GetUnlockedAbilitiesFromClassDef(classDef);
-    }
-
-    /// <summary>
-    /// Returns the RectTransform for the PartyHUD slot for the given party index.
-    /// Used by systems that want to position UI elements (e.g., enemy intent) relative to a slot.
-    /// </summary>
     public RectTransform GetSlotRectTransform(int partyIndex)
     {
         if (slots == null || slots.Length == 0) return null;
 
-        // Fast path: array index matches party index
         if (partyIndex >= 0 && partyIndex < slots.Length && slots[partyIndex] != null)
         {
-            // Only accept if the slot's configured PartyIndex matches, otherwise fall through to search.
             if (slots[partyIndex].PartyIndex == partyIndex)
                 return slots[partyIndex].RectTransform;
         }
 
-        // Search path: find slot whose configured PartyIndex matches.
         for (int i = 0; i < slots.Length; i++)
         {
             var s = slots[i];
@@ -419,9 +345,3 @@ void OnSlotClicked(int index)
         return null;
     }
 }
-
-
-////////////////////////////////////////////////////////////
-
-
-////////////////////////////////////////////////////////////

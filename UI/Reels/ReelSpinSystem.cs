@@ -124,6 +124,9 @@ public class ReelSpinSystem : MonoBehaviour
     [Range(0f, 1f)]
     [Tooltip("Master volume multiplier applied to all reel-related SFX (spin loops, match stingers, etc.).")]
     [SerializeField] private float reelSfxMasterVolume = 1f;
+
+    [Tooltip("Additional global multiplier applied ONLY to looping reel spin SFX volumes. Useful for balancing reels vs chimes.")]
+    [SerializeField] private float spinLoopGlobalVolumeMultiplier = 0.35f;
     [Header("3-in-a-Row SFX")]
     [Tooltip("Play a special sound when the 3 landed midrow symbols match.")]
     [SerializeField] private bool playThreeMatchSfx = true;
@@ -134,7 +137,42 @@ public class ReelSpinSystem : MonoBehaviour
     [Tooltip("Clip to play when 3-in-a-row happens.")]
     [SerializeField] private AudioClip threeMatchSfxClip;
 
-    [Header("Spin Feedback FX")]
+    
+    [Header("Midrow Stop Chime")]
+    [Tooltip("If true, plays a chime when each reel stops and its midrow icon pops.")]
+    [SerializeField] private bool playMidrowStopChime = true;
+
+    [Tooltip("AudioSource used for the midrow stop chime. If null, ReelSpinSystem will create one on this GameObject.")]
+    [SerializeField] private AudioSource midrowStopChimeSource;
+
+    [Tooltip("Chime clip to play when a reel stops and the midrow token pops.")]
+    [SerializeField] private AudioClip midrowStopChimeClip;
+
+    [Range(0f, 1f)]
+    [Tooltip("Volume for the midrow stop chime (multiplied by Reel SFX Master Volume).")]
+    [SerializeField] private float midrowStopChimeVolume = 0.8f;
+
+[Tooltip("Extra gain multiplier for the chime. Can exceed 1 to cut through other SFX without an AudioMixer.")]
+    [SerializeField] private float midrowStopChimeGain = 2.0f;
+
+    [Tooltip("If true, chime volume is also multiplied by Reel SFX Master Volume. If false, chime is independent of the reel master.")]
+    [SerializeField] private bool chimeUsesReelSfxMasterVolume = false;
+
+    [Tooltip("Starting pitch for the first reel's chime each spin.")]
+    [SerializeField] private float midrowStopChimePitchStart = 1f;
+
+    [Tooltip("Pitch increase per reel stopped within a single spin.")]
+    [SerializeField] private float midrowStopChimePitchStep = 0.08f;
+
+    [Tooltip("Maximum pitch cap for the chime.")]
+    [SerializeField] private float midrowStopChimePitchMax = 1.4f;
+
+    [Header("Midrow Stop Chime - Null Pitch")]
+    [Tooltip("When a reel lands on a NULL symbol, multiply the chime pitch by this value (lower = deeper).")]
+    [SerializeField] private float midrowStopChimeNullPitchMultiplier = 0.82f;
+
+
+[Header("Spin Feedback FX")]
     [Tooltip("If true, when the reels stop the midrow icon on each reel will 'pop' (scale punch).")]
     [SerializeField] private bool popMidrowOnStop = true;
 
@@ -657,6 +695,10 @@ for (int qi = 0; qi < quadCount; qi++)
     private bool spinning;
     private int spinsRemaining;
 
+    // Per-spin stop order counter for midrow stop chime pitch stepping.
+    private int _midrowStopChimeIndex;
+
+
     // Pending payout (current computed totals for the currently-landed symbols)
     // In CashoutOnly mode, these are collected on Cashout.
     // In AutoPayoutOnSpin mode, we apply the delta to ResourcePool immediately whenever these totals change.
@@ -759,6 +801,16 @@ for (int qi = 0; qi < quadCount; qi++)
         // Default 3-match source to spin source if not provided.
         if (threeMatchSfxSource == null)
             threeMatchSfxSource = spinSfxSource;
+        // Ensure midrow stop chime source exists if chime is enabled.
+        if (playMidrowStopChime && midrowStopChimeClip != null)
+        {
+            if (midrowStopChimeSource == null)
+                midrowStopChimeSource = gameObject.AddComponent<AudioSource>();
+
+            midrowStopChimeSource.playOnAwake = false;
+            midrowStopChimeSource.spatialBlend = 0f; // 2D UI sound
+            midrowStopChimeSource.loop = false;
+        }
     }
 
     private void OnDestroy()
@@ -1481,7 +1533,7 @@ private void StartPerReelSpinSfx(ReelEntry entry)
     src.clip = clipToPlay;
     src.loop = entry.loopSpinSfx;
 
-    src.volume = Mathf.Clamp01(entry.spinSfxVolume) * Mathf.Clamp01(entry.reelSfxVolume) * Mathf.Clamp01(reelSfxMasterVolume);
+    src.volume = Mathf.Clamp01(entry.spinSfxVolume) * Mathf.Clamp01(entry.reelSfxVolume) * Mathf.Clamp01(reelSfxMasterVolume) * Mathf.Clamp01(spinLoopGlobalVolumeMultiplier);
 if (entry.randomizeSpinPitch)
     {
         float lo = Mathf.Min(entry.spinPitchRange.x, entry.spinPitchRange.y);
@@ -1530,6 +1582,64 @@ private void StopPerReelSpinSfx(ReelEntry entry)
         src.PlayOneShot(threeMatchSfxClip, Mathf.Clamp01(reelSfxMasterVolume));
 }
 
+    private void EnsureMidrowStopChimeSource()
+    {
+        if (midrowStopChimeSource == null)
+            midrowStopChimeSource = gameObject.AddComponent<AudioSource>();
+
+        midrowStopChimeSource.playOnAwake = false;
+        midrowStopChimeSource.spatialBlend = 0f; // 2D UI sound
+        midrowStopChimeSource.loop = false;
+        // Keep volume at 1; we use PlayOneShot(volumeScale) per-chime.
+        midrowStopChimeSource.volume = 1f;
+    }
+
+    private bool IsNullLandedSymbol(ReelSymbolSO sym)
+    {
+        if (sym == null) return false;
+
+        // Prefer the explicit mapping when available.
+        if (TryMapSymbol(sym, out ResourceType rt, out int amt))
+            return rt == ResourceType.Null;
+
+        // Fallback by name (covers cases where the symbol isn’t in the map).
+        string n = sym.name ?? string.Empty;
+        return n.IndexOf("null", StringComparison.OrdinalIgnoreCase) >= 0 ||
+               n.IndexOf("nul", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private void PlayMidrowStopChime(bool landedNull)
+    {
+        if (!playMidrowStopChime) return;
+        if (midrowStopChimeClip == null) return;
+
+        EnsureMidrowStopChimeSource();
+        AudioSource src = midrowStopChimeSource;
+        if (src == null)
+        {
+            Debug.LogWarning("[ReelSpinSystem] Midrow stop chime requested but no AudioSource is available.", this);
+            return;
+        }
+
+        // Pitch steps up for each reel that stops within this spin.
+        float pitch = midrowStopChimePitchStart + (midrowStopChimePitchStep * Mathf.Max(0, _midrowStopChimeIndex));
+        pitch = Mathf.Min(pitch, midrowStopChimePitchMax);
+
+        // If the reel landed on NULL, deepen the chime.
+        if (landedNull)
+            pitch *= Mathf.Max(0.01f, midrowStopChimeNullPitchMultiplier);
+
+        src.pitch = pitch;
+
+        float vol = Mathf.Max(0f, midrowStopChimeVolume) * Mathf.Max(0f, midrowStopChimeGain);
+        if (chimeUsesReelSfxMasterVolume)
+            vol *= Mathf.Clamp01(reelSfxMasterVolume);
+
+        // Use PlayOneShot(volumeScale) so we don’t permanently alter AudioSource.volume.
+        src.PlayOneShot(midrowStopChimeClip, vol);
+
+        _midrowStopChimeIndex++;
+    }
 
     private void TriggerThreeOfAKindFX(List<ReelEntry> three)
     {
@@ -1576,7 +1686,10 @@ private void StopPerReelSpinSfx(ReelEntry entry)
             yield break;
         }
 
-        // Apply global min duration override (optional)
+                // Reset per-spin chime pitch stepping.
+        _midrowStopChimeIndex = 0;
+
+// Apply global min duration override (optional)
         if (overrideMinSpinDuration3D)
         {
             float dur = Mathf.Max(0f, minSpinDurationOverride3D);
@@ -1648,7 +1761,10 @@ while (!All3DReelsFinished(three))
 
                 // Midrow emphasis pop immediately when this reel lands.
                 if (popMidrowOnStop)
+                {
                     entry.reel3d.PopIcon(qi, midrowPopScale, midrowPopDuration);
+                    PlayMidrowStopChime(IsNullLandedSymbol(sym));
+                }
 
                 // Apply resources immediately so popups spawn while other reels are still spinning.
                 if (asyncWillPayResources)
@@ -1717,7 +1833,10 @@ if (asyncResourcePopupsPerReelStop)
 
         // Midrow emphasis pop immediately when this reel lands.
         if (popMidrowOnStop)
+        {
             entry.reel3d.PopIcon(qi, midrowPopScale, midrowPopDuration);
+            PlayMidrowStopChime(IsNullLandedSymbol(sym));
+        }
 
         // Apply resources immediately so popups spawn while other reels are still spinning.
         if (asyncWillPayResources)
@@ -1791,15 +1910,17 @@ var landed = new List<ReelSymbolSO>(3);
         // Midrow emphasis pop (each reel)
         if (popMidrowOnStop && !asyncResourcePopupsPerReelStop)
         {
-            for (int i = 0; i < three.Count && i < landedQuadIndices.Count; i++)
+            for (int i = 0; i < three.Count && i < landedQuadIndices.Count && i < landed.Count; i++)
             {
                 var e = three[i];
                 if (e != null && e.reel3d != null)
+                {
                     e.reel3d.PopIcon(landedQuadIndices[i], midrowPopScale, midrowPopDuration);
+                    PlayMidrowStopChime(IsNullLandedSymbol(landed[i]));
+                }
             }
         }
-
-        // ✅ 3-in-a-row feedback
+// ✅ 3-in-a-row feedback
         bool isThreeOfAKind = IsThreeOfAKind(landed);
         if (isThreeOfAKind)
         {
