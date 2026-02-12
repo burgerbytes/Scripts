@@ -55,6 +55,31 @@ public class NewStartupClassSelectionPanel : MonoBehaviour
     [Tooltip("Material name that indicates a 'null character' quad. Example: Null_Char_Reel_Icon")]
     [SerializeField] private string nullCharacterMaterialName = "Null_Char_Reel_Icon";
 
+    [Header("Music / Character Select")]
+    [Tooltip("Optional music sync component that plays a bass stem and character stems sample-synced to it.")]
+    [SerializeField] private StartupCharacterSelectionMusicSync musicSync;
+
+    [Tooltip("If true, on Show() we will align each reel to a null/empty hero so no character stems play by default.")]
+    [SerializeField] private bool alignReelsToNullOnShow = true;
+
+    [Tooltip("Optional symbolId that represents a null/empty hero in the selection reels. If set, alignment stops when midrow id matches this.")]
+    [SerializeField] private string nullHeroSymbolId = "NULL";
+
+    [Tooltip("Max one-step nudges to attempt when aligning a reel to the null/empty hero on Show().")]
+    [SerializeField] private int alignNullMaxSteps = 64;
+
+    [Tooltip("If true, we also treat the null hero quad based on the Null Character Material Name check.")]
+    [SerializeField] private bool useNullMaterialCheckForAlignment = true;
+
+    [Tooltip("Small volume emphasis applied to the hero whose reel was most recently changed.")]
+    [SerializeField] private float recentHeroVolumeBoost = 1.15f;
+
+    [Tooltip("Fade in/out time for character stems.")]
+    [SerializeField] private float stemFadeSeconds = 0.25f;
+
+    [Tooltip("If true, the most-recent hero stays emphasized until another reel changes.")]
+    [SerializeField] private bool keepRecentEmphasisUntilNextChange = true;
+
     [Header("Hero Summary UI")]
     [SerializeField] private TMP_Text heroNameText;
     [SerializeField] private TMP_Text reelcraftNameText;
@@ -92,6 +117,8 @@ public class NewStartupClassSelectionPanel : MonoBehaviour
     private Coroutine _showRoutine;
     private bool _wired;
 
+    private string _mostRecentHeroId;
+
     private void Awake()
     {
         WireOnce();
@@ -118,7 +145,16 @@ public class NewStartupClassSelectionPanel : MonoBehaviour
         if (_wired) return;
         _wired = true;
 
-        if (randomizeButton != null)
+                // Auto-wire music sync if not assigned in inspector.
+        if (musicSync == null)
+        {
+            musicSync = GetComponent<StartupCharacterSelectionMusicSync>();
+            if (musicSync == null)
+                musicSync = GetComponentInChildren<StartupCharacterSelectionMusicSync>(true);
+            if (logFlow)
+                Debug.Log($"[NewStartupClassSelectionPanel] WireOnce: musicSync={(musicSync != null ? "OK" : "NULL")} (auto-wired)", this);
+        }
+if (randomizeButton != null)
         {
             randomizeButton.onClick.RemoveAllListeners();
             randomizeButton.onClick.AddListener(OnRandomizePressed);
@@ -182,6 +218,23 @@ public class NewStartupClassSelectionPanel : MonoBehaviour
         // Let UI/reels settle so IsReelReady() becomes accurate.
         yield return null;
 
+        // Optionally align reels to a null/empty hero so no character stems play by default.
+        if (alignReelsToNullOnShow && HasValidReelsAndPlane())
+            yield return AlignAllReelsToNull();
+
+        // Start bass + stems (muted) so all character stems stay sample-synced with the bass.
+        if (musicSync != null)
+        {
+            if (logFlow) Debug.Log("[NewStartupClassSelectionPanel] ShowDeferred: starting selection music.", this);
+            musicSync.Begin();
+            musicSync.UpdateActiveHeroes(GetAllMidrowSymbolIds(), mostRecentHeroId: null);
+        }
+        else
+        {
+            Debug.LogWarning("[NewStartupClassSelectionPanel] ShowDeferred: musicSync is NULL. Bass/stems will not play (assign StartupCharacterSelectionMusicSync on this panel).", this);
+        }
+
+
         RefreshPerReelButtonInteractable();
 
         // Initial summary comes from reel 0 midrow.
@@ -190,6 +243,9 @@ public class NewStartupClassSelectionPanel : MonoBehaviour
 
         if (!string.IsNullOrEmpty(id0))
             PreviewHeroBySymbolId(id0);
+
+        if (musicSync != null)
+            musicSync.UpdateActiveHeroes(GetAllMidrowSymbolIds(), mostRecentHeroId: _mostRecentHeroId);
         else
             PreviewHeroByPrefabIndex(0);
 
@@ -198,6 +254,9 @@ public class NewStartupClassSelectionPanel : MonoBehaviour
 
     public void Hide()
     {
+        if (musicSync != null)
+            musicSync.StopAndReset();
+
         if (root != null) root.SetActive(false);
         gameObject.SetActive(false);
     }
@@ -254,6 +313,12 @@ public class NewStartupClassSelectionPanel : MonoBehaviour
 
         if (!string.IsNullOrEmpty(symbolId))
             PreviewHeroBySymbolId(symbolId);
+
+        if (musicSync != null)
+            musicSync.UpdateActiveHeroes(GetAllMidrowSymbolIds(), mostRecentHeroId: symbolId);
+
+        if (musicSync != null)
+            musicSync.UpdateActiveHeroes(GetAllMidrowSymbolIds(), mostRecentHeroId: symbolId);
     }
 
     private void OnMidrowClicked(int reelIndex)
@@ -273,6 +338,9 @@ public class NewStartupClassSelectionPanel : MonoBehaviour
 
         if (!string.IsNullOrEmpty(symbolId))
             PreviewHeroBySymbolId(symbolId);
+
+        if (musicSync != null)
+            musicSync.UpdateActiveHeroes(GetAllMidrowSymbolIds(), mostRecentHeroId: symbolId);
     }
 
     private void OnRandomizePressed()
@@ -308,6 +376,9 @@ public class NewStartupClassSelectionPanel : MonoBehaviour
 
         if (!string.IsNullOrEmpty(id0))
             PreviewHeroBySymbolId(id0);
+
+        if (musicSync != null)
+            musicSync.UpdateActiveHeroes(GetAllMidrowSymbolIds(), mostRecentHeroId: _mostRecentHeroId);
 
         SetAllButtonsInteractable(true);
         RefreshPerReelButtonInteractable();
@@ -360,7 +431,12 @@ public class NewStartupClassSelectionPanel : MonoBehaviour
 
             // Reject if: (a) no id, or (b) midrow quad is flagged as Null Character by material.
             if (!emptyId && !isNullChar)
+            {
+                _mostRecentHeroId = id;
+                if (musicSync != null)
+                    musicSync.UpdateActiveHeroes(GetAllMidrowSymbolIds(), mostRecentHeroId: id);
                 yield break;
+            }
         }
 
         if (logFlow) Debug.LogWarning($"[NewStartupClassSelectionPanel] Randomize reel={reelIndex}: max attempts reached; leaving current midrow.", this);
@@ -463,6 +539,51 @@ public class NewStartupClassSelectionPanel : MonoBehaviour
 
         Hide();
         _onConfirm?.Invoke(chosen);
+    }
+
+    private string[] GetAllMidrowSymbolIds()
+    {
+        var ids = new string[3];
+        for (int i = 0; i < 3; i++)
+            ids[i] = GetMidrowSymbolIdSafe(i, out _);
+        return ids;
+    }
+
+    private IEnumerator AlignAllReelsToNull()
+    {
+        // We do short animated one-step nudges until each reel lands on the null hero.
+        // This runs once when the panel opens if alignReelsToNullOnShow is enabled.
+        SetAllButtonsInteractable(false);
+
+        float dur = Mathf.Max(0.03f, GetScrollDurationSeconds() * 0.5f);
+
+        for (int reelIndex = 0; reelIndex < 3; reelIndex++)
+        {
+            var r = reels[reelIndex];
+            if (r == null) continue;
+
+            int steps = 0;
+            while (steps < Mathf.Max(1, alignNullMaxSteps))
+            {
+                steps++;
+
+                string curId = GetMidrowSymbolIdSafe(reelIndex, out _);
+                bool idMatch = !string.IsNullOrWhiteSpace(nullHeroSymbolId) && string.Equals(curId, nullHeroSymbolId, StringComparison.Ordinal);
+                bool matMatch = useNullMaterialCheckForAlignment && IsMidrowQuadNullCharacterByMaterial(reelIndex);
+
+                if (idMatch || matMatch)
+                    break;
+
+                if (!r.TryNudgeStepsAnimated(+1, dur, nudgeEase))
+                    break;
+
+                while (r.IsNudging)
+                    yield return null;
+            }
+        }
+
+        RefreshPerReelButtonInteractable();
+        SetAllButtonsInteractable(true);
     }
 
     private bool HasValidReelsAndPlane()

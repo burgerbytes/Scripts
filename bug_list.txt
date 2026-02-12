@@ -25,7 +25,14 @@ PHASE 1 GOALS
 - 3 heroes with defined playstyles 
 - 8 fully functional abilities for each hero
 	-fighter (first aid/ slash; battle rhythm/iron guard; heavy strike/taunt; bloodlust/resolve)
-	-mage (focus rune/dart; flame sigil/water sigil; aegis/pyre; 
+	-mage (focus rune/dart; flame sigil/water sigil; pyre/lifetide; immolate
+		- flame sigil: 
+			- acclerant - using a fire elemental ability on a target with flame sigil increases ignition stacks by 2
+			- scald - using a water elemental ability on a target with flame sigil consumes the focus rune and deals a burst of aoe water damage
+		- water sigil
+			- Tidal Surge - using a water ability on a target with water sigil doubles regen stacks
+			- steam cloud - using a flame elemental ability on a target with water sigil grants the unit conceal
+		-immolate:  
 	-ninja (backstab/conceal; subsitution/shadow fade; shuriken toss/toxic bomb; precision/plague arts)
 - Each hero has 1 evolution (player will get one evolution for one hero after each boss fight)
 - Evolution will have 2 abilities to pick from

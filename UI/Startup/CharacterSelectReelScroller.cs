@@ -15,6 +15,11 @@ public class CharacterSelectReelScroller : MonoBehaviour
     [Header("Midrow Query (optional)")]
     [SerializeField] private GameObject midrowPlane;
 
+
+
+    public Reel3DColumn ActiveReel => activeReel;
+    public GameObject MidrowPlane => midrowPlane;
+
     [Header("Nudge Animation")]
     [SerializeField] private float nudgeDurationSeconds = 0.14f;
     [SerializeField] private AnimationCurve nudgeEase;
