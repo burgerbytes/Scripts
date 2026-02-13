@@ -1,3 +1,4 @@
+using System.Collections;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -19,6 +20,25 @@ public class PartyHUDSlot : MonoBehaviour
 
     [Tooltip("If true, portraitImage will be disabled when no portrait is available.")]
     [SerializeField] private bool hidePortraitWhenNull = true;
+
+    [Header("Casting Aura (optional)")]
+    [Tooltip("Optional aura GameObject (usually an Image) shown when this hero enters cast state.")]
+    [SerializeField] private GameObject castingAuraRoot;
+
+    [Tooltip("If set, we will fade the aura via CanvasGroup (auto-added if missing).")]
+    [SerializeField] private bool useCanvasGroupForAura = true;
+
+    [Tooltip("Seconds to fade aura in/out.")]
+    [SerializeField] private float auraFadeSeconds = 0.12f;
+
+    [Tooltip("If true, aura pulses (scale) while visible.")]
+    [SerializeField] private bool pulseAura = true;
+
+    [Tooltip("Pulse speed (higher = faster).")]
+    [SerializeField] private float auraPulseSpeed = 6f;
+
+    [Tooltip("Max scale multiplier at pulse peak.")]
+    [SerializeField] private float auraPulseScale = 1.08f;
 
     [Header("Conceal / Hidden")]
     [SerializeField] private Color hiddenPortraitTint = new Color(0.65f, 0.65f, 0.65f, 1f);
@@ -69,6 +89,11 @@ public class PartyHUDSlot : MonoBehaviour
     private bool _lastShowActualShield = false;
     private int _lastShieldValue = -1;
 
+    // Aura runtime
+    private Coroutine _auraRoutine;
+    private CanvasGroup _auraCg;
+    private Vector3 _auraBaseScale = Vector3.one;
+
     public void SetPortrait(Sprite portrait)
     {
         if (portraitImage == null)
@@ -104,6 +129,8 @@ public class PartyHUDSlot : MonoBehaviour
         SetBlockVisualVisible(true);
         SetDamagePreviewVisible(false);
 
+        SetCastingAuraVisible(false);
+
         SetPortrait(null);
     }
 
@@ -133,19 +160,14 @@ public class PartyHUDSlot : MonoBehaviour
         int currentHP = snapshot.HP;
         int maxHP = Mathf.Max(1, snapshot.MaxHP);
 
-        // Conceal/Hidden: single-target attacks miss, but AoE still hits.
-        // The incomingDamagePreview value is computed by BattleManager and already accounts for that rule,
-        // so we should NOT blanket-suppress preview just because the hero is Hidden.
         int incoming = Mathf.Max(0, incomingDamagePreview);
         int predictedHP = Mathf.Max(0, currentHP - incoming);
 
         float current01 = Mathf.Clamp01((float)currentHP / maxHP);
         float predicted01 = Mathf.Clamp01((float)predictedHP / maxHP);
 
-        // Ensure we have a valid bar width BEFORE resizing any rects
         float barWidth = GetHpBarWidth();
 
-        // ✅ Red HP fill uses the same rect-width logic as the yellow preview
         ApplyBarSegment(
             rect: hpFill != null ? hpFill.rectTransform : null,
             barWidth: barWidth,
@@ -154,7 +176,6 @@ public class PartyHUDSlot : MonoBehaviour
             stretchFullHeight: true
         );
 
-        // Yellow preview segment shows loss region predicted -> current
         if (incoming > 0 && hpDamagePreviewRect != null && hpBarFullRect != null && predictedHP < currentHP)
         {
             ApplyBarSegment(
@@ -165,7 +186,6 @@ public class PartyHUDSlot : MonoBehaviour
                 stretchFullHeight: true
             );
 
-            // Put yellow on top so it can't be hidden
             hpDamagePreviewRect.SetAsLastSibling();
 
             float widthPx = Mathf.Max(0f, (current01 - predicted01) * barWidth);
@@ -219,20 +239,118 @@ public class PartyHUDSlot : MonoBehaviour
             slotButton.interactable = !snapshot.IsDead && !snapshot.IsStunned;
     }
 
+    // -------------------- Casting Aura --------------------
+
+    public void PlayCastingAura(float seconds)
+    {
+        if (castingAuraRoot == null) return;
+
+        if (_auraRoutine != null)
+            StopCoroutine(_auraRoutine);
+
+        _auraRoutine = StartCoroutine(CastingAuraRoutine(Mathf.Max(0.05f, seconds)));
+    }
+
+    public void SetCastingAuraVisible(bool visible)
+    {
+        if (castingAuraRoot == null) return;
+
+        if (_auraRoutine != null)
+        {
+            StopCoroutine(_auraRoutine);
+            _auraRoutine = null;
+        }
+
+        castingAuraRoot.SetActive(visible);
+
+        if (visible)
+            EnsureAuraSetup();
+
+        if (_auraCg != null)
+            _auraCg.alpha = visible ? 1f : 0f;
+
+        if (castingAuraRoot != null)
+            castingAuraRoot.transform.localScale = _auraBaseScale;
+    }
+
+    private void EnsureAuraSetup()
+    {
+        if (castingAuraRoot == null) return;
+
+        if (_auraBaseScale == Vector3.one && castingAuraRoot.transform != null)
+            _auraBaseScale = castingAuraRoot.transform.localScale;
+
+        if (useCanvasGroupForAura)
+        {
+            _auraCg = castingAuraRoot.GetComponent<CanvasGroup>();
+            if (_auraCg == null)
+                _auraCg = castingAuraRoot.AddComponent<CanvasGroup>();
+        }
+    }
+
+    private IEnumerator CastingAuraRoutine(float seconds)
+    {
+        EnsureAuraSetup();
+
+        castingAuraRoot.SetActive(true);
+
+        // Fade in
+        float t = 0f;
+        while (t < auraFadeSeconds)
+        {
+            t += Time.unscaledDeltaTime;
+            float a = (auraFadeSeconds <= 0f) ? 1f : Mathf.Clamp01(t / auraFadeSeconds);
+            if (_auraCg != null) _auraCg.alpha = a;
+            yield return null;
+        }
+        if (_auraCg != null) _auraCg.alpha = 1f;
+
+        // Hold + pulse
+        float elapsed = 0f;
+        while (elapsed < seconds)
+        {
+            elapsed += Time.unscaledDeltaTime;
+
+            if (pulseAura && castingAuraRoot != null)
+            {
+                float s = 1f + (Mathf.Sin(Time.unscaledTime * auraPulseSpeed) * 0.5f + 0.5f) * (auraPulseScale - 1f);
+                castingAuraRoot.transform.localScale = _auraBaseScale * s;
+            }
+
+            yield return null;
+        }
+
+        // Fade out
+        t = 0f;
+        while (t < auraFadeSeconds)
+        {
+            t += Time.unscaledDeltaTime;
+            float a = 1f - ((auraFadeSeconds <= 0f) ? 1f : Mathf.Clamp01(t / auraFadeSeconds));
+            if (_auraCg != null) _auraCg.alpha = a;
+            yield return null;
+        }
+
+        if (_auraCg != null) _auraCg.alpha = 0f;
+        if (castingAuraRoot != null)
+        {
+            castingAuraRoot.transform.localScale = _auraBaseScale;
+            castingAuraRoot.SetActive(false);
+        }
+
+        _auraRoutine = null;
+    }
+
+    // -------------------- Existing helpers --------------------
+
     private float GetHpBarWidth()
     {
         if (hpBarFullRect == null)
             return 0f;
 
-        // Layout groups can report width as 0 unless rebuilt
         LayoutRebuilder.ForceRebuildLayoutImmediate(hpBarFullRect);
         return hpBarFullRect.rect.width;
     }
 
-    /// <summary>
-    /// Resizes a rect to fill from left01 to right01 of the bar width.
-    /// This is the exact approach used by the yellow damage preview.
-    /// </summary>
     private void ApplyBarSegment(RectTransform rect, float barWidth, float left01, float right01, bool stretchFullHeight)
     {
         if (rect == null) return;
@@ -244,7 +362,6 @@ public class PartyHUDSlot : MonoBehaviour
         float rightX = right01 * barWidth;
         float width = Mathf.Max(0f, rightX - leftX);
 
-        // Anchor to left edge, stretch vertical if desired
         if (stretchFullHeight)
         {
             rect.anchorMin = new Vector2(0f, 0f);
@@ -286,32 +403,12 @@ public class PartyHUDSlot : MonoBehaviour
             actionPanelRoot.SetActive(visible);
     }
 
-    public void SetActionButtonsInteractable(bool attackEnabled, bool blockEnabled, bool endTurnEnabled)
-    {
-        if (actionPanelRoot == null)
-            return;
-
-        Button[] buttons = actionPanelRoot.GetComponentsInChildren<Button>(true);
-        foreach (Button b in buttons)
-        {
-            if (b == null) continue;
-
-            string n = b.gameObject.name.ToLowerInvariant();
-
-            if (n.Contains("attack")) b.interactable = attackEnabled;
-            else if (n.Contains("block")) b.interactable = blockEnabled;
-            else if (n.Contains("end")) b.interactable = endTurnEnabled;
-        }
-    }
-
     private void SetBlockVisualVisible(bool visible)
     {
         if (blockIcon != null)
             blockIcon.SetActive(visible);
 
-        if (blockValueText != null)
-            blockValueText.gameObject.SetActive(visible);
+        if (blockValueText != null && !visible)
+            blockValueText.text = string.Empty;
     }
 }
-
-

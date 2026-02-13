@@ -1,5 +1,3 @@
-// GUID: 4b0c6a1e6f0a4f2fb2e7a9b8d24b2c10
-////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using TMPro;
@@ -27,8 +25,8 @@ public class QuickAbilityIconButtonUI : MonoBehaviour, IPointerDownHandler, IPoi
     private ResourcePool _resourcePool;
 
     private Func<HeroStats, AbilityDefinitionSO, bool> _canUseExtraPredicate;
-    private Action<HeroStats, AbilityDefinitionSO> _onClickCast;
-    private Action<HeroStats, AbilityDefinitionSO> _onHoldDetails;
+    private Action<QuickAbilityIconButtonUI, HeroStats, AbilityDefinitionSO> _onClick;
+    private Action<QuickAbilityIconButtonUI, HeroStats, AbilityDefinitionSO> _onHoldDetails;
 
     private bool _pointerDown;
     private bool _didHold;
@@ -38,15 +36,16 @@ public class QuickAbilityIconButtonUI : MonoBehaviour, IPointerDownHandler, IPoi
         HeroStats hero,
         AbilityDefinitionSO ability,
         ResourcePool resourcePool,
-        Action<HeroStats, AbilityDefinitionSO> onClickCast,
-        Action<HeroStats, AbilityDefinitionSO> onHoldDetails,
-        Func<HeroStats, AbilityDefinitionSO, bool> canUseExtraPredicate = null
+        Action<QuickAbilityIconButtonUI, HeroStats, AbilityDefinitionSO> onClick,
+        Action<QuickAbilityIconButtonUI, HeroStats, AbilityDefinitionSO> onHoldDetails,
+        Func<HeroStats, AbilityDefinitionSO, bool> canUseExtraPredicate = null,
+        bool showCostText = true
     )
     {
         _hero = hero;
         _ability = ability;
         _resourcePool = resourcePool;
-        _onClickCast = onClickCast;
+        _onClick = onClick;
         _onHoldDetails = onHoldDetails;
         _canUseExtraPredicate = canUseExtraPredicate;
 
@@ -55,8 +54,12 @@ public class QuickAbilityIconButtonUI : MonoBehaviour, IPointerDownHandler, IPoi
 
         if (costText != null)
         {
-            costText.richText = true;
-            costText.text = BuildCostStringStatic(ability, _resourcePool, attackSpriteIndex, defenseSpriteIndex, magicSpriteIndex, wildSpriteIndex);
+            costText.gameObject.SetActive(showCostText);
+            if (showCostText)
+            {
+                costText.richText = true;
+                costText.text = BuildCostStringStatic(ability, _resourcePool, attackSpriteIndex, defenseSpriteIndex, magicSpriteIndex, wildSpriteIndex);
+            }
         }
     }
 
@@ -111,7 +114,7 @@ public class QuickAbilityIconButtonUI : MonoBehaviour, IPointerDownHandler, IPoi
             return;
 
         if (IsUsableNow())
-            _onClickCast?.Invoke(_hero, _ability);
+            _onClick?.Invoke(this, _hero, _ability);
     }
 
     public void OnPointerExit(PointerEventData eventData)
@@ -139,7 +142,7 @@ public class QuickAbilityIconButtonUI : MonoBehaviour, IPointerDownHandler, IPoi
         if (_pointerDown)
         {
             _didHold = true;
-            _onHoldDetails?.Invoke(_hero, _ability);
+            _onHoldDetails?.Invoke(this, _hero, _ability);
         }
 
         _holdRoutine = null;
@@ -187,3 +190,4 @@ public class QuickAbilityIconButtonUI : MonoBehaviour, IPointerDownHandler, IPoi
         return sb.ToString();
     }
 }
+

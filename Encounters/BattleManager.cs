@@ -36,6 +36,13 @@ public class BattleManager : MonoBehaviour
         public bool IsDead => stats == null || stats.CurrentHp <= 0;
     }
 
+    [Header("VFX / Casting Aura")]
+    [Tooltip("If true, when a hero ability is selected for casting, the hero prefab can show a casting aura (via a HeroCastingAura component on the hero avatar prefab).")]
+    [SerializeField] private bool enableHeroCastingAura = true;
+
+    // Tracks which hero currently has their casting aura active (while an ability is pending).
+    private int _castingAuraPartyIndex = -1;
+
     public struct EnemyIntent
     {
         public IntentType type;
@@ -593,17 +600,20 @@ private Coroutine _battleMusicFadeRoutine;
 
         if (clicked == null)
         {
-            if (_awaitingEnemyTarget && _previewEnemyTarget != null)
+            // Clicking anything that is NOT a valid target should cancel the pending ability.
+            // This covers both enemy-targeting and party-targeting abilities.
+            if (_awaitingEnemyTarget || _awaitingPartyTarget)
             {
                 if (logFlow) Debug.Log("[Battle][AbilityTarget] Clicked elsewhere -> cancel pending ability.", this);
                 ClearEnemyTargetPreview();
                 HideConfirmText();
                 CancelPendingAbility();
+                return;
             }
-            else if (_awaitingEnemyTarget)
-            {
+
+            // If we were hovering an enemy preview, clear it.
+            if (_awaitingEnemyTarget)
                 ClearEnemyTargetPreview();
-            }
 
             return;
         }
@@ -1363,6 +1373,9 @@ private bool TryRunLevel5EvolutionNow()
         PartyMemberRuntime actor = _party[actorIndex];
         if (actor.IsDead) return;
 
+        // Ensure only one hero shows the casting aura at a time.
+        ClearCastingAura();
+
 
         // Ability unlock rules (Starter Choice / level unlock).
         HeroStats gateHero = actor.stats != null ? actor.stats : hero;
@@ -1402,6 +1415,10 @@ private bool TryRunLevel5EvolutionNow()
 
         if (AbilityCastState.Instance != null)
             AbilityCastState.Instance.BeginCast(hero, ability);
+
+        // Visual feedback on the hero prefab while the ability is pending.
+        SetCastingAura(actorIndex, enableHeroCastingAura);
+
 
         _impactFired = false;
         _attackFinished = false;
@@ -2847,6 +2864,10 @@ if (summoned)
     {
         if (logFlow)
             Debug.Log($"[Battle][Cancel] CancelPendingAbility. pendingAbility={(_pendingAbility != null ? _pendingAbility.abilityName : "<null>")} pendingActorIndex={_pendingActorIndex} awaitingEnemyTarget={_awaitingEnemyTarget} awaitingPartyTarget={_awaitingPartyTarget}", this);
+
+        // Turn off any active casting aura before we wipe pending indices.
+        ClearCastingAura();
+
         _pendingAction = PlayerActionType.None;
         _pendingAbility = null;
         _pendingActorIndex = -1;
@@ -2865,6 +2886,46 @@ if (summoned)
             AbilityCastState.Instance.ClearCast();
 
         OnPendingAbilityCleared?.Invoke();
+    }
+
+    // ---------------- Casting Aura ----------------
+    private void SetCastingAura(int partyIndex, bool enabled)
+    {
+        if (!enableHeroCastingAura) return;
+        if (!IsValidPartyIndex(partyIndex)) return;
+
+        PartyMemberRuntime pm = _party[partyIndex];
+        if (pm == null || pm.avatarGO == null) return;
+
+        // Prefer a component on the avatar root; fallback to children.
+        var aura = pm.avatarGO.GetComponent<HeroCastingAura>();
+        if (aura == null)
+            aura = pm.avatarGO.GetComponentInChildren<HeroCastingAura>(true);
+
+        if (aura == null)
+        {
+            if (logFlow) Debug.Log($"[Battle][Aura] No HeroCastingAura found on avatarGO for partyIndex={partyIndex} ({pm.avatarGO.name}).", this);
+            return;
+        }
+
+        if (enabled)
+        {
+            _castingAuraPartyIndex = partyIndex;
+            aura.BeginCasting();
+        }
+        else
+        {
+            aura.EndCasting();
+            if (_castingAuraPartyIndex == partyIndex)
+                _castingAuraPartyIndex = -1;
+        }
+    }
+
+    private void ClearCastingAura()
+    {
+        if (_castingAuraPartyIndex < 0) return;
+        SetCastingAura(_castingAuraPartyIndex, false);
+        _castingAuraPartyIndex = -1;
     }
 
 
@@ -5523,8 +5584,3 @@ if (logPassiveBridge)
         }
     }
 }
-
-
-
-
-////////////////////////////////////////////////////////////

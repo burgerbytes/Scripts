@@ -1,5 +1,3 @@
-// GUID: 5a8a06222baaa2b4883d4bb71239e8a6
-////////////////////////////////////////////////////////////
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
@@ -34,6 +32,10 @@ public class PartyHUD : MonoBehaviour
 
     [Tooltip("If true, the HeroStatsPanel stays hidden until the player clicks a PickAlly slot.\nThis prevents the panel from auto-appearing during startup / after class selection when BattleManager sets an initial active party member.")]
     [SerializeField] private bool showStatsOnlyAfterPickAllyClick = true;
+
+    [Header("Casting Aura")]
+    [Tooltip("If true, we clear any casting auras when pending ability is cleared.")]
+    [SerializeField] private bool clearAurasOnPendingAbilityCleared = true;
 
     [Header("Debug")]
     [SerializeField] private bool debugLogs = true;
@@ -99,6 +101,9 @@ public class PartyHUD : MonoBehaviour
             battleManager.OnPartyChanged += RefreshAllSlots;
             battleManager.OnActivePartyMemberChanged += OnActivePartyMemberChanged;
             battleManager.OnBattleStateChanged += OnBattleStateChanged;
+
+            if (clearAurasOnPendingAbilityCleared)
+                battleManager.OnPendingAbilityCleared += HandlePendingAbilityCleared;
         }
 
         if (reelSpinSystem != null)
@@ -131,6 +136,9 @@ public class PartyHUD : MonoBehaviour
             battleManager.OnPartyChanged -= RefreshAllSlots;
             battleManager.OnActivePartyMemberChanged -= OnActivePartyMemberChanged;
             battleManager.OnBattleStateChanged -= OnBattleStateChanged;
+
+            if (clearAurasOnPendingAbilityCleared)
+                battleManager.OnPendingAbilityCleared -= HandlePendingAbilityCleared;
         }
 
         if (reelSpinSystem != null)
@@ -160,8 +168,6 @@ public class PartyHUD : MonoBehaviour
     {
         if (quickAbilitiesButton == null) return;
 
-        // If quick menu is not enabled, leave the button interactable as-is (don’t force-disable).
-        // This allows you to keep portrait clicks working without affecting button state.
         if (!enableQuickAbilityMenu)
             return;
 
@@ -172,6 +178,38 @@ public class PartyHUD : MonoBehaviour
         }
 
         quickAbilitiesButton.interactable = battleManager.IsPlayerPhase;
+    }
+
+    // ------------------- Casting Aura API -------------------
+
+    /// <summary>
+    /// Called by ability UI when a hero's ability is pressed.
+    /// Shows a short aura around the hero's portrait/sprite (PartyHUDSlot).
+    /// </summary>
+    public void PlayCastingAura(HeroStats hero, float seconds)
+    {
+        if (hero == null || slots == null || battleManager == null) return;
+
+        int idx = battleManager.GetPartyIndexForHeroStats(hero);
+        if (idx < 0 || idx >= slots.Length) return;
+
+        if (slots[idx] != null)
+            slots[idx].PlayCastingAura(seconds);
+    }
+
+    public void ClearAllCastingAuras()
+    {
+        if (slots == null) return;
+        for (int i = 0; i < slots.Length; i++)
+        {
+            if (slots[i] != null)
+                slots[i].SetCastingAuraVisible(false);
+        }
+    }
+
+    private void HandlePendingAbilityCleared()
+    {
+        ClearAllCastingAuras();
     }
 
     // ------------------- existing behavior below -------------------
@@ -280,8 +318,6 @@ public class PartyHUD : MonoBehaviour
         battleManager.SetActivePartyMember(index);
 
         // Clicking portraits should STILL work:
-        // - Show stats
-        // - Open the legacy ability menu (unchanged behavior)
         if (statsPanel != null)
         {
             HeroStats clickedHero = battleManager.GetHeroAtPartyIndex(index);
@@ -304,7 +340,7 @@ public class PartyHUD : MonoBehaviour
             slots[i].SetActionPanelVisible(_panelVisible && i == _selectedIndex);
         }
 
-        // ✅ Always keep legacy portrait-click menu working.
+        // Legacy portrait-click menu
         if (abilityMenu != null)
         {
             HeroStats hero = battleManager.GetHeroAtPartyIndex(index);
@@ -316,7 +352,6 @@ public class PartyHUD : MonoBehaviour
             }
         }
 
-        // Optional: if you want the quick menu to close when switching heroes:
         if (quickAbilityMenu != null)
             quickAbilityMenu.Close();
 

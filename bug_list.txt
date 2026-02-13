@@ -1,6 +1,4 @@
 bugs/issues
-- there's a small chance that reelcraft ability icons wont appear on battle screen
-- make sure ability menu is inactive on player phase start
 - add button to cancel reelcraft ability casting
 - increase size of monster status icons
 - hook up all animations

@@ -1,5 +1,3 @@
-// GUID: 8c5b3a76a52c4f8aa7e7d3b9d6a2a1c1
-////////////////////////////////////////////////////////////
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
@@ -12,7 +10,7 @@ public class QuickAbilityMenuUI : MonoBehaviour
     [SerializeField] private Transform listParent;
     [SerializeField] private QuickAbilityIconButtonUI buttonPrefab;
 
-    [Header("Details (shown on hold)")]
+    [Header("Details (shown on click; hold will later open a deeper panel)")]
     [SerializeField] private GameObject detailsPanel;
     [SerializeField] private Image detailsIcon;
     [SerializeField] private TMP_Text detailsNameText;
@@ -25,7 +23,12 @@ public class QuickAbilityMenuUI : MonoBehaviour
     [SerializeField] private ResourcePool resourcePool;
 
     [Header("Behavior")]
-    [SerializeField] private bool closeAfterCastClick = true;
+    [Tooltip("If true, the menu closes automatically once the pending cast is cleared (resolved OR canceled).")]
+    [SerializeField] private bool closeWhenPendingCastClears = true;
+
+    [Header("Grid Display")]
+    [Tooltip("If false, quick grid shows only the ability icons (no cost text).")]
+    [SerializeField] private bool showCostTextInGrid = false;
 
     [Tooltip("If true, menu auto-rebuilds whenever resources change.")]
     [SerializeField] private bool rebuildOnResourceChange = true;
@@ -38,6 +41,10 @@ public class QuickAbilityMenuUI : MonoBehaviour
 
     private readonly List<QuickAbilityIconButtonUI> _spawned = new();
 
+    private bool _inSelectionMode;
+    private QuickAbilityIconButtonUI _selectedButton;
+    private bool _closeAfterThisPendingClears;
+
     private void Awake()
     {
         if (battleManager == null)
@@ -47,7 +54,6 @@ public class QuickAbilityMenuUI : MonoBehaviour
             resourcePool = ResourcePool.Instance != null ? ResourcePool.Instance : FindFirstObjectByType<ResourcePool>();
 
         AutoWireIfMissing();
-
         HideDetails();
 
         if (root != null)
@@ -60,6 +66,7 @@ public class QuickAbilityMenuUI : MonoBehaviour
         {
             battleManager.OnActivePartyMemberChanged += HandleActivePartyChanged;
             battleManager.OnBattleStateChanged += HandleBattleStateChanged;
+            battleManager.OnPendingAbilityCleared += HandlePendingAbilityCleared;
         }
 
         if (resourcePool != null && rebuildOnResourceChange)
@@ -72,6 +79,7 @@ public class QuickAbilityMenuUI : MonoBehaviour
         {
             battleManager.OnActivePartyMemberChanged -= HandleActivePartyChanged;
             battleManager.OnBattleStateChanged -= HandleBattleStateChanged;
+            battleManager.OnPendingAbilityCleared -= HandlePendingAbilityCleared;
         }
 
         if (resourcePool != null)
@@ -103,6 +111,7 @@ public class QuickAbilityMenuUI : MonoBehaviour
         if (next)
         {
             ForceBringToFrontAndEnableCanvasGroup();
+            ExitSelectionMode();
             RebuildForAllHeroes();
         }
         else
@@ -115,19 +124,23 @@ public class QuickAbilityMenuUI : MonoBehaviour
     {
         if (root != null) root.SetActive(false);
         HideDetails();
+        ExitSelectionMode();
         ClearList();
+        _closeAfterThisPendingClears = false;
     }
 
     private void HandleActivePartyChanged(int _)
     {
-        if (IsOpen)
-            RebuildForAllHeroes();
+        if (!IsOpen) return;
+        ExitSelectionMode();
+        RebuildForAllHeroes();
     }
 
     private void HandleResourcesChanged()
     {
-        if (IsOpen)
-            RebuildForAllHeroes();
+        if (!IsOpen) return;
+        ExitSelectionMode();
+        RebuildForAllHeroes();
     }
 
     private void HandleBattleStateChanged(BattleManager.BattleState _)
@@ -136,9 +149,16 @@ public class QuickAbilityMenuUI : MonoBehaviour
         if (battleManager == null) return;
 
         if (!battleManager.IsPlayerPhase)
+        {
             Close();
-        else if (IsOpen)
+            return;
+        }
+
+        if (IsOpen)
+        {
+            ExitSelectionMode();
             RebuildForAllHeroes();
+        }
     }
 
     private void RebuildForAllHeroes()
@@ -167,21 +187,16 @@ public class QuickAbilityMenuUI : MonoBehaviour
         ClearList();
 
         int count = 0;
-
-        // Show ALL affordable abilities across ALL party heroes.
-        // Assumes party indices are contiguous 0..(PartySize-1).
-        // We’ll attempt indices until we hit a stretch of nulls.
         int nullStreak = 0;
-        for (int i = 0; i < 8; i++) // your party is likely <= 4; 8 is a safe cap
+        for (int i = 0; i < 8; i++)
         {
             HeroStats hero = battleManager.GetHeroAtPartyIndex(i);
             if (hero == null)
             {
                 nullStreak++;
-                if (nullStreak >= 3) break; // stop once we’re clearly past the party
+                if (nullStreak >= 3) break;
                 continue;
             }
-
             nullStreak = 0;
 
             ClassDefinitionSO classDef = hero.AdvancedClassDef != null ? hero.AdvancedClassDef : hero.BaseClassDef;
@@ -204,9 +219,10 @@ public class QuickAbilityMenuUI : MonoBehaviour
                     hero,
                     ability,
                     resourcePool,
-                    OnClickCast,
+                    OnClickAbilityIcon,
                     OnHoldDetails,
-                    (h, ab) => CanUseAbilityNow(h, ab)
+                    (h, ab) => CanUseAbilityNow(h, ab),
+                    showCostTextInGrid
                 );
 
                 if (!btn.IsUsableNow())
@@ -269,7 +285,7 @@ public class QuickAbilityMenuUI : MonoBehaviour
         return true;
     }
 
-    private void OnClickCast(HeroStats hero, AbilityDefinitionSO ability)
+    private void OnClickAbilityIcon(QuickAbilityIconButtonUI button, HeroStats hero, AbilityDefinitionSO ability)
     {
         if (battleManager == null || hero == null || ability == null) return;
 
@@ -280,16 +296,24 @@ public class QuickAbilityMenuUI : MonoBehaviour
         }
 
         if (debugLogs)
-            Debug.Log($"[QuickAbilityMenuUI] Click cast hero={hero.name} ability={ability.abilityName}", this);
+            Debug.Log($"[QuickAbilityMenuUI] Click ability icon hero={hero.name} ability={ability.abilityName}", this);
 
+        // 1) Disable menu and only keep clicked ability visible.
+        EnterSelectionMode(button);
+
+        // 2) Open detail panel.
+        ShowDetails(hero, ability);
+
+        // 3) Begin ability targeting flow.
         battleManager.BeginAbilityUseFromMenu(hero, ability);
 
-        if (closeAfterCastClick)
-            Close();
+        _closeAfterThisPendingClears = closeWhenPendingCastClears;
     }
 
-    private void OnHoldDetails(HeroStats hero, AbilityDefinitionSO ability)
+    private void OnHoldDetails(QuickAbilityIconButtonUI button, HeroStats hero, AbilityDefinitionSO ability)
     {
+        // Placeholder for later: open a deeper/expanded details panel.
+        // For now, keep the existing details panel behavior.
         ShowDetails(hero, ability);
     }
 
@@ -307,10 +331,30 @@ public class QuickAbilityMenuUI : MonoBehaviour
 
         if (detailsIcon != null) detailsIcon.sprite = ability.icon;
         if (detailsNameText != null) detailsNameText.text = ability.abilityName;
-        if (detailsDescText != null) detailsDescText.text = ability.description;
+        if (detailsHeroText != null) detailsHeroText.text = hero != null ? hero.name : "";
 
-        if (detailsHeroText != null)
-            detailsHeroText.text = hero != null ? hero.name : "";
+        // Rich details block.
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        if (!string.IsNullOrWhiteSpace(ability.description))
+            sb.AppendLine(ability.description.Trim());
+
+        sb.AppendLine(" ");
+        sb.AppendLine($"<b>Target</b>: {ability.targetType}");
+        sb.AppendLine($"<b>Element</b>: {ability.element}");
+        sb.AppendLine($"<b>Kind</b>: {ability.kind}");
+
+        if (ability.baseDamage > 0 || ability.isDamaging)
+            sb.AppendLine($"<b>Damage</b>: {ability.baseDamage}  (isDamaging={ability.isDamaging})");
+        if (ability.healAmount > 0)
+            sb.AppendLine($"<b>Heal</b>: {ability.healAmount}");
+        if (ability.shieldAmount > 0)
+            sb.AppendLine($"<b>Block</b>: {ability.shieldAmount}");
+
+        if (ability.spendAllAttackResources)
+            sb.AppendLine("<b>Cost Rule</b>: Spends ALL ATK in pool");
+
+        if (detailsDescText != null)
+            detailsDescText.text = sb.ToString();
 
         if (detailsCostText != null)
         {
@@ -325,23 +369,60 @@ public class QuickAbilityMenuUI : MonoBehaviour
             detailsPanel.SetActive(false);
     }
 
+    private void EnterSelectionMode(QuickAbilityIconButtonUI selected)
+    {
+        _inSelectionMode = true;
+        _selectedButton = selected;
+
+        for (int i = 0; i < _spawned.Count; i++)
+        {
+            var b = _spawned[i];
+            if (b == null) continue;
+            b.gameObject.SetActive(b == selected);
+        }
+    }
+
+    private void ExitSelectionMode()
+    {
+        if (!_inSelectionMode) return;
+        _inSelectionMode = false;
+        _selectedButton = null;
+
+        for (int i = 0; i < _spawned.Count; i++)
+        {
+            var b = _spawned[i];
+            if (b == null) continue;
+            b.gameObject.SetActive(true);
+        }
+    }
+
+    private void HandlePendingAbilityCleared()
+    {
+        // Called whenever the pending ability is canceled OR resolved.
+        if (!IsOpen) return;
+
+        ExitSelectionMode();
+        HideDetails();
+        RebuildForAllHeroes();
+
+        if (_closeAfterThisPendingClears)
+            Close();
+    }
+
     private void AutoWireIfMissing()
     {
-        // Root auto-find
         if (root == null)
         {
             var t = transform.Find("Root");
             if (t != null) root = t.gameObject;
         }
 
-        // List parent auto-find
         if (listParent == null)
         {
             var t = transform.Find("Root/AbilityGrid");
             if (t != null) listParent = t;
         }
 
-        // Details panel auto-find
         if (detailsPanel == null)
         {
             var t = transform.Find("Root/DetailsPanel");
@@ -352,11 +433,8 @@ public class QuickAbilityMenuUI : MonoBehaviour
     private void ForceBringToFrontAndEnableCanvasGroup()
     {
         if (root == null) return;
-
-        // Bring to front so it isn't hidden behind other UI
         root.transform.SetAsLastSibling();
 
-        // If a CanvasGroup is hiding it, fix it
         var cg = root.GetComponent<CanvasGroup>();
         if (cg != null)
         {
