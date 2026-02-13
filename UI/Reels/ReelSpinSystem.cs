@@ -717,6 +717,8 @@ for (int qi = 0; qi < quadCount; qi++)
     // Reelcraft integration: keep track of the last landed symbols so we can nudge/transform without re-spinning.
     private List<ReelSymbolSO> _currentLandedSymbols;
     private List<int> _currentLandedMultipliers;
+    // Parallel to _currentLandedSymbols (stores the midrow quad index for each reel on the last resolve).
+    private List<int> _currentLandedQuadIndices;
 
     public void GetPendingPayout(out int a, out int d, out int m, out int w)
     {
@@ -836,6 +838,7 @@ for (int qi = 0; qi < quadCount; qi++)
         // New reel phase -> clear any previous landed state.
         _currentLandedSymbols = null;
         _currentLandedMultipliers = null;
+        _currentLandedQuadIndices = null;
         pendingA = pendingD = pendingM = pendingW = 0;
         ResetAutoPayoutTracking();
         OnCurrentLandedChanged?.Invoke(default);
@@ -862,6 +865,7 @@ for (int qi = 0; qi < quadCount; qi++)
         // Clear any previous landed state / pending payout.
         _currentLandedSymbols = null;
         _currentLandedMultipliers = null;
+        _currentLandedQuadIndices = null;
         pendingA = pendingD = pendingM = pendingW = 0;
         ResetAutoPayoutTracking();
         OnCurrentLandedChanged?.Invoke(default);
@@ -1330,7 +1334,16 @@ for (int qi = 0; qi < quadCount; qi++)
         while (_currentLandedMultipliers.Count < 3) _currentLandedMultipliers.Add(1);
         _currentLandedMultipliers[reelIndex] = Mathf.Max(1, mult);
 
-        SetPendingFromSymbols(_currentLandedSymbols, _currentLandedMultipliers);
+        
+
+// Track midrow quad index for this reel and allow Substitution to trigger on the first NULL resolve.
+if (_currentLandedQuadIndices == null) _currentLandedQuadIndices = new List<int> { -1, -1, -1 };
+while (_currentLandedQuadIndices.Count < 3) _currentLandedQuadIndices.Add(-1);
+_currentLandedQuadIndices[reelIndex] = qi;
+
+// Substitution: if this nudge/refresh causes the first NULL this battle, convert it immediately.
+MaybeApplySubstitution_FirstNullOnResolve(_currentLandedSymbols, _currentLandedQuadIndices);
+SetPendingFromSymbols(_currentLandedSymbols, _currentLandedMultipliers);
 
         SpinLandedInfo info = BuildSpinLandedInfo(_currentLandedSymbols);
                     if (logPassiveBridge)
@@ -1607,6 +1620,72 @@ private void StopPerReelSpinSfx(ReelEntry entry)
         return n.IndexOf("null", StringComparison.OrdinalIgnoreCase) >= 0 ||
                n.IndexOf("nul", StringComparison.OrdinalIgnoreCase) >= 0;
     }
+
+
+/// <summary>
+/// Substitution passive: when the reels resolve and ANY reel lands on NULL for the first time this battle,
+/// immediately convert that first NULL into WILD (once per battle).
+/// This is intentionally NOT tied to Cashout / Stop.
+/// </summary>
+private bool MaybeApplySubstitution_FirstNullOnResolve(List<ReelSymbolSO> landed, List<int> landedQuadIndices)
+{
+    if (!enableSubstitutionOnCashout) // legacy inspector toggle; now governs Substitution passive in general
+        return false;
+
+    if (_rewardModeActive)
+        return false;
+
+    if (_substitutionAttemptedThisBattle)
+        return false;
+
+    if (landed == null || landed.Count == 0)
+        return false;
+
+    ReelSymbolSO wild = GetDefaultWildSymbol();
+    if (wild == null)
+        return false;
+
+    int count = Mathf.Min(3, landed.Count);
+
+    for (int i = 0; i < count; i++)
+    {
+        ReelSymbolSO sym = landed[i];
+        if (!IsNullLandedSymbol(sym))
+            continue;
+
+        bool allowed = (CanApplySubstitutionForReelIndex == null) || CanApplySubstitutionForReelIndex(i);
+        if (!allowed)
+            continue;
+
+        // Apply the mutation.
+        landed[i] = wild;
+
+        // Keep our cached landed symbols consistent when the caller passed a reference to it.
+        if (_currentLandedSymbols != null && _currentLandedSymbols.Count > i)
+            _currentLandedSymbols[i] = wild;
+
+        _substitutionAttemptedThisBattle = true;
+        _substitutionTriggerCountThisBattle++;
+
+        Debug.Log($"[ReelSpinSystem][SubstitutionDebug] APPLY on resolve -> reelIndex={i} quadIndex={(landedQuadIndices != null && landedQuadIndices.Count > i ? landedQuadIndices[i] : -1)} triggerCount={_substitutionTriggerCountThisBattle}", this);
+
+        // Update 3D visuals without permanently mutating the strip (temporary transmute).
+        if (reels != null && i >= 0 && i < reels.Count)
+        {
+            var e = reels[i];
+            if (e != null && e.reel3d != null && landedQuadIndices != null && landedQuadIndices.Count > i)
+            {
+                int qi = landedQuadIndices[i];
+                if (qi >= 0)
+                    e.reel3d.SetQuadTemporarilyTransmutedTo(wild, qi);
+            }
+        }
+
+        return true; // only convert the first NULL this battle
+    }
+
+    return false;
+}
 
     private void PlayMidrowStopChime(bool landedNull)
     {
@@ -1963,6 +2042,13 @@ var landed = new List<ReelSymbolSO>(3);
             }
 
 
+
+
+// Track midrow quad indices for this resolve (used for temporary symbol swaps like Substitution).
+_currentLandedQuadIndices = new List<int>(landedQuadIndices);
+
+// Substitution: convert the first NULL this battle into WILD immediately on resolve (not on Cashout).
+MaybeApplySubstitution_FirstNullOnResolve(landed, landedQuadIndices);
             // Build landed info and notify listeners (item synergies, UI, etc.)
             SpinLandedInfo info = BuildSpinLandedInfo(landed);
             OnSpinLanded?.Invoke(info);
@@ -1970,6 +2056,13 @@ var landed = new List<ReelSymbolSO>(3);
             // Cache current landed symbols so Reelcraft can operate during this reel phase.
             _currentLandedSymbols = new List<ReelSymbolSO>(landed);
             _currentLandedMultipliers = new List<int>(multipliers);
+            if (_currentLandedQuadIndices == null)
+                _currentLandedQuadIndices = new List<int>(landedQuadIndices);
+            else
+            {
+                _currentLandedQuadIndices.Clear();
+                _currentLandedQuadIndices.AddRange(landedQuadIndices);
+            }
                         if (logPassiveBridge)
                 Debug.Log($"[ReelSpinSystem][PassiveBridge] OnCurrentLandedChanged invoke: symbols={(info.symbols != null ? info.symbols.Count : 0)} A={info.attackCount} D={info.defendCount} M={info.magicCount} W={info.wildCount}", this);
             OnCurrentLandedChanged?.Invoke(info);
@@ -2377,6 +2470,7 @@ ReelSymbolSO wild = GetDefaultWildSymbol();
         // After payout, clear current landed symbols so Reelcraft can't modify a settled spin.
         _currentLandedSymbols = null;
         _currentLandedMultipliers = null;
+        _currentLandedQuadIndices = null;
         OnPendingPayoutChanged?.Invoke(pendingA, pendingD, pendingM, pendingW);
         ApplyAutoPayoutDeltaIfEnabled();
     }
@@ -2430,5 +2524,7 @@ ReelSymbolSO wild = GetDefaultWildSymbol();
         _sleepRoutine = null;
     }
 }
+
+////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////

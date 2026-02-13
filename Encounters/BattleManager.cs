@@ -539,14 +539,15 @@ private Coroutine _battleMusicFadeRoutine;
 
         if (confirmText != null)
             confirmText.gameObject.SetActive(false); // disabled by default
-        // Cashout mechanic removed (payouts happen on every spin, and abilities are always usable).
-        // If the Cashout button still exists in the scene, disable it to prevent accidental gating.
+        // Cashout/Stop button is used again (end reel phase / collect payout).
+        // Keep BattleManager's listener (locks ability selection) without disabling other listeners.
         if (stopSpinningButton != null)
         {
+            stopSpinningButton.gameObject.SetActive(true);
             stopSpinningButton.onClick.RemoveListener(OnStopSpinningPressed);
-            stopSpinningButton.gameObject.SetActive(false);
+            stopSpinningButton.onClick.AddListener(OnStopSpinningPressed);
         }
-    }
+}
 
     private void Start()
     {
@@ -5551,6 +5552,17 @@ if (logPassiveBridge)
             // NOTE: Actual NULL->WILD substitution happens inside ReelSpinSystem.StopSpinningAndCollect(),
             // before CollectPendingPayout(), gated by CanApplySubstitutionForReelIndex.
             if (logFlow) Debug.Log("[Battle][StopPressed] Locked=true. Waiting for ReelSpinSystem cashout to apply substitution + payout.", this);
+
+            // IMPORTANT: After the reel-phase/player-phase merge, some scenes/prefabs only wire the Stop button
+            // to BattleManager (and ReelSpinSystem.stopSpinningButton may be null). In that case, clicking Stop
+            // would never reach ReelSpinSystem, and Substitution (NULL->WILD) would never run.
+            //
+            // So: if we have a ReelSpinSystem reference, forward the click.
+            if (reelSpinSystem != null)
+            {
+                if (logFlow) Debug.Log("[Battle][StopPressed] Forwarding Stop to ReelSpinSystem.StopSpinningAndCollect().", this);
+                reelSpinSystem.StopSpinningAndCollect();
+            }
         }
     // --- Rewards / Party helpers ---
     private static HeroStats[] BuildPartyStatsArray(List<PartyMemberRuntime> party)
@@ -5584,3 +5596,6 @@ if (logPassiveBridge)
         }
     }
 }
+
+
+////////////////////////////////////////////////////////////
