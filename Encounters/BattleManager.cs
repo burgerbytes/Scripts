@@ -496,7 +496,11 @@ private Coroutine _battleMusicFadeRoutine;
     private bool _resolving;
     private bool _impactFired;
     private bool _attackFinished;
-    private Camera _mainCam;
+    
+    // Safe clamp for per-cast Animator speed during combo chains (e.g., Dagger Tempest).
+    // Keep <= 3.0f to reduce risk of skipping keyframes/events on fast clips.
+    private const float COMBO_ANIMATOR_SPEED_MAX = 2.75f;
+private Camera _mainCam;
 
     private Coroutine _startBattleRoutine;
     private Coroutine _enemyTurnRoutine;
@@ -2265,6 +2269,10 @@ if (summoned)
         if (logFlow) Debug.Log($"[Battle][Resolve] Resources spent. cost={cost}. Proceeding to apply ability effects.", this);
         _resolving = true;
 
+        // ============================
+        // Combo (chaining): handled during damage application so each cast can spin and potentially queue more casts.
+        // ============================
+
         Animator anim = actor.animator;
         if (anim == null && actor.avatarGO != null)
             anim = actor.avatarGO.GetComponentInChildren<Animator>(true);
@@ -2304,6 +2312,32 @@ if (summoned)
                     ? profile.ResolveAttackState(animationKey, actorClassName, abilityNameFallback: ability.name)
                     : null;
 
+                // If a mapping wasn't found but the ability explicitly provided an animationKey,
+                // try playing a state with the same name directly. This prevents a missing
+                // CasterAnimationProfile mapping from silently falling back to a basic attack.
+                if (string.IsNullOrWhiteSpace(stateToPlay) && !string.IsNullOrWhiteSpace(animationKey))
+                {
+                    int hash = Animator.StringToHash(animationKey);
+                    if (anim.HasState(0, hash))
+                    {
+                        stateToPlay = animationKey;
+                        if (logFlow) Debug.Log($"[Battle][Resolve] No profile mapping for animationKey='{animationKey}', but Animator has a state with that name. Using it directly.", this);
+                    }
+                    else
+                    {
+                        if (logFlow) Debug.LogWarning($"[Battle][Resolve] No profile mapping for animationKey='{animationKey}', and Animator does not have a state named '{animationKey}'. Falling back.", this);
+                    }
+                }
+
+                // Next, prefer a class-scoped basic attack instead of always fighter_basic_attack.
+                if (string.IsNullOrWhiteSpace(stateToPlay) && !string.IsNullOrWhiteSpace(actorClassName))
+                {
+                    string classBasic = $"{actorClassName.ToLowerInvariant()}_basic_attack";
+                    int hash = Animator.StringToHash(classBasic);
+                    if (anim.HasState(0, hash))
+                        stateToPlay = classBasic;
+                }
+
                 // If we still didn't find anything, retain the prior default behavior.
                 if (string.IsNullOrWhiteSpace(stateToPlay))
                     stateToPlay = "fighter_basic_attack";
@@ -2319,11 +2353,14 @@ if (summoned)
                 useImpactSync = true;
             }
 
-            if (!string.IsNullOrWhiteSpace(stateToPlay))
-            {
-                if (logFlow) Debug.Log($"[Battle][Resolve] Playing animation state '{stateToPlay}'. useImpactSync={useImpactSync}", this);
-                anim.Play(stateToPlay, 0, 0f);
-            }
+	        // For combo enemy-target abilities, we play the attack animation PER CAST inside the combo loop.
+	        // This avoids the first cast playing once here and then subsequent casts having no animation.
+	        bool deferAttackAnimToComboLoop = (ability != null && ability.hasCombo && ability.targetType == AbilityTargetType.Enemy);
+	        if (!deferAttackAnimToComboLoop && !string.IsNullOrWhiteSpace(stateToPlay))
+	        {
+	            if (logFlow) Debug.Log($"[Battle][Resolve] Playing animation state '{stateToPlay}'. useImpactSync={useImpactSync}", this);
+	            anim.Play(stateToPlay, 0, 0f);
+	        }
             else
             {
                 if (logFlow) Debug.Log($"[Battle][Resolve] No animation played for ability '{ability.abilityName}'.", this);
@@ -2361,8 +2398,9 @@ if (summoned)
         // ============================
         if (ability.targetType == AbilityTargetType.Enemy && enemyTarget != null)
         {
-            // Wait for impact sync for enemy-target abilities too (even if non-damaging)
-            if (useImpactSync && anim != null)
+	            // Wait for impact sync for enemy-target abilities too (even if non-damaging).
+	            // For combo abilities, impact sync is handled per-cast inside the combo loop.
+	            if (useImpactSync && anim != null && !(ability != null && ability.hasCombo))
             {
                 if (logFlow) Debug.Log("[Battle][Resolve] Waiting for AttackImpact animation event...", this);
 
@@ -2437,99 +2475,252 @@ if (summoned)
 
             if (doesDamage)
             {
-                int passiveBonus = (actorStats != null) ? actorStats.ConsumeBonusDamageNextAttackIfDamaging(ability) : 0;
+                // Consume "next attack" bonus damage ONCE for the whole ability.
+                int passiveBonusOnce = (actorStats != null) ? actorStats.ConsumeBonusDamageNextAttackIfDamaging(ability) : 0;
 
-                totalBaseDamage =
-                    Mathf.Max(0, actorStats.Attack) +
-                    Mathf.Max(0, ability.baseDamage) +
-                    Mathf.Max(0, passiveBonus) +
-                    Mathf.Max(0, bonusDamageFromSpentAtk);
+                // Combo chaining: each cast performs its own bonus one-reel spin (does NOT consume SpinsRemaining).
+                // If the spin lands on the trigger type, we queue additional casts based on the resource gain amount.
+                // This can chain until a max total cast cap is reached.
 
-                // Damage numbers should show computed formula damage, not clamped HP lost.
-                shownDamage = enemyTarget.CalculateDamageFromAbility(
-                    abilityBaseDamage: totalBaseDamage,
-                    classAttackModifier: 1f,
-                    element: ability.element,
-                    abilityTags: ability.tags);
-
-                if (isHeavyStrike)
-
-
+                int maxTotalCasts = 1;
+                if (ability != null && ability.hasCombo)
                 {
-
-
-                    Debug.Log($"[Battle][HeavyStrike][Damage] caster={actorStats.name} target={(enemyTarget!=null?enemyTarget.name:"<null>")} spentAtk={heavyStrikeSpentAtk} bonusDamage={bonusDamageFromSpentAtk} totalBaseDamage={totalBaseDamage} shownDamage={shownDamage}", this);
-
-
+                    maxTotalCasts = (ability.comboMaxTotalCasts > 0)
+                        ? ability.comboMaxTotalCasts
+                        : (1 + Mathf.Max(0, ability.comboMaxExtraCasts));
                 }
 
+                int castsRemaining = 1;
+                int castsExecuted = 0;
 
+                // Current target can change during combo chaining if the ability requests random retargets.
+                Monster currentTarget = enemyTarget;
+                bool randomizeNextTarget = false;
 
-                dealt = enemyTarget.TakeDamageFromAbility(
-                    abilityBaseDamage: totalBaseDamage,
-                    classAttackModifier: 1f,
-                    element: ability.element,
-                    abilityTags: ability.tags);
-
-                if (debugEnemyHpBarDrop && enemyTarget != null)
+                while (castsRemaining > 0)
                 {
-                    Debug.Log($"[Battle][HpBarDrop] After TakeDamageFromAbility target={enemyTarget.name} dealt={dealt} hpNow={enemyTarget.CurrentHp}/{enemyTarget.MaxHp} instance={enemyTarget.GetInstanceID()}", this);
+                    int hitIndex = castsExecuted;
+                    castsRemaining--;
 
-                    var hpBar = enemyTarget.GetComponentInChildren<MonsterHpBar>(true);
-                    if (hpBar == null)
+	                    
+
+                    // Compute combo speed multiplier ONCE per cast so we can reuse it for both
+                    // reel spin speed and animator playback speed.
+                    float comboSpeedMult = 1f;
+                    if (ability != null && ability.hasCombo)
                     {
-                        Debug.LogWarning($"[Battle][HpBarDrop] No MonsterHpBar found under target={enemyTarget.name} instance={enemyTarget.GetInstanceID()}", this);
+                        comboSpeedMult = Mathf.Clamp(
+                            ability.comboSpinSpeedMultiplierStart + ability.comboSpinSpeedMultiplierStep * hitIndex,
+                            0.1f,
+                            Mathf.Max(0.1f, ability.comboSpinSpeedMultiplierMax));
                     }
-                    else
+// Play the attack animation for EACH combo cast (including the first).
+	                    // Restart from time=0 so repeated casts don't get ignored by the Animator.
+	                    	                    if (ability != null && ability.hasCombo && anim != null && !string.IsNullOrWhiteSpace(stateToPlay))
+	                    {
+	                        _impactFired = false;
+
+	                        // Apply scaled animator speed for this cast, clamped to a safe max.
+	                        float prevAnimSpeed = anim.speed;
+	                        anim.speed = Mathf.Clamp(comboSpeedMult, 0.1f, COMBO_ANIMATOR_SPEED_MAX);
+
+	                        try
+	                        {
+	                            if (logFlow) Debug.Log($"[Battle][Combo] Playing per-cast animation '{stateToPlay}' hitIndex={hitIndex} animSpeed={anim.speed:0.00} comboSpeedMult={comboSpeedMult:0.00}.", this);
+	                            anim.Play(stateToPlay, 0, 0f);
+
+	                            // Give Animator a frame to evaluate transitions/state.
+	                            yield return null;
+
+	                            if (useImpactSync)
+	                            {
+	                                float elapsed = 0f;
+	                                const float failSafeSeconds = 2.0f;
+	                                while (!_impactFired && elapsed < failSafeSeconds)
+	                                {
+	                                    elapsed += Time.deltaTime;
+	                                    yield return null;
+	                                }
+	                            }
+	                        }
+	                        finally
+	                        {
+	                            // Always restore animator speed after each cast so we don't affect anything else.
+	                            anim.speed = prevAnimSpeed;
+	                        }
+	                    }
+
+                    // Ensure we always have a valid target when chaining.
+                    if (currentTarget == null || currentTarget.IsDead)
+                        currentTarget = GetRandomLivingEnemy(exclude: null);
+                    if (currentTarget == null || currentTarget.IsDead)
+                        break;
+
+                    // Each cast's combo spin (including the first cast).
+                    if (ability != null && ability.hasCombo && reelSpinSystem != null)
                     {
-                        Debug.Log($"[Battle][HpBarDrop] Found hpBar={hpBar.name} barInstance={hpBar.GetInstanceID()} barBoundMonster={(hpBar != null ? (hpBar.GetComponentInParent<Monster>() != null ? hpBar.GetComponentInParent<Monster>().GetInstanceID().ToString() : "none") : "none")}", this);
+                        yield return StartCoroutine(reelSpinSystem.MomentumSpinAndInstantCollect(_pendingActorIndex, comboSpeedMult));
 
-                        hpBar.ForceDebugDumpVisual("BattleManager BEFORE ClearPreview/Refresh");
-                        hpBar.ClearPreview();
+                        var spin = reelSpinSystem.LastInstantSpinResult;
+                        if (spin.valid && actorStats != null)
+                        {
+                            // Ensure symbol-landed passives fire for this bonus spin.
+                            actorStats.NotifyReelSymbolLanded(spin.symbol, spin.resourceType, spin.amount, spin.multiplier);
 
-                        hpBar.ForceDebugDumpVisual("BattleManager AFTER ClearPreview");
-                        hpBar.RefreshNow("BattleManager post-damage");
+                            // Chain: landing on trigger type queues additional casts based on the gained amount.
+                            if (spin.resourceType == ability.comboTriggerType)
+                            {
+                                int extra = Mathf.Max(0, spin.total);
+                                if (extra > 0)
+                                {
+                                    // Cap to max total casts.
+                                    int remainingCap = Mathf.Max(0, maxTotalCasts - (castsExecuted + 1) - castsRemaining);
+                                    if (remainingCap > 0)
+                                        castsRemaining += Mathf.Min(extra, remainingCap);
+                                }
 
-                        hpBar.ForceDebugDumpVisual("BattleManager AFTER RefreshNow");
+                                // If requested, randomize the NEXT target whenever the trigger lands.
+                                if (ability.comboRandomizeNextEnemyTargetOnTrigger)
+                                    randomizeNextTarget = true;
+                            }
+                            else
+                            {
+                                randomizeNextTarget = false;
+                            }
+                        }
                     }
-                }
 
-                if (performanceTracker != null)
-                    performanceTracker.RecordDamageDealt(actorStats, dealt);
+                    // First cast gets one-time bonuses (spent-ATK bonus, next-attack passive bonus).
+                    int passiveBonusThisHit = (castsExecuted == 0) ? passiveBonusOnce : 0;
+                    int spentAtkBonusThisHit = (castsExecuted == 0) ? bonusDamageFromSpentAtk : 0;
 
-                if (shownDamage > 0)
-                    SpawnDamageNumber(enemyTarget.transform.position, shownDamage);
+                    totalBaseDamage =
+                        Mathf.Max(0, actorStats.Attack) +
+                        Mathf.Max(0, ability.baseDamage) +
+                        Mathf.Max(0, passiveBonusThisHit) +
+                        Mathf.Max(0, spentAtkBonusThisHit);
 
-                // Optional monster reaction animations (hit/block) for Animator-driven monsters.
-                var enemyAnim = enemyTarget != null ? enemyTarget.GetComponentInChildren<MonsterAnimationDriver>(true) : null;
-                if (enemyAnim != null && !enemyTarget.IsDead)
-                {
-                    if (shownDamage <= 0 || dealt <= 0)
-                        enemyAnim.PlayBlock();
-                    else
-                        enemyAnim.PlayHit();
-                }
+                    // Damage numbers should show computed formula damage, not clamped HP lost.
+                    var target = currentTarget;
 
+                    shownDamage = target.CalculateDamageFromAbility(
+                        abilityBaseDamage: totalBaseDamage,
+                        classAttackModifier: 1f,
+                        element: ability.element,
+                        abilityTags: ability.tags);
 
-                actorStats.ApplyOnHitEffectsTo(enemyTarget);
+                    if (isHeavyStrike)
+                    {
+                        Debug.Log($"[Battle][HeavyStrike][Damage] caster={actorStats.name} target={(enemyTarget!=null?enemyTarget.name:"<null>")} spentAtk={heavyStrikeSpentAtk} bonusDamage={spentAtkBonusThisHit} totalBaseDamage={totalBaseDamage} shownDamage={shownDamage}", this);
+                    }
 
-                if (totalBaseDamage > 0)
-                    actorStats.RegisterDamageAttackCommitted();
+                    dealt = target.TakeDamageFromAbility(
+                        abilityBaseDamage: totalBaseDamage,
+                        classAttackModifier: 1f,
+                        element: ability.element,
+                        abilityTags: ability.tags);
 
-                // Bloodlust (passive): whenever this hero deals damage, spin ONLY their reel once and instantly collect that reel's payout.
-                // Uses the same "momentum" spin helper (does not consume spinsRemaining and does not touch normal pending payout state).
-                if (dealt > 0 && actorStats != null && actorStats.HasAbilityUnlocked("Bloodlust") && reelSpinSystem != null)
-                {
-                    if (logFlow) Debug.Log($"[Battle][Bloodlust] Triggered. caster={actorStats.name} dealt={dealt} -> reelIndex={_pendingActorIndex}", this);
-                    yield return StartCoroutine(reelSpinSystem.MomentumSpinAndInstantCollect(_pendingActorIndex));
-                }
+                    if (debugEnemyHpBarDrop && target != null)
+                    {
+                        Debug.Log($"[Battle][HpBarDrop] After TakeDamageFromAbility target={target.name} dealt={dealt} hpNow={target.CurrentHp}/{target.MaxHp} instance={target.GetInstanceID()}", this);
+
+                        var hpBar = target.GetComponentInChildren<MonsterHpBar>(true);
+                        if (hpBar == null)
+                        {
+                            Debug.LogWarning($"[Battle][HpBarDrop] No MonsterHpBar found under target={target.name} instance={target.GetInstanceID()}", this);
+                        }
+                        else
+                        {
+                            Debug.Log($"[Battle][HpBarDrop] Found hpBar={hpBar.name} barInstance={hpBar.GetInstanceID()} barBoundMonster={(hpBar != null ? (hpBar.GetComponentInParent<Monster>() != null ? hpBar.GetComponentInParent<Monster>().GetInstanceID().ToString() : "none") : "none")}", this);
+
+                            hpBar.ForceDebugDumpVisual("BattleManager BEFORE ClearPreview/Refresh");
+                            hpBar.ClearPreview();
+
+                            hpBar.ForceDebugDumpVisual("BattleManager AFTER ClearPreview");
+                            hpBar.RefreshNow("BattleManager post-damage");
+
+                            hpBar.ForceDebugDumpVisual("BattleManager AFTER RefreshNow");
+                        }
+                    }
+
+                    if (performanceTracker != null)
+                        performanceTracker.RecordDamageDealt(actorStats, dealt);
+
+                    if (shownDamage > 0)
+                        SpawnDamageNumber(target.transform.position, shownDamage);
+
+                    // Optional monster reaction animations (hit/block) for Animator-driven monsters.
+                    var enemyAnim = target != null ? target.GetComponentInChildren<MonsterAnimationDriver>(true) : null;
+                    if (enemyAnim != null && !target.IsDead)
+                    {
+                        if (shownDamage <= 0 || dealt <= 0)
+                            enemyAnim.PlayBlock();
+                        else
+                            enemyAnim.PlayHit();
+                    }
+
+                    actorStats.ApplyOnHitEffectsTo(target);
+
+                    if (totalBaseDamage > 0)
+                        actorStats.RegisterDamageAttackCommitted();
+
+                    // Bloodlust (passive): whenever this hero deals damage, spin ONLY their reel once and instantly collect that reel's payout.
+                    // Uses the same "momentum" spin helper (does not consume spinsRemaining and does not touch normal pending payout state).
+                    if (dealt > 0 && actorStats != null && actorStats.HasAbilityUnlocked("Bloodlust") && reelSpinSystem != null)
+                    {
+                        if (logFlow) Debug.Log($"[Battle][Bloodlust] Triggered. caster={actorStats.name} dealt={dealt} -> reelIndex={_pendingActorIndex}", this);
+                        yield return StartCoroutine(reelSpinSystem.MomentumSpinAndInstantCollect(_pendingActorIndex));
+                    }
+
+                    // If the enemy died from this hit, handle death once and stop applying further hits.
+                    if (target != null && target.IsDead)
+                    {
+                        int xpAward = (target != null) ? target.XpReward : 5;
+                        if (performanceTracker != null)
+                            performanceTracker.RecordBaseXpGained(actorStats, xpAward);
+                        else
+                            actorStats.GainXP(xpAward);
+
+                        // Momentum: if this ability killed the enemy, immediately spin ONLY the caster's reel once and cash it out.
+                        if (ability != null && ability.momentumOnKill && reelSpinSystem != null)
+                            yield return StartCoroutine(reelSpinSystem.MomentumSpinAndInstantCollect(_pendingActorIndex));
+
+                        HandleMonsterKilled(target);
+
+                        // If we still have casts remaining, pick a new living target and continue.
+                        if (castsRemaining > 0 && castsExecuted + 1 < maxTotalCasts)
+                        {
+                            currentTarget = GetRandomLivingEnemy(exclude: null);
+                            if (currentTarget == null) break;
+                        }
+                        else
+                        {
+                            break;
+                        }
+                    }
+
+                    // Apply requested random retargeting for the NEXT cast when the trigger lands.
+                    if (randomizeNextTarget && castsRemaining > 0)
+                    {
+                        currentTarget = GetRandomLivingEnemy(exclude: currentTarget);
+                        randomizeNextTarget = false;
+                    }
+                    castsExecuted++;
+
+                    // Safety: stop if we reached max total casts.
+                    if (castsExecuted >= maxTotalCasts)
+                        break;
+
+                    // NOTE: Combo chains are bounded by castsRemaining/maxTotalCasts,
+                    // so we don't need an additional "handledDeath" early-exit here.
+                } // end combo-casts loop
             }
             else
             {
                 if (logFlow) Debug.Log($"[Battle][Resolve] Non-damaging enemy ability '{ability.abilityName}': skipping damage math.", this);
             }
 
-            // ---------------- Status Infliction (Monster) ----------------
+// ---------------- Status Infliction (Monster) ----------------
             if (ability.inflictsFocusRune && enemyTarget != null && !enemyTarget.IsDead)
             {
                 if (logFlow) Debug.Log($"[Battle][Status] Applying FocusRune via ability='{ability.abilityName}' to monster='{enemyTarget.name}'", this);
@@ -5749,6 +5940,45 @@ if (logPassiveBridge)
                 || _awaitingPartyTarget;
         }
     }
+
+    // ---------------- Combo Targeting Helpers ----------------
+    private Monster GetRandomLivingEnemy(Monster exclude)
+    {
+        if (_activeMonsters == null || _activeMonsters.Count == 0)
+            return null;
+
+        // Build a small candidate list of living enemies.
+        List<Monster> candidates = null;
+        for (int i = 0; i < _activeMonsters.Count; i++)
+        {
+            var m = _activeMonsters[i];
+            if (m == null) continue;
+            if (m.IsDead) continue;
+            if (!m.gameObject.activeInHierarchy) continue;
+            if (exclude != null && m == exclude) continue;
+
+            if (candidates == null) candidates = new List<Monster>(8);
+            candidates.Add(m);
+        }
+
+        // If we excluded the only living enemy, fall back to allowing it.
+        if (candidates == null || candidates.Count == 0)
+        {
+            for (int i = 0; i < _activeMonsters.Count; i++)
+            {
+                var m = _activeMonsters[i];
+                if (m == null) continue;
+                if (m.IsDead) continue;
+                if (!m.gameObject.activeInHierarchy) continue;
+                return m;
+            }
+            return null;
+        }
+
+        int pick = UnityEngine.Random.Range(0, candidates.Count);
+        return candidates[pick];
+    }
+
     // ---------------- Teleport Support ----------------
     public Transform GetSelectedEnemyVisualTransform()
     {
@@ -5769,3 +5999,7 @@ if (logPassiveBridge)
 
 
 ////////////////////////////////////////////////////////////
+
+
+
+

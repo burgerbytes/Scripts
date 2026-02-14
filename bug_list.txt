@@ -2,7 +2,7 @@ bugs/issues
 - add button to cancel reelcraft ability casting
 - increase size of monster status icons
 - hook up all animations
-
+- ensure ability description panel is disabled after casting ability
 features
 - add some type of indictor (arrow, glow) to enemy unit being targeted
 - add status icon for fighter's battle rhythm with stack count

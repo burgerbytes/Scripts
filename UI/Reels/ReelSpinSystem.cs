@@ -59,6 +59,16 @@ public class ReelSpinSystem : MonoBehaviour
 
         [Tooltip("Pitch range used when randomizeSpinPitch is enabled.")]
         public Vector2 spinPitchRange = new Vector2(0.95f, 1.05f);
+
+        [Header("Spin SFX Pitch Scaling")]
+        [Tooltip("If true, the spin SFX pitch will scale with reel speed multipliers (e.g., combo/momentum spins).")]
+        public bool scaleSpinPitchWithSpeed = true;
+
+        [Tooltip("Base pitch used before applying speed scaling. If randomizeSpinPitch is enabled, this is applied after randomization.")]
+        public float baseSpinPitch = 1f;
+
+        [Tooltip("Maximum pitch allowed after scaling (prevents extreme chipmunking on long combos).")]
+        public float maxScaledSpinPitch = 2.5f;
     }
 
     [Serializable]
@@ -75,6 +85,25 @@ public class ReelSpinSystem : MonoBehaviour
 
     [Header("Reels")]
     [SerializeField] private List<ReelEntry> reels = new List<ReelEntry>();
+    [Serializable]
+    public struct InstantSpinResult
+    {
+        public bool valid;
+        public int reelIndex;
+        public ReelSymbolSO symbol;
+        public ResourceType resourceType;
+        public int amount;      // base amount from symbol mapping
+        public int multiplier;  // reel multiplier (e.g., Twofold Shadow)
+        public int total;       // amount * multiplier
+    }
+
+    /// <summary>
+    /// Last result produced by MomentumSpinAndInstantCollect (and other instant-spin helpers).
+    /// This is primarily used by combo-style abilities that need to know what was rolled.
+    /// </summary>
+    public InstantSpinResult LastInstantSpinResult { get; private set; }
+
+
 
     [Header("Spin Control")]
     [SerializeField] private int spinsPerTurn = 3;
@@ -1518,7 +1547,7 @@ private AudioSource EnsurePerReelSpinSfxSource(ReelEntry entry)
     return null;
 }
 
-private void StartPerReelSpinSfx(ReelEntry entry)
+private void StartPerReelSpinSfx(ReelEntry entry, float speedMultiplier = 1f)
 {
     if (!playSpinSfx) return;
     if (entry == null) return;
@@ -1547,16 +1576,20 @@ private void StartPerReelSpinSfx(ReelEntry entry)
     src.loop = entry.loopSpinSfx;
 
     src.volume = Mathf.Clamp01(entry.spinSfxVolume) * Mathf.Clamp01(entry.reelSfxVolume) * Mathf.Clamp01(reelSfxMasterVolume) * Mathf.Clamp01(spinLoopGlobalVolumeMultiplier);
-if (entry.randomizeSpinPitch)
+    float pitch = 1f;
+    if (entry.randomizeSpinPitch)
     {
         float lo = Mathf.Min(entry.spinPitchRange.x, entry.spinPitchRange.y);
         float hi = Mathf.Max(entry.spinPitchRange.x, entry.spinPitchRange.y);
-        src.pitch = UnityEngine.Random.Range(lo, hi);
+        pitch = UnityEngine.Random.Range(lo, hi);
     }
-    else
-    {
-        src.pitch = 1f;
-    }
+
+    // Apply base pitch then optionally scale with speed.
+    pitch *= (Mathf.Approximately(entry.baseSpinPitch, 0f) ? 1f : entry.baseSpinPitch);
+    if (entry.scaleSpinPitchWithSpeed)
+        pitch *= Mathf.Max(0.05f, speedMultiplier);
+
+    src.pitch = Mathf.Clamp(pitch, 0.1f, Mathf.Max(0.1f, entry.maxScaledSpinPitch));
 
     // Restart cleanly.
     if (src.isPlaying) src.Stop();
@@ -2257,14 +2290,28 @@ ReelSymbolSO wild = GetDefaultWildSymbol();
     /// This does NOT change spinsRemaining and does NOT modify the normal pending payout state.
     /// Intended to be called mid-battle when an ability kill triggers a bonus spin.
     /// </summary>
-    public IEnumerator MomentumSpinAndInstantCollect(int reelIndex)
+    public IEnumerator MomentumSpinAndInstantCollect(int reelIndex, float speedMultiplier = 1f)
     {
+        // Reset last instant-spin result (combo systems may read this after the coroutine completes).
+        LastInstantSpinResult = new InstantSpinResult { valid = false, reelIndex = reelIndex };
+
         if (reels == null) yield break;
         if (reelIndex < 0 || reelIndex >= reels.Count) yield break;
 
         var entry = reels[reelIndex];
         if (entry == null || entry.reel3d == null)
             yield break;
+
+        // Apply inspector per-reel tuning (so momentum/combo spins behave like normal spins).
+        ApplyPerReelSpinTuning(entry);
+
+        // Optional: temporarily accelerate this particular spin.
+        // We scale spin speed up, and scale min spin duration down, then restore after the spin.
+        speedMultiplier = Mathf.Max(0.05f, speedMultiplier);
+        float prevSpeed = entry.reel3d.SpinDegreesPerSecond;
+        float prevMinDur = entry.reel3d.MinSpinDurationSeconds;
+        entry.reel3d.SpinDegreesPerSecond = prevSpeed * speedMultiplier;
+        entry.reel3d.MinSpinDurationSeconds = prevMinDur / speedMultiplier;
 
         // Prevent overlapping spins with the normal spin flow.
         while (spinning)
@@ -2276,15 +2323,24 @@ ReelSymbolSO wild = GetDefaultWildSymbol();
         Set3DReelsActive(true);
         if (shutterController != null)
             shutterController.OpenShutters();
-
-        // Optional: reuse the normal spin SFX.
-        PlaySpinSfx();
+        // Spin SFX: for momentum/combo spins, use the per-reel loop so pitch can scale with speed.
+        StartPerReelSpinSfx(entry, speedMultiplier);
 
         System.Random rng = new System.Random();
         entry.reel3d.SpinRandom(rng, minFullRotations3D);
 
         while (entry.reel3d != null && entry.reel3d.IsSpinning)
             yield return null;
+
+        // Stop per-reel spin loop SFX now that this reel has stopped.
+        StopPerReelSpinSfx(entry);
+
+        // Restore tuning even if something went odd.
+        if (entry.reel3d != null)
+        {
+            entry.reel3d.SpinDegreesPerSecond = prevSpeed;
+            entry.reel3d.MinSpinDurationSeconds = prevMinDur;
+        }
 
         spinning = false;
 
@@ -2304,6 +2360,17 @@ ReelSymbolSO wild = GetDefaultWildSymbol();
         int total = Mathf.Max(0, amt) * Mathf.Max(1, mult);
         if (total <= 0)
             yield break;
+
+        LastInstantSpinResult = new InstantSpinResult
+        {
+            valid = true,
+            reelIndex = reelIndex,
+            symbol = effectiveSym,
+            resourceType = rt,
+            amount = Mathf.Max(0, amt),
+            multiplier = Mathf.Max(1, mult),
+            total = total
+        };
 
         // Update the current landed symbol/mult for this reel so battle passives that listen to
         // OnCurrentLandedChanged (e.g., Battle Rhythm bridge) can react to momentum spins.
@@ -2528,3 +2595,5 @@ ReelSymbolSO wild = GetDefaultWildSymbol();
 ////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////
+
+

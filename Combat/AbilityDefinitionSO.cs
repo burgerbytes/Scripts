@@ -115,7 +115,37 @@ public int bonusDamagePerAttackResource = 2;
     [Tooltip("If true, killing an enemy with this ability triggers an immediate bonus spin on the caster's reel and instantly cashes out ONLY that reel.")]
     public bool momentumOnKill = false;
 
-    [Header("Status Effects")]
+    
+    [Header("Combo")]
+    [Tooltip("If true, casting this ability performs one or more bonus one-reel spins (does not consume SpinsRemaining). Each time a spin lands on comboTriggerType, the ability will queue additional casts based on the resource gain. This can chain until comboMaxTotalCasts is reached.")]
+    public bool hasCombo = false;
+
+    [Tooltip("If hasCombo: the ability repeats when the bonus spin lands on this resource type.")]
+    public ReelSpinSystem.ResourceType comboTriggerType = ReelSpinSystem.ResourceType.Attack;
+
+    [Tooltip("Legacy safety cap for extra casts. If comboMaxTotalCasts is 0, max total casts = 1 + comboMaxExtraCasts.")]
+    [Min(0)] public int comboMaxExtraCasts = 8;
+
+    [Tooltip("Safety cap for the total number of casts (including the initial cast) that can occur from combo chaining. Set to 0 to use 1 + comboMaxExtraCasts.")]
+    [Min(0)] public int comboMaxTotalCasts = 0;
+
+    [Tooltip("If true, whenever a combo spin lands on comboTriggerType, the NEXT cast will retarget to a random living enemy.")]
+    public bool comboRandomizeNextEnemyTargetOnTrigger = false;
+
+    [Tooltip("If true, each extra cast (beyond the initial cast) ALSO grants the same resources from the combo spin and re-fires passive procs as if that symbol landed again. If you enable per-repeat spins (BattleManager logic), this flag is ignored and each repeat uses its own spin result.")]
+    public bool comboExtraCastsGrantResourcesAndProcPassives = true;
+
+    [Header("Combo Spin Speed")]
+    [Tooltip("Speed multiplier applied to the FIRST combo spin (1 = normal).")]
+    [Min(0.1f)] public float comboSpinSpeedMultiplierStart = 1f;
+
+    [Tooltip("Additional speed multiplier added per extra combo spin (linear). Example: start=1, step=0.35 -> 1.00, 1.35, 1.70, ...")]
+    [Min(0f)] public float comboSpinSpeedMultiplierStep = 0.35f;
+
+    [Tooltip("Clamp for the combo spin speed multiplier.")]
+    [Min(0.1f)] public float comboSpinSpeedMultiplierMax = 3f;
+
+[Header("Status Effects")]
     public bool inflictsFocusRune = false;
     public bool inflictsBurn = false;
     public bool inflictsFreeze = false;
@@ -134,3 +164,4 @@ public int bonusDamagePerAttackResource = 2;
 ////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////
+
