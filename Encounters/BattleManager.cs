@@ -40,8 +40,90 @@ public class BattleManager : MonoBehaviour
     [Tooltip("If true, when a hero ability is selected for casting, the hero prefab can show a casting aura (via a HeroCastingAura component on the hero avatar prefab).")]
     [SerializeField] private bool enableHeroCastingAura = true;
 
+
+    [Header("VFX / Hit Reaction")]
+    [Tooltip("If true, when a hero takes damage, we trigger a hit reaction (Animator trigger + optional white flash).")]
+    [SerializeField] private bool enableHeroHitReaction = true;
+
+    [Tooltip("Animator trigger used to play the hero flinch/hit reaction.")]
+    [SerializeField] private string heroHitTriggerName = "Hit";
+
+    [Tooltip("If true, also triggers a white flash on the hero (requires a HeroHitFlash component on the hero prefab).")]
+    [SerializeField] private bool enableHeroHitFlash = true;
+
+    [Header("Audio / Hero Hit SFX")]
+    [Tooltip("Optional SFX played when a hero takes damage (on the same frame as the hit reaction).")]
+    [SerializeField] private AudioClip heroHitSfx;
+
+    [SerializeField] [Range(0f, 1f)] private float heroHitSfxVolume = 0.85f;
+
+    [Tooltip("If true, randomizes pitch slightly for variation.")]
+    [SerializeField] private bool randomizeHeroHitPitch = true;
+
+    [SerializeField] private Vector2 heroHitPitchRange = new Vector2(0.95f, 1.05f);
+
+    [SerializeField] private bool logHitReaction = false;
+
+    private AudioSource _heroHitSfxSource;
+
+
     // Tracks which hero currently has their casting aura active (while an ability is pending).
     private int _castingAuraPartyIndex = -1;
+
+
+    private void TriggerHeroHitReaction(PartyMemberRuntime pm)
+    {
+        if (!enableHeroHitReaction) return;
+        if (pm == null) return;
+
+        // 1) Animator flinch (optional if animator missing)
+        if (pm.animator != null && !string.IsNullOrEmpty(heroHitTriggerName))
+        {
+            pm.animator.ResetTrigger(heroHitTriggerName); // helps if multiple hits occur quickly
+            pm.animator.SetTrigger(heroHitTriggerName);
+        }
+
+        // 2) White flash (optional; requires component on hero prefab)
+        if (enableHeroHitFlash && pm.avatarGO != null)
+        {
+            var flash = pm.avatarGO.GetComponentInChildren<HeroHitFlash>(true);
+            if (flash != null)
+                flash.Flash();
+        }
+
+        // 3) Hit SFX (optional)
+        PlayHeroHitSfx();
+
+        if (logHitReaction)
+            Debug.Log($"[Battle][HitReaction] hero={pm.name} trigger='{heroHitTriggerName}' flash={enableHeroHitFlash}", pm.avatarGO);
+    }
+
+    private void EnsureHeroHitSfxSource()
+    {
+        if (_heroHitSfxSource != null) return;
+
+        // Create a dedicated 2D audio source for hit SFX so it doesn't interfere with battle music.
+        _heroHitSfxSource = gameObject.AddComponent<AudioSource>();
+        _heroHitSfxSource.playOnAwake = false;
+        _heroHitSfxSource.loop = false;
+        _heroHitSfxSource.spatialBlend = 0f; // 2D
+        _heroHitSfxSource.volume = 1f;
+    }
+
+    private void PlayHeroHitSfx()
+    {
+        if (heroHitSfx == null) return;
+
+        EnsureHeroHitSfxSource();
+
+        if (randomizeHeroHitPitch)
+            _heroHitSfxSource.pitch = UnityEngine.Random.Range(heroHitPitchRange.x, heroHitPitchRange.y);
+        else
+            _heroHitSfxSource.pitch = 1f;
+
+        _heroHitSfxSource.PlayOneShot(heroHitSfx, heroHitSfxVolume);
+    }
+
 
     public struct EnemyIntent
     {
@@ -1749,7 +1831,10 @@ private bool TryRunLevel5EvolutionNow()
                         Debug.Log($"[Summon][APPLY] enemy={intent.enemy.name} -> hero={hs.name} rawDamage={raw} bleed={intent.appliesBleed} stun={intent.stunsTarget} corrosion={intent.appliesCorrosion}", hs);
 
                     if (raw > 0)
+                    {
                         hs.TakeDamage(raw);
+                        TriggerHeroHitReaction(heroPm);
+                    }
 
                     if (intent.appliesBleed && intent.bleedStacks > 0)
                         ApplyBleedStacksToHero(hs, intent.bleedStacks);
