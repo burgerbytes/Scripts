@@ -1,3 +1,6 @@
+// PATH: Assets/Scripts/Combat/AnimatorImpactEvents.cs
+// GUID: f6b70521b03faa34aae1b74cbc6b0046
+////////////////////////////////////////////////////////////
 using UnityEngine;
 using UnityEngine.Serialization;
 using System.Reflection;
@@ -119,6 +122,14 @@ public class AnimatorImpactEvents : MonoBehaviour
     {
         if (_bm != null)
             _bm.NotifyAttackFinished();
+
+        // Safety: if this actor is using a mid-clip teleport offset (e.g., Ninja basic attack),
+        // restore the visual rig at the end of the attack so we never get stuck offset.
+        var teleport = GetComponent<HeroTeleportVisualOffset>();
+        if (teleport == null)
+            teleport = GetComponentInChildren<HeroTeleportVisualOffset>(true);
+
+        teleport?.AttackFinished_AutoRestore();
     }
 
     // ============================
@@ -179,3 +190,6 @@ public class AnimatorImpactEvents : MonoBehaviour
         return null;
     }
 }
+
+
+////////////////////////////////////////////////////////////

@@ -5749,6 +5749,19 @@ if (logPassiveBridge)
                 || _awaitingPartyTarget;
         }
     }
+    // ---------------- Teleport Support ----------------
+    public Transform GetSelectedEnemyVisualTransform()
+    {
+        if (_selectedEnemyTarget == null)
+            return null;
+
+        // If your monsters have a CenterPoint transform, prefer that:
+        var center = _selectedEnemyTarget.transform.Find("CenterPoint");
+        if (center != null)
+            return center;
+
+        return _selectedEnemyTarget.transform;
+    }
 }
 
 
