@@ -1719,7 +1719,7 @@ private bool TryRunLevel5EvolutionNow()
             // Resolve (passive): queue reel spins for heroes that are attacked by this intent (can't yield inside callback).
             var resolveSpinQueue = new List<int>();
 
-            yield return EnemyLungeAttack(intent.enemy, lungeTarget, () =>
+            yield return EnemyLungeAttack(intent.enemy, lungeTarget, intent.attackIndex, () =>
             {
                 if (summoned)
                     Debug.Log($"[Summon][APPLY] enemy={intent.enemy.name} applying effects to {targets.Count} targets", intent.enemy);
@@ -1862,7 +1862,7 @@ if (summoned)
         mover.position = to;
     }
 
-    private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, Action applyDamage)
+    private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, int attackIndex, Action applyDamage)
     {
 
         if (enemy == null)
@@ -1877,6 +1877,15 @@ if (summoned)
         }
 
         Vector3 startPos = visual.position;
+
+        // Optional animated monster driver (e.g., Skeleton).
+        // If present, we drive walk/attack/idle via Animator while still using the existing lunge translation.
+        MonsterAnimationDriver animDriver = enemy.GetComponentInChildren<MonsterAnimationDriver>(true);
+        if (animDriver != null)
+        {
+            animDriver.PlayWalk();
+        }
+
 
         Vector3 dir = Vector3.right;
         if (target != null)
@@ -1899,6 +1908,25 @@ if (summoned)
         }
 
         visual.position = peakPos;
+
+        // If this monster has an Animator-driven attack, trigger it now and (optionally) wait for an impact event.
+        if (animDriver != null)
+        {
+            if (animDriver.waitForAttackImpactEvent) animDriver.ResetAttackImpact();
+            animDriver.PlayAttackForAttackIndex(attackIndex);
+
+            if (animDriver.waitForAttackImpactEvent)
+            {
+                float elapsedImpact = 0f;
+                const float impactFailSafeSeconds = 2.0f;
+                while (!animDriver.AttackImpactFired && elapsedImpact < impactFailSafeSeconds)
+                {
+                    elapsedImpact += Time.deltaTime;
+                    yield return null;
+                }
+            }
+        }
+
         applyDamage?.Invoke();
 
         float hold = Mathf.Max(0f, enemyLungeHoldSeconds);
@@ -1916,6 +1944,9 @@ if (summoned)
         }
 
         visual.position = startPos;
+
+        if (animDriver != null)
+            animDriver.PlayIdle();
     }
 
     private IEnumerator StartBattleRoutine()
@@ -2383,6 +2414,17 @@ if (summoned)
 
                 if (shownDamage > 0)
                     SpawnDamageNumber(enemyTarget.transform.position, shownDamage);
+
+                // Optional monster reaction animations (hit/block) for Animator-driven monsters.
+                var enemyAnim = enemyTarget != null ? enemyTarget.GetComponentInChildren<MonsterAnimationDriver>(true) : null;
+                if (enemyAnim != null && !enemyTarget.IsDead)
+                {
+                    if (shownDamage <= 0 || dealt <= 0)
+                        enemyAnim.PlayBlock();
+                    else
+                        enemyAnim.PlayHit();
+                }
+
 
                 actorStats.ApplyOnHitEffectsTo(enemyTarget);
 
@@ -3719,11 +3761,38 @@ if (summoned)
         // 🔊 Play death SFX BEFORE deactivation
         var sfx = m.GetComponent<MonsterSFX>();
         if (sfx != null)
-        {
             sfx.PlayDeathSFX();
+
+        // Optional animated death (e.g., Skeleton). If present, play the death animation before deactivating.
+        var animDriver = m.GetComponentInChildren<MonsterAnimationDriver>(true);
+        if (animDriver != null && animDriver.useDeathAnimation)
+        {
+            StartCoroutine(HandleMonsterKilledAnimatedRoutine(m, animDriver));
+            return;
         }
 
         RemoveMonster(m);
+    }
+
+    private IEnumerator HandleMonsterKilledAnimatedRoutine(Monster m, MonsterAnimationDriver animDriver)
+    {
+        if (m == null)
+            yield break;
+
+        // Monster might get killed multiple times by chained effects; guard.
+        if (!_activeMonsters.Contains(m))
+            yield break;
+
+        if (animDriver != null)
+            animDriver.PlayDeath();
+
+        float wait = (animDriver != null) ? Mathf.Max(0f, animDriver.deathDurationSeconds) : 0f;
+        if (wait > 0f)
+            yield return new WaitForSeconds(wait);
+
+        // If the battle ended during the wait, still clean up the monster safely.
+        if (_activeMonsters.Contains(m))
+            RemoveMonster(m);
     }
 
     private IEnumerator HandleEncounterVictoryRoutine()
@@ -5596,6 +5665,9 @@ if (logPassiveBridge)
         }
     }
 }
+
+
+////////////////////////////////////////////////////////////
 
 
 ////////////////////////////////////////////////////////////
