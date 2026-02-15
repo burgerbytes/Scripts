@@ -2028,7 +2028,33 @@ if (summoned)
             }
         }
 
-        applyDamage?.Invoke();
+        
+        // Sabotage: if this attack is sabotaged, the monster takes self-damage now.
+        // If it dies from this self-damage, the attack is cancelled.
+        if (enemy != null && !enemy.IsDead)
+        {
+            int selfDamage = 0;
+            try { selfDamage = enemy.GetSabotageSelfDamageForAttackIndex(attackIndex); }
+            catch { selfDamage = 0; }
+
+            if (selfDamage > 0)
+            {
+                int dealt = 0;
+                try { dealt = enemy.TakeTrueDamage(selfDamage); }
+                catch { dealt = 0; }
+
+                if (dealt > 0)
+                    SpawnDamageNumber(visual.position, dealt);
+
+                if (enemy.IsDead)
+                {
+                    HandleMonsterKilled(enemy);
+                    yield break;
+                }
+            }
+        }
+
+applyDamage?.Invoke();
 
         float hold = Mathf.Max(0f, enemyLungeHoldSeconds);
         if (hold > 0f)
@@ -2735,6 +2761,28 @@ if (summoned)
                     yield return StartCoroutine(reelSpinSystem.MomentumSpinAndInstantCollect(_pendingActorIndex));
                     
                 HandleMonsterKilled(enemyTarget);
+            }
+        }
+
+
+        // ============================
+        // Sabotage (Enemy Ability Debuff)
+        // ============================
+        // If configured, pick a random enemy attack and mark it sabotaged for the rest of the battle.
+        // Whenever the enemy uses that attack, it takes self-damage equal to current sabotage stacks.
+        if (ability != null && ability.targetType == AbilityTargetType.Enemy)
+        {
+            bool doSabotage = false;
+            int stacksToApply = 0;
+            try { doSabotage = ability.inflictsSabotage; stacksToApply = ability.sabotageStacks; }
+            catch { doSabotage = false; stacksToApply = 0; }
+
+            if (doSabotage && enemyTarget != null && !enemyTarget.IsDead)
+            {
+                int stacks = Mathf.Max(1, stacksToApply);
+                int chosenIdx = enemyTarget.ApplySabotageToRandomAttack(stacks);
+                if (logFlow)
+                    Debug.Log($"[Battle][Sabotage] Applied to monster='{enemyTarget.name}' +{stacks} stacks. chosenAttackIndex={chosenIdx} totalStacks={enemyTarget.SabotageStacks}", this);
             }
         }
 
@@ -4687,6 +4735,7 @@ private IEnumerator FadeMusicRoutine(AudioSource src, float from, float to, floa
     [SerializeField] private Sprite statusIconStasisSprite;
     [SerializeField] private Sprite statusIconCorrosionSprite;
     [SerializeField] private Sprite statusIconAttackBoostSprite;
+    [SerializeField] private Sprite statusIconSabotagedSprite;
 
     [Header("Status Icon Layout")]
     [SerializeField] private Vector3 statusIconLocalOffset = new Vector3(0f, 1.2f, 0f);
@@ -5000,7 +5049,8 @@ private void LayoutHeroStatusIcons(Transform statusIconRoot)
                 hpBar.ConfigureStatusSprites(statusIconBleedingSprite, 
                                              statusIconFocusRuneSprite,
                                              statusIconIgnitionSprite,
-                                             statusIconStasisSprite);
+                                             statusIconStasisSprite,
+                                             statusIconSabotagedSprite);
                 // MonsterHpBar subscribes to status changes and will refresh automatically,
                 // but do an initial refresh so newly-spawned monsters show correct icons immediately.
                 // (The call above already refreshes.)
@@ -5022,11 +5072,15 @@ private void LayoutHeroStatusIcons(Transform statusIconRoot)
             if (ctrl == null)
                 ctrl = iconTf.gameObject.AddComponent<MonsterStatusEffectIconController>();
 
-            ctrl.Configure(statusIconBleedingSprite);
+            ctrl.Configure(statusIconBleedingSprite, statusIconSabotagedSprite);
 
             int stacks = 0;
             try { stacks = m.BleedStacks; } catch { stacks = 0; }
             ctrl.SetBleedStacks(stacks);
+
+            int sab = 0;
+            try { sab = m.SabotageStacks; } catch { sab = 0; }
+            ctrl.SetSabotageStacks(sab);
         }
 
     }
@@ -6066,3 +6120,4 @@ if (logPassiveBridge)
 
 
 ////////////////////////////////////////////////////////////
+

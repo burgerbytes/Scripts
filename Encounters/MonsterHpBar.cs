@@ -37,6 +37,9 @@ public class MonsterHpBar : MonoBehaviour
     [Tooltip("Sprite shown when the monster is Bleeding (stacks > 0).")]
     [SerializeField] private Sprite bleedingStatusSprite;
 
+    [Tooltip("Sprite shown when the monster has Sabotage (an enemy ability is sabotaged).")]
+    [SerializeField] private Sprite sabotagedStatusSprite;
+
     [Tooltip("Pixel size of each status icon (UI units).")]
     [SerializeField] private float statusIconSize = 18f;
 
@@ -71,9 +74,11 @@ public class MonsterHpBar : MonoBehaviour
     private Image _statusIconBleed;
     private Image _statusIconIgnition;
     private Image _statusIconStasis;
+    private Image _statusIconSabotage;
     private TMP_Text _statusBleedStacksText;
     private TMP_Text _statusIgnitionStacksText;
     private TMP_Text _statusStasisStacksText;
+    private TMP_Text _statusSabotageStacksText;
 
     private void Reset()
     {
@@ -634,12 +639,14 @@ public class MonsterHpBar : MonoBehaviour
     public void ConfigureStatusSprites(Sprite bleedingSprite, 
                                        Sprite focusRuneSprite,
                                        Sprite ignitionSprite,
-                                       Sprite stasisSprite)
+                                       Sprite stasisSprite,
+                                       Sprite sabotagedSprite)
     {
         bleedingStatusSprite = bleedingSprite;
         focusRuneStatusSprite = focusRuneSprite;
         ignitionStatusSprite = ignitionSprite;
         stasisStatusSprite = stasisSprite;
+        sabotagedStatusSprite = sabotagedSprite;
         RefreshStatusIcons();
     }
 
@@ -710,6 +717,47 @@ public class MonsterHpBar : MonoBehaviour
             _statusIgnitionStacksText.text = "";
         }
         
+
+        // Ensure Stasis icon
+        if (_statusIconStasis == null)
+        {
+            _statusIconStasis = CreateStatusImage("StasisIcon", statusIconsContainer);
+            var tgo = new GameObject("Stacks", typeof(RectTransform));
+            tgo.transform.SetParent(_statusIconStasis.transform, false);
+
+            var tr = tgo.GetComponent<RectTransform>();
+            tr.anchorMin = Vector2.zero;
+            tr.anchorMax = Vector2.one;
+            tr.offsetMin = Vector2.zero;
+            tr.offsetMax = Vector2.zero;
+
+            _statusStasisStacksText = tgo.AddComponent<TextMeshProUGUI>();
+            _statusStasisStacksText.alignment = TextAlignmentOptions.BottomRight;
+            _statusStasisStacksText.fontSize = 14;
+            _statusStasisStacksText.raycastTarget = false;
+            _statusStasisStacksText.text = "";
+        }
+
+        // Ensure Sabotage icon
+        if (_statusIconSabotage == null)
+        {
+            _statusIconSabotage = CreateStatusImage("SabotageIcon", statusIconsContainer);
+            var tgo = new GameObject("Stacks", typeof(RectTransform));
+            tgo.transform.SetParent(_statusIconSabotage.transform, false);
+
+            var tr = tgo.GetComponent<RectTransform>();
+            tr.anchorMin = Vector2.zero;
+            tr.anchorMax = Vector2.one;
+            tr.offsetMin = Vector2.zero;
+            tr.offsetMax = Vector2.zero;
+
+            _statusSabotageStacksText = tgo.AddComponent<TextMeshProUGUI>();
+            _statusSabotageStacksText.alignment = TextAlignmentOptions.BottomRight;
+            _statusSabotageStacksText.fontSize = 14;
+            _statusSabotageStacksText.raycastTarget = false;
+            _statusSabotageStacksText.text = "";
+        }
+
         // Ensure Bleed icon
         if (_statusIconBleed == null)
         {
@@ -766,6 +814,8 @@ public class MonsterHpBar : MonoBehaviour
             if (_statusStasisStacksText != null) _statusStasisStacksText.text = "";
             if (_statusIconBleed != null) _statusIconBleed.enabled = false;
             if (_statusBleedStacksText != null) _statusBleedStacksText.text = "";
+            if (_statusIconSabotage != null) _statusIconSabotage.enabled = false;
+            if (_statusSabotageStacksText != null) _statusSabotageStacksText.text = "";
             return;
         }
 
@@ -828,6 +878,26 @@ public class MonsterHpBar : MonoBehaviour
         {
             _statusBleedStacksText.text = hasBleed ? bleedStacks.ToString() : "";
             _statusBleedStacksText.enabled = hasBleed;
+        }
+
+        // Sabotage
+        int sabotageStacks = 0;
+        bool hasSabotage = false;
+        try { sabotageStacks = monster.SabotageStacks; } catch { sabotageStacks = 0; }
+        try { hasSabotage = monster.HasSabotage; } catch { hasSabotage = sabotageStacks > 0; }
+
+        bool showSabotage = hasSabotage && sabotageStacks > 0 && sabotagedStatusSprite != null;
+
+        if (_statusIconSabotage != null)
+        {
+            _statusIconSabotage.sprite = sabotagedStatusSprite;
+            _statusIconSabotage.enabled = showSabotage;
+        }
+
+        if (_statusSabotageStacksText != null)
+        {
+            _statusSabotageStacksText.text = showSabotage ? sabotageStacks.ToString() : "";
+            _statusSabotageStacksText.enabled = showSabotage;
         }
     }
 

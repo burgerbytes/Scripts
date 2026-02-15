@@ -1,5 +1,3 @@
-// GUID: ea47960c4ce364a4980645e51f542a03
-////////////////////////////////////////////////////////////
 using System;
 using UnityEngine;
 using System.Collections; 
@@ -194,6 +192,31 @@ public class Monster : MonoBehaviour
     public int StasisStacks => _stasisStacks;
     [SerializeField] public int maxStasisStacks;
 
+    [Header("Status: Sabotage")]
+    [Tooltip("If >= 0, this attack index is sabotaged. When the monster uses that attack, it takes self-damage equal to Sabotage stacks.")]
+    [SerializeField] private int _sabotagedAttackIndex = -1;
+
+    [Tooltip("Current Sabotage stacks. Self-damage dealt when using the sabotaged attack equals this value.")]
+    [SerializeField] private int _sabotageStacks = 0;
+
+    [Header("=== DEBUG: SABOTAGE (Runtime) ===")]
+    [Tooltip("True when this monster currently has a sabotaged attack.")]
+    [SerializeField] private bool _debugHasSabotage = false;
+
+    [Tooltip("Which attack index is sabotaged (mirrors SabotagedAttackIndex).")]
+    [SerializeField] private int _debugSabotagedAttackIndex = -1;
+
+    [Tooltip("Attack id/name at the sabotaged index (for inspector readability).")]
+    [SerializeField] private string _debugSabotagedAttackId = "";
+
+    [Tooltip("Current sabotage stacks (mirrors SabotageStacks).")]
+    [SerializeField] private int _debugSabotageStacks = 0;
+
+
+    public int SabotagedAttackIndex => _sabotagedAttackIndex;
+    public int SabotageStacks => _sabotageStacks;
+    public bool HasSabotage => _sabotageStacks > 0 && _sabotagedAttackIndex >= 0;
+
     // These are required by MonsterHpBar.cs
     public int MaxHp => maxHp;
     public int CurrentHp => _currentHp;
@@ -264,6 +287,8 @@ public class Monster : MonoBehaviour
         OnHpChanged?.Invoke(_currentHp, maxHp);
 
         ResetSummonTrackingForBattle();
+        SyncSabotageDebugFields();
+
     }
 
     // =======================
@@ -682,6 +707,78 @@ public class Monster : MonoBehaviour
         SetStasis(0);
     }
 
+
+    // =======================
+    // Status: Sabotage
+    // =======================
+    /// <summary>
+    /// Applies Sabotage: selects a random attack index on this monster and adds stacks.
+    /// Returns the chosen attack index (or -1 if none).
+    /// </summary>
+    
+    private void SyncSabotageDebugFields()
+    {
+        _debugHasSabotage = HasSabotage;
+        _debugSabotagedAttackIndex = _sabotagedAttackIndex;
+        _debugSabotageStacks = _sabotageStacks;
+
+        if (attacks != null && _sabotagedAttackIndex >= 0 && _sabotagedAttackIndex < attacks.Length)
+        {
+            _debugSabotagedAttackId = attacks[_sabotagedAttackIndex] != null ? attacks[_sabotagedAttackIndex].id : "";
+        }
+        else
+        {
+            _debugSabotagedAttackId = "";
+        }
+    }
+
+public int ApplySabotageToRandomAttack(int stacks)
+    {
+        if (stacks <= 0) return _sabotagedAttackIndex;
+
+        int count = (attacks != null) ? attacks.Length : 0;
+        if (count <= 0)
+        {
+            _sabotagedAttackIndex = -1;
+            _sabotageStacks = Mathf.Max(0, _sabotageStacks + stacks);
+            SyncSabotageDebugFields();
+            OnStatusChanged?.Invoke();
+            return -1;
+        }
+
+        // Re-roll the sabotaged attack each time Sabotage is applied (can still land on the same one).
+        _sabotagedAttackIndex = UnityEngine.Random.Range(0, count);
+        _sabotageStacks = Mathf.Max(0, _sabotageStacks + stacks);
+
+        if (debugStatusLogs)
+            Debug.Log($"[Monster][Sabotage] Applied monster='{name}' +{stacks} stacks -> total={_sabotageStacks}, attackIndex={_sabotagedAttackIndex}", this);
+
+        SyncSabotageDebugFields();
+            OnStatusChanged?.Invoke();
+        return _sabotagedAttackIndex;
+    }
+
+    /// <summary>
+    /// If the provided attackIndex is currently sabotaged, returns the self-damage the monster should take.
+    /// Otherwise returns 0.
+    /// </summary>
+    public int GetSabotageSelfDamageForAttackIndex(int attackIndex)
+    {
+        if (_sabotageStacks <= 0) return 0;
+        if (_sabotagedAttackIndex < 0) return 0;
+        return (attackIndex == _sabotagedAttackIndex) ? _sabotageStacks : 0;
+    }
+
+    /// <summary>
+    /// Deals raw, unmitigated HP damage (ignores defense/resistance).
+    /// Used by special effects like Sabotage self-damage.
+    /// Returns HP lost.
+    /// </summary>
+    public int TakeTrueDamage(int amount)
+    {
+        return ApplyRawDamage(Mathf.Max(0, amount));
+    }
+
     public void SetCurrentHp(int hp)
     {
         _currentHp = Mathf.Clamp(hp, 0, maxHp);
@@ -700,4 +797,5 @@ public class Monster : MonoBehaviour
 
 
 ////////////////////////////////////////////////////////////
+
 

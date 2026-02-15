@@ -1,5 +1,3 @@
-// GUID: cf56299f5b00af345b24e257cb33b22b
-////////////////////////////////////////////////////////////
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -150,6 +148,14 @@ public int bonusDamagePerAttackResource = 2;
     public bool inflictsBurn = false;
     public bool inflictsFreeze = false;
 
+    [Header("Sabotage")]
+    [Tooltip("If true, this ability applies Sabotage to the target enemy: one random enemy attack becomes sabotaged for the rest of the battle.")]
+    public bool inflictsSabotage = false;
+
+    [Tooltip("How many Sabotage stacks to add when this ability is used. When the sabotaged attack is used, the enemy takes self-damage equal to the current stacks.")]
+    [Min(1)] public int sabotageStacks = 1;
+
+
 
     [Header("Summon (Experimental)")]
     [Tooltip("Optional: if assigned, this ability can summon a monster prefab. (Requires battle-side support for ally summons; currently used for enemy summons.)")]
@@ -164,4 +170,5 @@ public int bonusDamagePerAttackResource = 2;
 ////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////
+
 

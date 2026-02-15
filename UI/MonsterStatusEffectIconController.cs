@@ -27,6 +27,10 @@ public class MonsterStatusEffectIconController : MonoBehaviour
     [SerializeField] private Vector3 stackTextLocalOffset = new Vector3(0.18f, -0.18f, 0f);
 
     private Sprite _bleedSprite;
+    private Sprite _sabotageSprite;
+
+    private int _bleedStacks;
+    private int _sabotageStacks;
 
     private Transform _iconRoot;
     private SpriteRenderer _iconRenderer;
@@ -123,15 +127,14 @@ public class MonsterStatusEffectIconController : MonoBehaviour
     /// <summary>
     /// Provide the sprite used for Bleeding.
     /// </summary>
-    public void Configure(Sprite bleedSprite)
+    public void Configure(Sprite bleedSprite, Sprite sabotageSprite = null)
     {
         _bleedSprite = bleedSprite;
+        _sabotageSprite = sabotageSprite;
 
         EnsureBuilt();
         ApplyLayout();
-
-        if (_iconRenderer != null)
-            _iconRenderer.sprite = _bleedSprite;
+        Refresh();
     }
 
     /// <summary>
@@ -139,19 +142,40 @@ public class MonsterStatusEffectIconController : MonoBehaviour
     /// </summary>
     public void SetBleedStacks(int stacks)
     {
+        _bleedStacks = Mathf.Max(0, stacks);
         EnsureBuilt();
         ApplyLayout();
+        Refresh();
+    }
 
-        bool active = stacks > 0 && _bleedSprite != null;
+    /// <summary>
+    /// Set current sabotage stack count. 0 hides the icon (unless bleed is active).
+    /// </summary>
+    public void SetSabotageStacks(int stacks)
+    {
+        _sabotageStacks = Mathf.Max(0, stacks);
+        EnsureBuilt();
+        ApplyLayout();
+        Refresh();
+    }
+
+    private void Refresh()
+    {
+        // Priority: Sabotage overrides bleed when active.
+        bool sabotageActive = _sabotageStacks > 0 && _sabotageSprite != null;
+        bool bleedActive = _bleedStacks > 0 && _bleedSprite != null;
+
+        bool active = sabotageActive || bleedActive;
 
         if (_iconRenderer != null)
         {
-            _iconRenderer.sprite = _bleedSprite;
+            _iconRenderer.sprite = sabotageActive ? _sabotageSprite : _bleedSprite;
             _iconRenderer.enabled = active;
         }
 
         if (_stackText != null)
         {
+            int stacks = sabotageActive ? _sabotageStacks : _bleedStacks;
             _stackText.text = active ? stacks.ToString() : "";
             _stackText.enabled = active;
         }
