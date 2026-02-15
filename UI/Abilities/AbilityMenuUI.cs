@@ -30,6 +30,7 @@ public class AbilityMenuUI : MonoBehaviour
     private readonly List<AbilityButtonUI> buttons = new();
     private AbilityButtonUI selectedButton;
     private HeroStats currentHero;
+    private PartyHUD _partyHUD;
 
     // While an ability is in targeting/cast state, keep the description panel visible.
     private bool _descPinnedUntilCast = false;
@@ -54,6 +55,8 @@ public class AbilityMenuUI : MonoBehaviour
 
     private void OnEnable()
 {
+    if (_partyHUD == null)
+        _partyHUD = FindFirstObjectByType<PartyHUD>(FindObjectsInactive.Include);
     if (reelSpinSystem == null)
         reelSpinSystem = FindFirstObjectByType<ReelSpinSystem>();
     if (reelSpinSystem != null)
@@ -83,6 +86,7 @@ private void HandleTargetConfirmed()
     // (before ResolvePendingAbility begins and attack animations play).
     _descPinnedUntilCast = false;
     HideAbilityDescPanel();
+    TryNotifyClosedIfFullyHidden();
 }
 
 private void Update()
@@ -98,6 +102,7 @@ private void Update()
                 if (debugLogs) Debug.Log("[AbilityMenuUI] Cast state cleared -> hiding AbilityDescPanel.", this);
                 _descPinnedUntilCast = false;
                 HideAbilityDescPanel();
+                TryNotifyClosedIfFullyHidden();
             }
         }
     }
@@ -124,12 +129,20 @@ private void Update()
         }
 
         if (hero == null) return;
+
         currentHero = hero;
 
         if (root == null)
         {
             Debug.LogError("[AbilityMenuUI] OpenForHero: root is NULL. Drag AbilityMenuPanel into AbilityMenuUI.root OR ensure child is named 'AbilityMenuPanel'.", this);
             return;
+        }
+
+        // Enforce single-open-panel rule
+        if (_partyHUD != null)
+        {
+            if (!_partyHUD.NotifyPanelOpened(PartyHUD.UIPanelType.AbilityMenu))
+                return;
         }
 
         root.SetActive(true);
@@ -231,6 +244,8 @@ private void Update()
             HideAbilityDescPanel();
 
         selectedButton = null;
+
+        TryNotifyClosedIfFullyHidden();
     }
 
     public void RefreshAffordability()
@@ -309,6 +324,19 @@ private void Update()
         if (abilityDescriptionText != null)
             abilityDescriptionText.text = string.Empty;
     }
+
+
+    private void TryNotifyClosedIfFullyHidden()
+    {
+        if (_partyHUD == null) return;
+
+        bool rootVisible = root != null && root.activeSelf;
+        bool descVisible = abilityDescPanel != null && abilityDescPanel.activeSelf;
+
+        if (!rootVisible && !descVisible)
+            _partyHUD.NotifyPanelClosed(PartyHUD.UIPanelType.AbilityMenu);
+    }
+
 }
 
 
@@ -321,3 +349,4 @@ private void Update()
 
 
 ////////////////////////////////////////////////////////////
+

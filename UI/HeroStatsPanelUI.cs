@@ -40,6 +40,7 @@ public class HeroStatsPanelUI : MonoBehaviour
 
     [Header("Reel Phase")]
     [SerializeField] private ReelSpinSystem reelSpinSystem;
+    private PartyHUD _partyHUD;
 
     private HeroStats _hero;
 
@@ -51,6 +52,8 @@ public class HeroStatsPanelUI : MonoBehaviour
 
     private void OnEnable()
     {
+        if (_partyHUD == null)
+            _partyHUD = FindFirstObjectByType<PartyHUD>(FindObjectsInactive.Include);
         if (reelSpinSystem == null)
             reelSpinSystem = FindFirstObjectByType<ReelSpinSystem>();
         if (reelSpinSystem != null)
@@ -84,6 +87,14 @@ public class HeroStatsPanelUI : MonoBehaviour
     /// </summary>
     public void ShowForHero(HeroStats hero)
     {
+        if (_partyHUD != null)
+        {
+            if (!_partyHUD.CanOpenPanel(PartyHUD.UIPanelType.StatsPanel))
+                return;
+
+            _partyHUD.NotifyPanelOpened(PartyHUD.UIPanelType.StatsPanel);
+        }
+
         _hero = hero;
         Show();
         Refresh();
@@ -91,6 +102,14 @@ public class HeroStatsPanelUI : MonoBehaviour
 
     public void Show()
     {
+        if (_partyHUD != null)
+        {
+            if (!_partyHUD.CanOpenPanel(PartyHUD.UIPanelType.StatsPanel))
+                return;
+
+            _partyHUD.NotifyPanelOpened(PartyHUD.UIPanelType.StatsPanel);
+        }
+
         if (!gameObject.activeSelf)
             gameObject.SetActive(true);
     }
@@ -99,6 +118,9 @@ public class HeroStatsPanelUI : MonoBehaviour
     {
         if (gameObject.activeSelf)
             gameObject.SetActive(false);
+
+        if (_partyHUD != null)
+            _partyHUD.NotifyPanelClosed(PartyHUD.UIPanelType.StatsPanel);
     }
 
     private void Refresh()
@@ -152,3 +174,5 @@ public class HeroStatsPanelUI : MonoBehaviour
 
 
 ////////////////////////////////////////////////////////////
+
+

@@ -40,6 +40,15 @@ public class PartyHUD : MonoBehaviour
     [Header("Debug")]
     [SerializeField] private bool debugLogs = true;
 
+    [Header("Panel Locking")]
+    [Tooltip("If true, only ONE panel can be open at a time (AbilityMenu, QuickAbilityMenu, StatsPanel, Reelcraft).")]
+    [SerializeField] private bool enforceSingleOpenPanel = true;
+
+    public enum UIPanelType { None, AbilityMenu, QuickAbilityMenu, StatsPanel, Reelcraft, InfoPanel }
+    [SerializeField] private UIPanelType debugCurrentOpenPanel = UIPanelType.None;
+
+    private UIPanelType _currentOpenPanel = UIPanelType.None;
+
     private int _selectedIndex = -1;
     private bool _panelVisible = false;
     private bool _hasShownStatsOnce = false;
@@ -161,6 +170,10 @@ public class PartyHUD : MonoBehaviour
         if (!enableQuickAbilityMenu) return;
         if (quickAbilityMenu == null) return;
 
+        // Enforce "only one panel open at a time"
+        if (enforceSingleOpenPanel && IsAnyPanelOpen() && GetCurrentOpenPanel() != UIPanelType.QuickAbilityMenu)
+            return;
+
         quickAbilityMenu.Toggle();
     }
 
@@ -212,6 +225,58 @@ public class PartyHUD : MonoBehaviour
         ClearAllCastingAuras();
     }
 
+    // ------------------- Panel Locking API -------------------
+
+    public bool IsAnyPanelOpen()
+    {
+        if (!enforceSingleOpenPanel) return false;
+        return _currentOpenPanel != UIPanelType.None;
+    }
+
+    public UIPanelType GetCurrentOpenPanel() => _currentOpenPanel;
+
+    public bool CanOpenPanel(UIPanelType panelType)
+    {
+        if (!enforceSingleOpenPanel) return true;
+        if (panelType == UIPanelType.None) return true;
+        return _currentOpenPanel == UIPanelType.None || _currentOpenPanel == panelType;
+    }
+
+    /// <summary>
+    /// Called by panels when they become visible. Returns true if the panel is allowed to open.
+    /// If another panel is already open, this will return false.
+    /// </summary>
+    public bool NotifyPanelOpened(UIPanelType panelType)
+    {
+        if (!enforceSingleOpenPanel) return true;
+
+        if (panelType == UIPanelType.None) return true;
+
+        if (_currentOpenPanel == UIPanelType.None || _currentOpenPanel == panelType)
+        {
+            _currentOpenPanel = panelType;
+            debugCurrentOpenPanel = _currentOpenPanel;
+            return true;
+        }
+
+        if (debugLogs)
+            Debug.Log($"[PartyHUD] Blocked opening panel {panelType} because {_currentOpenPanel} is already open.", this);
+
+        return false;
+    }
+
+    public void NotifyPanelClosed(UIPanelType panelType)
+    {
+        if (!enforceSingleOpenPanel) return;
+
+        if (_currentOpenPanel == panelType)
+        {
+            _currentOpenPanel = UIPanelType.None;
+            debugCurrentOpenPanel = _currentOpenPanel;
+        }
+    }
+
+
     // ------------------- existing behavior below -------------------
 
     private void CacheReelcraftForwarders()
@@ -258,6 +323,13 @@ public class PartyHUD : MonoBehaviour
     {
         _selectedIndex = newIndex;
         _panelVisible = true;
+
+        if (enforceSingleOpenPanel && IsAnyPanelOpen() && GetCurrentOpenPanel() != UIPanelType.StatsPanel)
+        {
+            RefreshAllSlots();
+            UpdateQuickAbilitiesButtonInteractable();
+            return;
+        }
 
         if (statsPanel != null && battleManager != null)
         {
@@ -312,6 +384,11 @@ public class PartyHUD : MonoBehaviour
             RefreshAllSlots();
             return;
         }
+
+        // Enforce "only one panel open at a time" (but still allow pending-ability targeting clicks above).
+        if (enforceSingleOpenPanel && IsAnyPanelOpen())
+            return;
+
 
         if (reelcraftPanel != null) reelcraftPanel.Hide();
 
@@ -380,3 +457,5 @@ public class PartyHUD : MonoBehaviour
         return null;
     }
 }
+
+

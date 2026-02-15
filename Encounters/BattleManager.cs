@@ -395,6 +395,8 @@ private Coroutine _battleMusicFadeRoutine;
     // OnCurrentLandedChanged fires immediately after OnSpinLanded for the same spin.
     [Header("Input / Targeting")]
     [SerializeField] private bool allowClickToSelectMonsterTarget = true;
+    [Tooltip("If true, clicking hero world sprites (their prefab colliders) can be used to select ALLY/SELF targets while an ability is awaiting a party target.")]
+    [SerializeField] private bool allowClickHeroSpritesToTargetAllies = true;
     [SerializeField] private bool ignoreClicksOverUI = true;
 
     [Header("Undo / Confirm UI")]
@@ -683,6 +685,18 @@ private Coroutine _battleMusicFadeRoutine;
 
         if (clicked == null)
         {
+            // Allow clicking hero world sprites (their prefab colliders) to select ally/self targets.
+            // This prevents "clicked elsewhere -> cancel" when the player is actually clicking the ally to heal/shield.
+            int clickedPartyIndex = TryGetClickedPartyMemberIndex();
+            if (clickedPartyIndex >= 0)
+            {
+                if (_awaitingPartyTarget)
+                {
+                    TryHandlePartySlotClickForPendingAbility(clickedPartyIndex);
+                    return;
+                }
+            }
+
             // Clicking anything that is NOT a valid target should cancel the pending ability.
             // This covers both enemy-targeting and party-targeting abilities.
             if (_awaitingEnemyTarget || _awaitingPartyTarget)
@@ -4455,6 +4469,81 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
 
         return null;
     }
+
+
+
+    private int TryGetClickedPartyMemberIndex()
+    {
+        if (!allowClickHeroSpritesToTargetAllies)
+            return -1;
+
+        if (_mainCam == null) _mainCam = Camera.main;
+        if (_mainCam == null) return -1;
+
+        Physics.queriesHitTriggers = true;
+
+        Vector3 world = _mainCam.ScreenToWorldPoint(Input.mousePosition);
+        Vector2 p2 = new Vector2(world.x, world.y);
+
+        // 2D colliders (common for sprite heroes)
+        Collider2D[] hits2D = Physics2D.OverlapPointAll(p2);
+        if (hits2D != null && hits2D.Length > 0)
+        {
+            for (int i = 0; i < hits2D.Length; i++)
+            {
+                Collider2D c = hits2D[i];
+                if (c == null) continue;
+
+                HeroStats hs = null;
+
+                var receiver = c.GetComponentInParent<HeroTargetClickReceiver>();
+                if (receiver != null) hs = receiver.HeroStats;
+
+                if (hs == null) hs = c.GetComponentInParent<HeroStats>();
+                if (hs == null) continue;
+
+                int idx = GetPartyIndexForHeroStats(hs);
+                if (IsValidPartyIndex(idx)) return idx;
+            }
+        }
+
+        // 3D colliders (if you ever swap to 3D hitboxes)
+        Ray ray = _mainCam.ScreenPointToRay(Input.mousePosition);
+        RaycastHit[] hits3D = Physics.RaycastAll(ray, 500f, ~0, QueryTriggerInteraction.Collide);
+        if (hits3D != null && hits3D.Length > 0)
+        {
+            float best = float.MaxValue;
+            int bestIdx = -1;
+
+            for (int i = 0; i < hits3D.Length; i++)
+            {
+                Collider c = hits3D[i].collider;
+                if (c == null) continue;
+
+                HeroStats hs = null;
+
+                var receiver = c.GetComponentInParent<HeroTargetClickReceiver>();
+                if (receiver != null) hs = receiver.HeroStats;
+
+                if (hs == null) hs = c.GetComponentInParent<HeroStats>();
+                if (hs == null) continue;
+
+                int idx = GetPartyIndexForHeroStats(hs);
+                if (!IsValidPartyIndex(idx)) continue;
+
+                if (hits3D[i].distance < best)
+                {
+                    best = hits3D[i].distance;
+                    bestIdx = idx;
+                }
+            }
+
+            if (bestIdx >= 0) return bestIdx;
+        }
+
+        return -1;
+    }
+
 
     private bool IsValidPartyIndex(int index) => _party != null && index >= 0 && index < _party.Count;
 

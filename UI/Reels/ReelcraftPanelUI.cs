@@ -17,6 +17,7 @@ public class ReelcraftPanelUI : MonoBehaviour
     [Header("Refs")]
     [SerializeField] private ReelcraftController reelcraft;
     [SerializeField] private BattleManager battleManager;
+    private PartyHUD _partyHUD;
     [SerializeField] private ReelSpinSystem reelSpinSystem;
 
     [Header("Text")]
@@ -46,6 +47,8 @@ public class ReelcraftPanelUI : MonoBehaviour
 
     private void Awake()
     {
+        if (_partyHUD == null)
+            _partyHUD = FindFirstObjectByType<PartyHUD>(FindObjectsInactive.Include);
         if (reelcraft == null)
             reelcraft = FindFirstObjectByType<ReelcraftController>();
         if (battleManager == null)
@@ -170,6 +173,12 @@ public class ReelcraftPanelUI : MonoBehaviour
 
         // Reelcraft can be opened outside reel phase (e.g., after cashout). The controller will gate actual use.
 
+        if (_partyHUD != null)
+        {
+            if (!_partyHUD.NotifyPanelOpened(PartyHUD.UIPanelType.Reelcraft))
+                return;
+        }
+
         gameObject.SetActive(true);
         Refresh();
     }
@@ -180,6 +189,9 @@ public class ReelcraftPanelUI : MonoBehaviour
         _hero = null;
         if (gameObject != null)
             gameObject.SetActive(false);
+
+        if (_partyHUD != null)
+            _partyHUD.NotifyPanelClosed(PartyHUD.UIPanelType.Reelcraft);
     }
 
     private void DisableAllButtons()
@@ -346,4 +358,6 @@ public class ReelcraftPanelUI : MonoBehaviour
         if (c != null) c.gameObject.SetActive(visible);
     }
 }
+
+
 

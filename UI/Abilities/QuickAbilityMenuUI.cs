@@ -20,6 +20,7 @@ public class QuickAbilityMenuUI : MonoBehaviour
 
     [Header("Refs")]
     [SerializeField] private BattleManager battleManager;
+    private PartyHUD _partyHUD;
     [SerializeField] private ResourcePool resourcePool;
 
     [Header("Behavior")]
@@ -47,6 +48,8 @@ public class QuickAbilityMenuUI : MonoBehaviour
 
     private void Awake()
     {
+        if (_partyHUD == null)
+            _partyHUD = FindFirstObjectByType<PartyHUD>(FindObjectsInactive.Include);
         if (battleManager == null)
             battleManager = FindFirstObjectByType<BattleManager>();
 
@@ -106,7 +109,17 @@ public class QuickAbilityMenuUI : MonoBehaviour
         }
 
         bool next = !root.activeSelf;
+
+        if (next && _partyHUD != null)
+        {
+            if (!_partyHUD.NotifyPanelOpened(PartyHUD.UIPanelType.QuickAbilityMenu))
+                return;
+        }
+
         root.SetActive(next);
+
+        if (!next && _partyHUD != null)
+            _partyHUD.NotifyPanelClosed(PartyHUD.UIPanelType.QuickAbilityMenu);
 
         if (next)
         {
@@ -127,6 +140,9 @@ public class QuickAbilityMenuUI : MonoBehaviour
         ExitSelectionMode();
         ClearList();
         _closeAfterThisPendingClears = false;
+
+        if (_partyHUD != null)
+            _partyHUD.NotifyPanelClosed(PartyHUD.UIPanelType.QuickAbilityMenu);
     }
 
     private void HandleActivePartyChanged(int _)
@@ -444,3 +460,5 @@ public class QuickAbilityMenuUI : MonoBehaviour
         }
     }
 }
+
+
