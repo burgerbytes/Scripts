@@ -496,11 +496,7 @@ private Coroutine _battleMusicFadeRoutine;
     private bool _resolving;
     private bool _impactFired;
     private bool _attackFinished;
-    
-    // Safe clamp for per-cast Animator speed during combo chains (e.g., Dagger Tempest).
-    // Keep <= 3.0f to reduce risk of skipping keyframes/events on fast clips.
-    private const float COMBO_ANIMATOR_SPEED_MAX = 2.75f;
-private Camera _mainCam;
+    private Camera _mainCam;
 
     private Coroutine _startBattleRoutine;
     private Coroutine _enemyTurnRoutine;
@@ -1442,6 +1438,7 @@ private bool TryRunLevel5EvolutionNow()
         _selectedPartyTargetIndex = partyIndex;
         _previewPartyTargetIndex = -1;
         HideConfirmText();
+        AbilityCastState.RaiseTargetConfirmed();
         StartCoroutine(ResolvePendingAbility());
         NotifyPartyChanged();
         return true;
@@ -1575,6 +1572,7 @@ private bool TryRunLevel5EvolutionNow()
         if (logFlow)
             Debug.Log($"[Battle][AbilityTarget] Target confirmed: {target.name}. Resolving ability.");
 
+        AbilityCastState.RaiseTargetConfirmed();
         StartCoroutine(ResolvePendingAbility());
 
     }
@@ -2502,51 +2500,26 @@ if (summoned)
                     int hitIndex = castsExecuted;
                     castsRemaining--;
 
-	                    
-
-                    // Compute combo speed multiplier ONCE per cast so we can reuse it for both
-                    // reel spin speed and animator playback speed.
-                    float comboSpeedMult = 1f;
-                    if (ability != null && ability.hasCombo)
-                    {
-                        comboSpeedMult = Mathf.Clamp(
-                            ability.comboSpinSpeedMultiplierStart + ability.comboSpinSpeedMultiplierStep * hitIndex,
-                            0.1f,
-                            Mathf.Max(0.1f, ability.comboSpinSpeedMultiplierMax));
-                    }
-// Play the attack animation for EACH combo cast (including the first).
+	                    // Play the attack animation for EACH combo cast (including the first).
 	                    // Restart from time=0 so repeated casts don't get ignored by the Animator.
-	                    	                    if (ability != null && ability.hasCombo && anim != null && !string.IsNullOrWhiteSpace(stateToPlay))
+	                    if (ability != null && ability.hasCombo && anim != null && !string.IsNullOrWhiteSpace(stateToPlay))
 	                    {
 	                        _impactFired = false;
+	                        if (logFlow) Debug.Log($"[Battle][Combo] Playing per-cast animation '{stateToPlay}' hitIndex={hitIndex}.", this);
+	                        anim.Play(stateToPlay, 0, 0f);
 
-	                        // Apply scaled animator speed for this cast, clamped to a safe max.
-	                        float prevAnimSpeed = anim.speed;
-	                        anim.speed = Mathf.Clamp(comboSpeedMult, 0.1f, COMBO_ANIMATOR_SPEED_MAX);
+	                        // Give Animator a frame to evaluate transitions/state.
+	                        yield return null;
 
-	                        try
+	                        if (useImpactSync)
 	                        {
-	                            if (logFlow) Debug.Log($"[Battle][Combo] Playing per-cast animation '{stateToPlay}' hitIndex={hitIndex} animSpeed={anim.speed:0.00} comboSpeedMult={comboSpeedMult:0.00}.", this);
-	                            anim.Play(stateToPlay, 0, 0f);
-
-	                            // Give Animator a frame to evaluate transitions/state.
-	                            yield return null;
-
-	                            if (useImpactSync)
+	                            float elapsed = 0f;
+	                            const float failSafeSeconds = 2.0f;
+	                            while (!_impactFired && elapsed < failSafeSeconds)
 	                            {
-	                                float elapsed = 0f;
-	                                const float failSafeSeconds = 2.0f;
-	                                while (!_impactFired && elapsed < failSafeSeconds)
-	                                {
-	                                    elapsed += Time.deltaTime;
-	                                    yield return null;
-	                                }
+	                                elapsed += Time.deltaTime;
+	                                yield return null;
 	                            }
-	                        }
-	                        finally
-	                        {
-	                            // Always restore animator speed after each cast so we don't affect anything else.
-	                            anim.speed = prevAnimSpeed;
 	                        }
 	                    }
 
@@ -2559,7 +2532,12 @@ if (summoned)
                     // Each cast's combo spin (including the first cast).
                     if (ability != null && ability.hasCombo && reelSpinSystem != null)
                     {
-                        yield return StartCoroutine(reelSpinSystem.MomentumSpinAndInstantCollect(_pendingActorIndex, comboSpeedMult));
+                        float speedMult = Mathf.Clamp(
+                            ability.comboSpinSpeedMultiplierStart + ability.comboSpinSpeedMultiplierStep * hitIndex,
+                            0.1f,
+                            Mathf.Max(0.1f, ability.comboSpinSpeedMultiplierMax));
+
+                        yield return StartCoroutine(reelSpinSystem.MomentumSpinAndInstantCollect(_pendingActorIndex, speedMult));
 
                         var spin = reelSpinSystem.LastInstantSpinResult;
                         if (spin.valid && actorStats != null)
@@ -5999,7 +5977,3 @@ if (logPassiveBridge)
 
 
 ////////////////////////////////////////////////////////////
-
-
-
-

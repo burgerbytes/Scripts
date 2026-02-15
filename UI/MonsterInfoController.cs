@@ -39,6 +39,11 @@ public class MonsterInfoController : MonoBehaviour
 
     private Monster _currentMonster;
 
+    private bool IsPlayerCasting()
+    {
+        return AbilityCastState.Instance != null && AbilityCastState.Instance.HasPendingCast;
+    }
+
     private void Awake()
     {
         if (panelRect == null && monsterInfoPanel != null)
@@ -57,8 +62,33 @@ public class MonsterInfoController : MonoBehaviour
         }
     }
 
+    private void OnEnable()
+    {
+        AbilityCastState.OnTargetConfirmed += HandleTargetConfirmed;
+    }
+
+    private void OnDisable()
+    {
+        AbilityCastState.OnTargetConfirmed -= HandleTargetConfirmed;
+    }
+
+    private void HandleTargetConfirmed()
+    {
+        // Hide immediately after the player confirms a target (before attack anims).
+        Hide();
+    }
+
+
     public void Show(Monster monster)
     {
+        // Do NOT allow this panel to open while the player is in a cast/targeting state.
+        // (Prevents it from popping up while selecting a target.)
+        if (IsPlayerCasting())
+        {
+            Hide();
+            return;
+        }
+
         if (monster == null || monster.IsDead)
         {
             Hide();
@@ -85,6 +115,13 @@ public class MonsterInfoController : MonoBehaviour
     
     private void LateUpdate()
     {
+        // If the player enters cast/targeting state while this is open, force-hide it.
+        if (monsterInfoPanel != null && monsterInfoPanel.activeSelf && IsPlayerCasting())
+        {
+            Hide();
+            return;
+        }
+
         if (!followMonster) return;
         if (_currentMonster == null) return;
         if (monsterInfoPanel == null || !monsterInfoPanel.activeSelf) return;

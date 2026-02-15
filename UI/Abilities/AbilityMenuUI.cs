@@ -58,18 +58,31 @@ public class AbilityMenuUI : MonoBehaviour
         reelSpinSystem = FindFirstObjectByType<ReelSpinSystem>();
     if (reelSpinSystem != null)
         reelSpinSystem.OnReelPhaseChanged += HandleReelPhaseChanged;
+
+    AbilityCastState.OnTargetConfirmed += HandleTargetConfirmed;
 }
 
 private void OnDisable()
 {
     if (reelSpinSystem != null)
         reelSpinSystem.OnReelPhaseChanged -= HandleReelPhaseChanged;
+
+    AbilityCastState.OnTargetConfirmed -= HandleTargetConfirmed;
 }
 
 private void HandleReelPhaseChanged(bool inReelPhase)
 {
     // Reel phase and player phase are unified. Abilities remain usable while reels are active.
     // No-op.
+}
+
+
+private void HandleTargetConfirmed()
+{
+    // The player just confirmed a target. Hide the description panel immediately
+    // (before ResolvePendingAbility begins and attack animations play).
+    _descPinnedUntilCast = false;
+    HideAbilityDescPanel();
 }
 
 private void Update()
