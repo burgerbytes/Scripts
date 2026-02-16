@@ -8,6 +8,10 @@ public class MonsterHpBar : MonoBehaviour
     [SerializeField] private Monster monster;
     [SerializeField] private Image fillImage;
 
+    [Header("Blocks UI (optional)")]
+    [Tooltip("If assigned, this will render HP as discrete blocks instead of a continuous bar.")]
+    [SerializeField] private HpBlocksBarUI hpBlocksBar;
+
     [Header("Damage Preview (Yellow Segment)")]
     [Tooltip("Optional. If not assigned, this is created at runtime.")]
     [SerializeField] private RectTransform hpBarFullRect;
@@ -96,6 +100,13 @@ public class MonsterHpBar : MonoBehaviour
         DisableLegacyGhostFill();
         EnsurePreviewObjects();
         EnsureStatusIcons();
+
+        // If we're using blocks UI, hide legacy fill/preview visuals.
+        if (hpBlocksBar != null && hpBlocksBar.IsConfigured)
+        {
+            if (fillImage != null) fillImage.enabled = false;
+            if (hpDamagePreviewImage != null) hpDamagePreviewImage.enabled = false;
+        }
 
         ClearPreview();
         RefreshStatusIcons();
@@ -489,6 +500,13 @@ public class MonsterHpBar : MonoBehaviour
         if (logDebug && monster != null)
             Debug.Log($"[MonsterHpBar] HandleHpChanged monster={monster.name} hp={current}/{max} barObj={name} monsterInstance={monster.GetInstanceID()} barInstance={GetInstanceID()}", this);
 
+        if (hpBlocksBar != null && hpBlocksBar.IsConfigured)
+        {
+            // Monsters currently don't use shields in this UI; pass shield=0.
+            hpBlocksBar.Render(max, current, 0, 0);
+            return;
+        }
+
         int safeMax = Mathf.Max(1, max);
         float current01 = Mathf.Clamp01((float)current / safeMax);
         SetFill01(current01);
@@ -501,6 +519,14 @@ public class MonsterHpBar : MonoBehaviour
     public void SetDamagePreview(int predictedHpAfterDamage)
     {
         if (monster == null) return;
+
+        if (hpBlocksBar != null && hpBlocksBar.IsConfigured)
+        {
+            int hpNow = monster.CurrentHp;
+            int previewDmg = Mathf.Max(0, hpNow - Mathf.Clamp(predictedHpAfterDamage, 0, hpNow));
+            hpBlocksBar.Render(monster.MaxHp, hpNow, 0, previewDmg);
+            return;
+        }
         if (fillImage == null) AutoFindFillImages();
         if (fillImage == null) return;
 
@@ -571,6 +597,12 @@ public class MonsterHpBar : MonoBehaviour
 
     public void ClearPreview()
     {
+        if (hpBlocksBar != null && hpBlocksBar.IsConfigured)
+        {
+            if (monster != null)
+                hpBlocksBar.Render(monster.MaxHp, monster.CurrentHp, 0, 0);
+            return;
+        }
         if (hpDamagePreviewImage != null)
             hpDamagePreviewImage.enabled = false;
 

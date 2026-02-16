@@ -2,7 +2,7 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 using System.Collections.Generic;
 using UnityEngine.UI;
-using TMPro;              
+using TMPro;
 using System.Reflection;
 
 public class EnemyIntentVisualizer : MonoBehaviour
@@ -42,6 +42,12 @@ public class EnemyIntentVisualizer : MonoBehaviour
     [SerializeField] private Sprite attackIcon;
     [SerializeField] private Sprite aoeAttackIcon;
     [SerializeField] private Sprite summonIcon;
+
+    // NEW: debuff intent icon fallbacks
+    [SerializeField] private Sprite debuffIcon;
+    [SerializeField] private Sprite attackDebuffIcon;
+    [SerializeField] private Sprite aoeDebuffIcon;
+
     [SerializeField] private Vector2 intentIconSize = new Vector2(56f, 56f);
     [SerializeField] private Vector2 intentIconScreenOffset = new Vector2(0f, 90f);
     [SerializeField] private Sprite targetDotSprite;
@@ -61,6 +67,10 @@ public class EnemyIntentVisualizer : MonoBehaviour
     private readonly List<IntentVisual> _visuals = new();
     private bool _refreshQueued;
     private int _framesSinceEnable;
+
+    // Warn only once per session to avoid log spam
+    private bool _warnedMissingIntentIconSprite;
+    private bool _warnedMissingTargetDotSprite;
 
     private void Awake()
     {
@@ -198,12 +208,20 @@ public class EnemyIntentVisualizer : MonoBehaviour
         {
             GameObject iconGo = new GameObject($"IntentIcon_{intent.enemy.name}");
             iconGo.transform.SetParent(uiRoot, false);
-
-            // Make sure intent icons render above other UI (e.g., HP bars) within the same canvas.
             iconGo.transform.SetAsLastSibling();
 
             iconImg = iconGo.AddComponent<Image>();
-            iconImg.sprite = GetIconForIntent(intent);
+
+            // Fail-safe icon sprite assignment (prevents white squares)
+            Sprite iconSprite = GetIconForIntent(intent);
+            iconImg.sprite = iconSprite;
+            iconImg.enabled = (iconSprite != null);
+            if (iconSprite == null && !_warnedMissingIntentIconSprite)
+            {
+                _warnedMissingIntentIconSprite = true;
+                Debug.LogWarning("[EnemyIntentVisualizer] Missing intent icon sprite. Assign IntentIconSetSO or legacy sprites (Attack/AoE/Summon/Debuff).", this);
+            }
+
             iconImg.preserveAspect = true;
             iconImg.raycastTarget = false;
 
@@ -216,7 +234,16 @@ public class EnemyIntentVisualizer : MonoBehaviour
             dotGo.transform.SetParent(iconGo.transform, false);
 
             dotImg = dotGo.AddComponent<Image>();
+
+            // Fail-safe dot sprite assignment
             dotImg.sprite = targetDotSprite;
+            dotImg.enabled = (targetDotSprite != null);
+            if (targetDotSprite == null && !_warnedMissingTargetDotSprite)
+            {
+                _warnedMissingTargetDotSprite = true;
+                Debug.LogWarning("[EnemyIntentVisualizer] Missing TargetDotSprite. Assign 'targetDotSprite' to avoid white square dot.", this);
+            }
+
             dotImg.preserveAspect = true;
             dotImg.raycastTarget = false;
 
@@ -298,6 +325,22 @@ public class EnemyIntentVisualizer : MonoBehaviour
             if (s != null) return s;
         }
 
+        // Legacy fallback: attempt to resolve debuff-ish categories by name
+        // (keeps this robust even if enum values change)
+        string cat = intent.category.ToString().ToLowerInvariant();
+
+        bool isDebuff = cat.Contains("debuff") || cat.Contains("status");
+        bool isAttack = cat.Contains("attack") || cat.Contains("atk");
+        bool isAoe = cat.Contains("aoe") || cat.Contains("multi") || cat.Contains("all");
+
+        if (isDebuff)
+        {
+            if (isAoe && aoeDebuffIcon != null) return aoeDebuffIcon;
+            if (isAttack && attackDebuffIcon != null) return attackDebuffIcon;
+            if (debuffIcon != null) return debuffIcon;
+            // if missing, fall through to type icons
+        }
+
         // Fallback: old AoE vs Attack sprites
         return GetLegacyIconForIntentType(intent.type);
     }
@@ -316,6 +359,56 @@ public class EnemyIntentVisualizer : MonoBehaviour
         FieldInfo f = battleManager.GetType().GetField("_plannedIntents", BindingFlags.Instance | BindingFlags.NonPublic);
         if (f?.GetValue(battleManager) is List<BattleManager.EnemyIntent> cached && cached.Count > 0)
             Build(cached);
+    }
+
+    // =============================
+    // Hero-world endpoint helpers (use hero sprite / CenterPoint instead of PartyHUD portrait)
+    // =============================
+    private static System.Reflection.FieldInfo _partyField;
+    private static System.Reflection.FieldInfo _avatarGOField;
+
+    private static bool TryGetHeroCenterWorldPosition(BattleManager bm, int partyIndex, out Vector3 pos)
+    {
+        pos = Vector3.zero;
+        if (bm == null) return false;
+
+        _partyField ??= bm.GetType().GetField("_party", BindingFlags.Instance | BindingFlags.NonPublic);
+        if (_partyField == null) return false;
+
+        if (_partyField.GetValue(bm) is not System.Collections.IList partyList) return false;
+        if (partyIndex < 0 || partyIndex >= partyList.Count) return false;
+
+        object entry = partyList[partyIndex];
+        if (entry == null) return false;
+
+        _avatarGOField ??= entry.GetType().GetField("avatarGO", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (_avatarGOField == null) return false;
+
+        if (_avatarGOField.GetValue(entry) is not GameObject go) return false;
+
+        Transform center = FindChildRecursive(go.transform, "CenterPoint");
+        if (center == null) center = go.transform;
+
+        pos = center.position;
+        return true;
+    }
+
+    private static Transform FindChildRecursive(Transform root, string childName)
+    {
+        if (root == null) return null;
+        if (root.name == childName) return root;
+
+        for (int i = 0; i < root.childCount; i++)
+        {
+            Transform c = root.GetChild(i);
+            if (c == null) continue;
+
+            if (c.name == childName) return c;
+
+            Transform nested = FindChildRecursive(c, childName);
+            if (nested != null) return nested;
+        }
+        return null;
     }
 
     private class IntentVisual
@@ -376,8 +469,8 @@ public class EnemyIntentVisualizer : MonoBehaviour
 
         public void SetIconEnabled(bool v)
         {
-            if (icon != null) icon.enabled = v;
-            if (dot != null) dot.enabled = v;
+            if (icon != null) icon.enabled = v && icon.sprite != null;
+            if (dot != null) dot.enabled = v && dot.sprite != null;
             if (dmg != null) dmg.enabled = v;
         }
 
@@ -398,20 +491,13 @@ public class EnemyIntentVisualizer : MonoBehaviour
 
             if (showLine && lr != null)
             {
-                RectTransform slot = hud?.GetSlotRectTransform(targetIndex);
-                if (slot != null && worldCam != null)
+                Vector3 heroWorld;
+                if (TryGetHeroCenterWorldPosition(bm, targetIndex, out heroWorld))
                 {
                     Vector3 startWorld = enemyTf.position;
                     startWorld.z = worldZ;
 
-                    Vector3 slotWorld = slot.TransformPoint(slot.rect.center);
-
-                    Vector3 slotScreen = RectTransformUtility.WorldToScreenPoint(uiCam, slotWorld);
-                    slotScreen += new Vector3(slotOffset.x, slotOffset.y, 0f);
-
-                    float startScreenZ = worldCam.WorldToScreenPoint(startWorld).z;
-
-                    Vector3 endWorld = worldCam.ScreenToWorldPoint(new Vector3(slotScreen.x, slotScreen.y, startScreenZ));
+                    Vector3 endWorld = heroWorld;
                     endWorld.z = worldZ;
 
                     lr.SetPosition(0, startWorld);
@@ -424,7 +510,34 @@ public class EnemyIntentVisualizer : MonoBehaviour
                 }
                 else
                 {
-                    lr.enabled = false;
+                    RectTransform slot = hud?.GetSlotRectTransform(targetIndex);
+                    if (slot != null && worldCam != null)
+                    {
+                        Vector3 startWorld = enemyTf.position;
+                        startWorld.z = worldZ;
+
+                        Vector3 slotWorld = slot.TransformPoint(slot.rect.center);
+
+                        Vector3 slotScreen = RectTransformUtility.WorldToScreenPoint(uiCam, slotWorld);
+                        slotScreen += new Vector3(slotOffset.x, slotOffset.y, 0f);
+
+                        float startScreenZ = worldCam.WorldToScreenPoint(startWorld).z;
+
+                        Vector3 endWorld = worldCam.ScreenToWorldPoint(new Vector3(slotScreen.x, slotScreen.y, startScreenZ));
+                        endWorld.z = worldZ;
+
+                        lr.SetPosition(0, startWorld);
+                        lr.SetPosition(1, endWorld);
+                        lr.enabled = true;
+
+                        Color targetColor = GetTargetColor(bm, targetIndex, fighterColor, mageColor, ninjaColor, fallbackColor);
+                        lr.startColor = targetColor;
+                        lr.endColor = targetColor;
+                    }
+                    else
+                    {
+                        lr.enabled = false;
+                    }
                 }
             }
             else
@@ -452,12 +565,9 @@ public class EnemyIntentVisualizer : MonoBehaviour
                 {
                     int raw = 0;
 
-                    // Try to pull planned intent damage from BattleManager.enemyIntents[targetEnemyIndex]
                     if (bm != null)
                     {
-                        // enemyIndex should be the index of THIS enemy in the encounter.
-                        // In this class, that is usually the same as 'enemyIndex' or 'index'. If you don't have one, use 'targetIndex' only if it represents enemy slot index (not hero target).
-                        int idx = enemyIndex; // <-- IMPORTANT: if your field is named differently, change this line only.
+                        int idx = enemyIndex;
 
                         var fi = bm.GetType().GetField("enemyIntents", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
                         var list = fi != null ? fi.GetValue(bm) as System.Collections.IList : null;
@@ -483,8 +593,9 @@ public class EnemyIntentVisualizer : MonoBehaviour
                     dmg.color = Color.white;
                 }
 
-                icon.enabled = true;
-                if (dot != null) dot.enabled = true;
+                // IMPORTANT: never enable a sprite-less image (prevents white squares)
+                icon.enabled = (icon.sprite != null);
+                if (dot != null) dot.enabled = (dot.sprite != null);
                 if (dmg != null) dmg.enabled = true;
             }
             else
@@ -527,6 +638,3 @@ public class EnemyIntentVisualizer : MonoBehaviour
         }
     }
 }
-
-
-////////////////////////////////////////////////////////////

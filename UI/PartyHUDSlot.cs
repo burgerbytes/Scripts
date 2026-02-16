@@ -72,6 +72,10 @@ public class PartyHUDSlot : MonoBehaviour
     [Tooltip("The full width rect of the HP bar area (usually the parent of hpFill).")]
     [SerializeField] private RectTransform hpBarFullRect;
 
+    [Header("Bars (HP Blocks)")]
+    [Tooltip("Optional. If assigned, we render HP as discrete blocks (green/missing/orange preview + blue shields).")]
+    [SerializeField] private HpBlocksBarUI hpBlocksBar;
+
     [Header("Bars (Stamina)")]
     [SerializeField] private Image staminaFill;
 
@@ -128,6 +132,7 @@ public class PartyHUDSlot : MonoBehaviour
         SetActionPanelVisible(false);
         SetBlockVisualVisible(true);
         SetDamagePreviewVisible(false);
+        if (hpBlocksBar != null) hpBlocksBar.Clear();
 
         SetCastingAuraVisible(false);
 
@@ -155,45 +160,61 @@ public class PartyHUDSlot : MonoBehaviour
         }
 
         if (hpText != null) hpText.text = $"{snapshot.HP}/{snapshot.MaxHP}";
-
         // --- HP current + incoming preview ---
-        int currentHP = snapshot.HP;
-        int maxHP = Mathf.Max(1, snapshot.MaxHP);
-
-        int incoming = Mathf.Max(0, incomingDamagePreview);
-        int predictedHP = Mathf.Max(0, currentHP - incoming);
-
-        float current01 = Mathf.Clamp01((float)currentHP / maxHP);
-        float predicted01 = Mathf.Clamp01((float)predictedHP / maxHP);
-
-        float barWidth = GetHpBarWidth();
-
-        ApplyBarSegment(
-            rect: hpFill != null ? hpFill.rectTransform : null,
-            barWidth: barWidth,
-            left01: 0f,
-            right01: current01,
-            stretchFullHeight: true
-        );
-
-        if (incoming > 0 && hpDamagePreviewRect != null && hpBarFullRect != null && predictedHP < currentHP)
+        if (hpBlocksBar != null && hpBlocksBar.IsConfigured)
         {
+            // Use block-based HP bar (includes shield blocks appended after max HP).
+            // IMPORTANT: preview damage is reduced by shield first (shield absorbs first),
+            // then remaining HP damage is shown as orange within the HP region.
+            hpBlocksBar.Render(snapshot.MaxHP, snapshot.HP, snapshot.Shield, incomingDamagePreview);
+
+            // Hide legacy bar pieces (if they're still in the prefab).
+            if (hpFill != null) hpFill.enabled = false;
+            SetDamagePreviewVisible(false);
+        }
+        else
+        {
+            // Legacy continuous bar behavior (resize fill + yellow damage segment).
+            int currentHP = snapshot.HP;
+            int maxHP = Mathf.Max(1, snapshot.MaxHP);
+
+            int incoming = Mathf.Max(0, incomingDamagePreview);
+            int predictedHP = Mathf.Max(0, currentHP - incoming);
+
+            float current01 = Mathf.Clamp01((float)currentHP / maxHP);
+            float predicted01 = Mathf.Clamp01((float)predictedHP / maxHP);
+
+            float barWidth = GetHpBarWidth();
+
+            if (hpFill != null) hpFill.enabled = true;
+
             ApplyBarSegment(
-                rect: hpDamagePreviewRect,
+                rect: hpFill != null ? hpFill.rectTransform : null,
                 barWidth: barWidth,
-                left01: predicted01,
+                left01: 0f,
                 right01: current01,
                 stretchFullHeight: true
             );
 
-            hpDamagePreviewRect.SetAsLastSibling();
+            if (incoming > 0 && hpDamagePreviewRect != null && hpBarFullRect != null && predictedHP < currentHP)
+            {
+                ApplyBarSegment(
+                    rect: hpDamagePreviewRect,
+                    barWidth: barWidth,
+                    left01: predicted01,
+                    right01: current01,
+                    stretchFullHeight: true
+                );
 
-            float widthPx = Mathf.Max(0f, (current01 - predicted01) * barWidth);
-            SetDamagePreviewVisible(widthPx > 0.5f);
-        }
-        else
-        {
-            SetDamagePreviewVisible(false);
+                hpDamagePreviewRect.SetAsLastSibling();
+
+                float widthPx = Mathf.Max(0f, (current01 - predicted01) * barWidth);
+                SetDamagePreviewVisible(widthPx > 0.5f);
+            }
+            else
+            {
+                SetDamagePreviewVisible(false);
+            }
         }
 
         // --- Stamina ---
