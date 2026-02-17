@@ -230,6 +230,20 @@ public class InfoPanelHoldManager : MonoBehaviour
             return;
         }
 
+        // Special-case: Monsters use InfoPanelController as their "panel" (info + monster reel tab).
+        Monster monster = null;
+        if (sourceGO != null)
+            monster = sourceGO.GetComponentInParent<Monster>();
+
+        if (monster != null)
+        {
+            if (logFlow)
+                Debug.Log($"{LOG_TAG} SHOW Monster InfoPanel (with reel tab) source='{sourceGO.name}'", this);
+
+            infoPanel.ShowMonster(monster, data);
+            return;
+        }
+
         // If InfoPanelContent exists but has empty data, fall back to just opening.
         // (InfoPanelController.Show may also handle empty fine, but this keeps behavior predictable.)
         bool hasTitle = !string.IsNullOrWhiteSpace(data.title);
@@ -250,5 +264,5 @@ public class InfoPanelHoldManager : MonoBehaviour
 
             infoPanel.Open();
         }
-    }
+}
 }

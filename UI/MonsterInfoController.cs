@@ -5,12 +5,26 @@ using System.Reflection;
 using System.Text;
 using UnityEngine;
 using TMPro;
+using UnityEngine.UI;
 
 public class MonsterInfoController : MonoBehaviour
 {
     [Header("UI References")]
     [Tooltip("Root panel GameObject (the one you want enabled/disabled).")]
     [SerializeField] private GameObject monsterInfoPanel;
+
+    [Header("Tabs")]
+    [Tooltip("Root that contains the existing 'Info' text fields (name/stats/description).")]
+    [SerializeField] private GameObject infoTabRoot;
+
+    [Tooltip("Root for the Monster Reel tab content.")]
+    [SerializeField] private GameObject monsterReelTabRoot;
+
+    [SerializeField] private Button infoTabButton;
+    [SerializeField] private Button reelTabButton;
+
+    [Tooltip("Optional: component that drives the Monster Reel tab UI.")]
+    [SerializeField] private MonsterReelPanelUI monsterReelPanelUI;
 
     [Header("Positioning")]
     [Tooltip("Optional. If null, we use monsterInfoPanel's RectTransform.")]
@@ -28,6 +42,7 @@ public class MonsterInfoController : MonoBehaviour
     [Tooltip("If true, always place the panel to the LEFT of the monster.")]
     [SerializeField] private bool forceLeftOfMonster = true;
 
+    [Header("Info Tab Text")]
     [SerializeField] private TMP_Text monsterNameText;
     [SerializeField] private TMP_Text monsterStatsText;
     [SerializeField] private TMP_Text monsterDescriptionText;
@@ -38,6 +53,15 @@ public class MonsterInfoController : MonoBehaviour
     [SerializeField] private int sortingOrder = 0;
 
     private Monster _currentMonster;
+
+    private enum ActiveTab
+    {
+        Info = 0,
+        Reel = 1
+    }
+
+    [SerializeField] private ActiveTab defaultTab = ActiveTab.Info;
+    private ActiveTab _activeTab;
 
     private bool IsPlayerCasting()
     {
@@ -51,6 +75,16 @@ public class MonsterInfoController : MonoBehaviour
 
         if (rootCanvas == null)
             rootCanvas = GetComponentInParent<Canvas>();
+
+        // Auto-find the reel panel UI under the reel tab root if not assigned.
+        if (monsterReelPanelUI == null)
+        {
+            if (monsterReelTabRoot != null)
+                monsterReelPanelUI = monsterReelTabRoot.GetComponentInChildren<MonsterReelPanelUI>(true);
+            if (monsterReelPanelUI == null)
+                monsterReelPanelUI = GetComponentInChildren<MonsterReelPanelUI>(true);
+        }
+
         // Initially disabled
         if (monsterInfoPanel != null)
             monsterInfoPanel.SetActive(false);
@@ -59,6 +93,24 @@ public class MonsterInfoController : MonoBehaviour
         {
             monsterCanvas.overrideSorting = true;
             monsterCanvas.sortingOrder = sortingOrder;
+        }
+
+        WireTabButtons();
+        SetActiveTab(defaultTab, force: true);
+    }
+
+    private void WireTabButtons()
+    {
+        if (infoTabButton != null)
+        {
+            infoTabButton.onClick.RemoveAllListeners();
+            infoTabButton.onClick.AddListener(OnInfoTabPressed);
+        }
+
+        if (reelTabButton != null)
+        {
+            reelTabButton.onClick.RemoveAllListeners();
+            reelTabButton.onClick.AddListener(OnReelTabPressed);
         }
     }
 
@@ -78,11 +130,9 @@ public class MonsterInfoController : MonoBehaviour
         Hide();
     }
 
-
     public void Show(Monster monster)
     {
         // Do NOT allow this panel to open while the player is in a cast/targeting state.
-        // (Prevents it from popping up while selecting a target.)
         if (IsPlayerCasting())
         {
             Hide();
@@ -109,10 +159,12 @@ public class MonsterInfoController : MonoBehaviour
         if (monsterDescriptionText != null)
             monsterDescriptionText.text = monster.Description;
 
+        // Default tab each time we open (keeps behavior predictable).
+        SetActiveTab(defaultTab, force: true);
+
         UpdatePanelPosition();
     }
 
-    
     private void LateUpdate()
     {
         // If the player enters cast/targeting state while this is open, force-hide it.
@@ -139,8 +191,6 @@ public class MonsterInfoController : MonoBehaviour
         if (cam == null) return;
 
         Vector3 world = _currentMonster.transform.position;
-
-        // Use a slight upward bias so the panel centers around the HP bar area.
         Vector3 screen = cam.WorldToScreenPoint(world);
 
         // Convert screen -> local point in canvas space.
@@ -154,8 +204,7 @@ public class MonsterInfoController : MonoBehaviour
         if (canvas.renderMode != RenderMode.ScreenSpaceOverlay)
             uiCam = canvas.worldCamera;
 
-        Vector2 localPoint;
-        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRect, screen, uiCam, out localPoint))
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRect, screen, uiCam, out Vector2 localPoint))
             return;
 
         float panelHalfW = panelRect.rect.width * 0.5f;
@@ -178,7 +227,7 @@ public class MonsterInfoController : MonoBehaviour
         panelRect.anchoredPosition = desired;
     }
 
-public void Hide()
+    public void Hide()
     {
         _currentMonster = null;
 
@@ -208,17 +257,47 @@ public void Hide()
     }
 
     // =======================
+    // Tabs
+    // =======================
+    public void OnInfoTabPressed()
+    {
+        SetActiveTab(ActiveTab.Info);
+    }
+
+    public void OnReelTabPressed()
+    {
+        SetActiveTab(ActiveTab.Reel);
+    }
+
+    private void SetActiveTab(ActiveTab tab, bool force = false)
+    {
+        if (!force && _activeTab == tab) return;
+        _activeTab = tab;
+
+        if (infoTabRoot != null)
+            infoTabRoot.SetActive(tab == ActiveTab.Info);
+
+        if (monsterReelTabRoot != null)
+            monsterReelTabRoot.SetActive(tab == ActiveTab.Reel);
+
+        // When entering reel tab, refresh it for the current monster.
+        if (tab == ActiveTab.Reel && monsterReelPanelUI != null)
+            monsterReelPanelUI.ShowForMonster(_currentMonster);
+
+        // Keep the panel positioned correctly after layout changes.
+        if (monsterInfoPanel != null && monsterInfoPanel.activeSelf)
+            UpdatePanelPosition();
+    }
+
+    // =======================
     // Stats formatting helpers
     // =======================
-
-// Expose the same stats formatting used by this panel so other UI (like the unified InfoPanel)
-// can reuse it without duplicating Monster formatting logic.
-public string BuildStatsForPanel(Monster monster)
-{
-    if (monster == null) return string.Empty;
-    return BuildStatsText(monster);
-}
-
+    // Expose the same stats formatting used by this panel so other UI can reuse it.
+    public string BuildStatsForPanel(Monster monster)
+    {
+        if (monster == null) return string.Empty;
+        return BuildStatsText(monster);
+    }
 
     private string BuildStatsText(Monster monster)
     {
@@ -250,153 +329,66 @@ public string BuildStatsForPanel(Monster monster)
     private static string TryBuildTagsLine(Monster monster)
     {
         // Expected in Monster.cs:
-        // - public IReadOnlyList<MonsterTag> Tags { get; }
-        // - OR public List<MonsterTag> Tags
-        // - OR serialized field "tags"
-        object tagsObj = TryGetMemberValue(monster, "Tags") ?? TryGetMemberValue(monster, "tags");
-        if (tagsObj == null) return null;
-
-        // Handle IReadOnlyList / IList / IEnumerable
-        if (tagsObj is string s) return string.IsNullOrWhiteSpace(s) ? null : $"Tags: {s}";
-
-        if (tagsObj is IEnumerable enumerable)
+        //   public IReadOnlyList<MonsterTag> Tags { get; }
+        try
         {
-            List<string> parts = new List<string>();
-            foreach (object item in enumerable)
+            PropertyInfo pi = monster.GetType().GetProperty("Tags", BindingFlags.Public | BindingFlags.Instance);
+            if (pi == null) return string.Empty;
+
+            object tagsObj = pi.GetValue(monster);
+            if (tagsObj is System.Collections.IEnumerable enumerable)
             {
-                if (item == null) continue;
-                parts.Add(item.ToString());
+                List<string> tags = new List<string>();
+                foreach (var t in enumerable)
+                {
+                    if (t == null) continue;
+                    tags.Add(t.ToString().Replace("_", " "));
+                }
+
+                if (tags.Count > 0)
+                    return "Tags: " + string.Join(", ", tags);
             }
-
-            if (parts.Count == 0) return null;
-            return "Tags: " + string.Join(", ", parts);
         }
+        catch { }
 
-        // Fallback
-        return $"Tags: {tagsObj}";
+        return string.Empty;
     }
 
     private static string TryBuildResistanceBlock(Monster monster)
     {
-        // Common patterns we support (any subset is fine):
-        // - FireResistance / IceResistance / LightningResistance / PoisonResistance (int, %)
-        // - fireResistance / iceResistance / lightningResistance / poisonResistance (int, %)
-        // - Resistances (Dictionary/struct/etc.) -> we try to render basic entries if enumerable
-
-        // 1) Try explicit per-element ints
-        var lines = new List<string>();
-        TryAppendResistance(lines, "Fire", TryGetInt(monster, "FireResistance", "fireResistance", "fireResist", "FireResist"));
-        TryAppendResistance(lines, "Ice", TryGetInt(monster, "IceResistance", "iceResistance", "iceResist", "IceResist"));
-        TryAppendResistance(lines, "Lightning", TryGetInt(monster, "LightningResistance", "lightningResistance", "lightningResist", "LightningResist"));
-        TryAppendResistance(lines, "Poison", TryGetInt(monster, "PoisonResistance", "poisonResistance", "poisonResist", "PoisonResist"));
-
-        if (lines.Count > 0)
+        // Monster currently has physicalResistance/electricResistance fields.
+        // We read them via reflection so this panel won't break if the model changes.
+        try
         {
-            var sb = new StringBuilder();
-            sb.AppendLine("Resistances:");
-            for (int i = 0; i < lines.Count; i++)
-                sb.AppendLine(lines[i]);
-            return sb.ToString();
-        }
+            var t = monster.GetType();
+            FieldInfo phys = t.GetField("physicalResistance", BindingFlags.NonPublic | BindingFlags.Instance);
+            FieldInfo elec = t.GetField("electricResistance", BindingFlags.NonPublic | BindingFlags.Instance);
 
-        // 2) Try generic container member named Resistances / resistances
-        object resObj = TryGetMemberValue(monster, "Resistances") ?? TryGetMemberValue(monster, "resistances");
-        if (resObj == null) return null;
+            bool hasAny = false;
+            float physVal = 1f, elecVal = 1f;
 
-        // Dictionary-like
-        if (resObj is IDictionary dict)
-        {
-            List<string> dictLines = new List<string>();
-            foreach (DictionaryEntry kv in dict)
+            if (phys != null)
             {
-                if (kv.Key == null) continue;
-                string key = kv.Key.ToString();
-                string val = kv.Value != null ? kv.Value.ToString() : "0";
-                dictLines.Add($"{key}: {val}");
+                physVal = (float)phys.GetValue(monster);
+                hasAny = true;
             }
 
-            if (dictLines.Count == 0) return null;
-
-            var sb = new StringBuilder();
-            sb.AppendLine("Resistances:");
-            for (int i = 0; i < dictLines.Count; i++)
-                sb.AppendLine(dictLines[i]);
-            return sb.ToString();
-        }
-
-        // Enumerable of entries (KeyValuePair, tuples, etc.)
-        if (resObj is IEnumerable enumerable)
-        {
-            List<string> entryLines = new List<string>();
-            foreach (object entry in enumerable)
+            if (elec != null)
             {
-                if (entry == null) continue;
-                entryLines.Add(entry.ToString());
+                elecVal = (float)elec.GetValue(monster);
+                hasAny = true;
             }
 
-            if (entryLines.Count == 0) return null;
+            if (!hasAny) return string.Empty;
 
-            var sb = new StringBuilder();
+            var sb = new StringBuilder(128);
             sb.AppendLine("Resistances:");
-            for (int i = 0; i < entryLines.Count; i++)
-                sb.AppendLine(entryLines[i]);
-            return sb.ToString();
+            if (phys != null) sb.AppendLine($"- Physical: {physVal:0.##}x");
+            if (elec != null) sb.AppendLine($"- Electric: {elecVal:0.##}x");
+            return sb.ToString().TrimEnd();
         }
+        catch { }
 
-        // Fallback
-        return $"Resistances:\n{resObj}";
-    }
-
-    private static void TryAppendResistance(List<string> lines, string name, int? value)
-    {
-        if (!value.HasValue) return;
-        if (value.Value == 0) return;
-
-        string sign = value.Value > 0 ? "+" : "";
-        lines.Add($"{name}: {sign}{value.Value}%");
-    }
-
-    private static int? TryGetInt(object obj, params string[] memberNames)
-    {
-        for (int i = 0; i < memberNames.Length; i++)
-        {
-            object v = TryGetMemberValue(obj, memberNames[i]);
-            if (v == null) continue;
-
-            if (v is int iv) return iv;
-            if (v is float fv) return Mathf.RoundToInt(fv);
-            if (v is double dv) return (int)Math.Round(dv);
-
-            if (int.TryParse(v.ToString(), out int parsed))
-                return parsed;
-        }
-        return null;
-    }
-
-    private static object TryGetMemberValue(object obj, string memberName)
-    {
-        if (obj == null || string.IsNullOrWhiteSpace(memberName)) return null;
-
-        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-
-        Type t = obj.GetType();
-
-        // Property
-        PropertyInfo p = t.GetProperty(memberName, flags);
-        if (p != null)
-        {
-            try { return p.GetValue(obj, null); }
-            catch { /* ignored */ }
-        }
-
-        // Field
-        FieldInfo f = t.GetField(memberName, flags);
-        if (f != null)
-        {
-            try { return f.GetValue(obj); }
-            catch { /* ignored */ }
-        }
-
-        return null;
+        return string.Empty;
     }
 }

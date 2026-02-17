@@ -1,3 +1,5 @@
+// GUID: 30f201f35d336bf4d840162cd6fd1fde
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -736,7 +738,7 @@ private Coroutine _battleMusicFadeRoutine;
                     ? (clicked.Description ?? "")
                     : (statsText + " " + (clicked.Description ?? ""));
 
-                infoPanelController.Show(new InfoPanelData
+                infoPanelController.ShowMonster(clicked, new InfoPanelData
                 {
                     title = clicked.DisplayName,
                     body = body,
@@ -6121,3 +6123,6 @@ if (logPassiveBridge)
 
 ////////////////////////////////////////////////////////////
 
+
+
+////////////////////////////////////////////////////////////

@@ -9,6 +9,12 @@ public class Monster : MonoBehaviour
     {
         public string id = "Basic";
 
+        [Header("Monster Reel")]
+        [Tooltip("How many slots this attack occupies in the Monster Reel (6 total slots).\n" +
+                 "Example: Basic=4, Bleed Cut=2 -> reel shows 4 Basic intent icons and 2 Bleed Cut intent icons.")]
+        [Range(0, 6)]
+        public int slotsUsed = 1;
+
         [Tooltip("Damage dealt to the hero when this attack lands.")]
         public int damage = 8;
 
@@ -79,10 +85,35 @@ public class Monster : MonoBehaviour
     [TextArea(2, 6)]
     [SerializeField] public string DisplayName = "";
 
+    /// <summary>Monster description intended for UI inspection.</summary>
+    public string Description => description;
+
+    [Header("Monster Reel")]
+    [Tooltip("Optional authored monster reel definition. If assigned, the Monster Reel UI will use its ReelStripSO (6 slots) for icon display and slot-to-attack mapping.")]
+    [SerializeField] private MonsterReelDefinitionSO reelDefinition;
+
+    public MonsterReelDefinitionSO ReelDefinition => reelDefinition;
+
+
+
+    /// <summary>Read-only access to this monster's attack definitions for UI (Monster Reels).</summary>
+    public MonsterAttack[] Attacks => attacks;
+
+    public int AttackCount => attacks != null ? attacks.Length : 0;
+
+    public bool TryGetAttack(int index, out MonsterAttack attack)
+    {
+        attack = null;
+        if (attacks == null) return false;
+        if (index < 0 || index >= attacks.Length) return false;
+        attack = attacks[index];
+        return attack != null;
+    }
+
+
     [Tooltip("Tags/properties shown in the Monster Info panel.")]
     [SerializeField] private System.Collections.Generic.List<MonsterTag> tags = new System.Collections.Generic.List<MonsterTag>();
 
-    public string Description => description;
     public System.Collections.Generic.IReadOnlyList<MonsterTag> Tags => tags;
 
     private bool HasTag(MonsterTag tag)
@@ -797,5 +828,4 @@ public int ApplySabotageToRandomAttack(int stacks)
 
 
 ////////////////////////////////////////////////////////////
-
 

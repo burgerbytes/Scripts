@@ -145,6 +145,109 @@ public class Reel3DColumn : MonoBehaviour
     public ReelStripSO Strip => strip;
     public int QuadCount => quadCount;
 
+    /// <summary>
+    /// Copies visual/behavior settings from another reel so this reel behaves identically.
+    /// Intended for UI reels (ex: Monster Reel) that should match the Character Selection reels.
+    /// Does NOT copy scene references that must remain local to this reel (ex: cylinderBody).
+    /// </summary>
+    public void CopySettingsFrom(Reel3DColumn template, bool rebuildNow = true)
+    {
+        if (template == null) return;
+
+        // Geometry
+        radius = template.radius;
+        quadSizeX = template.quadSizeX;
+        quadSizeY = template.quadSizeY;
+        quadScaleX = template.quadScaleX;
+        quadScaleY = template.quadScaleY;
+        autoRadiusFromCylinder = template.autoRadiusFromCylinder;
+        autoRadiusPadding = template.autoRadiusPadding;
+
+        // Orientation
+        localSpinAxis = template.localSpinAxis;
+        billboardToCamera = template.billboardToCamera;
+        if (viewCamera == null) viewCamera = template.viewCamera;
+
+        // Icon presentation
+        doubleSidedIcons = template.doubleSidedIcons;
+        doubleSidedSeparation = template.doubleSidedSeparation;
+        if (iconMaterial == null) iconMaterial = template.iconMaterial;
+
+        // Spin
+        spinDegreesPerSecond = template.spinDegreesPerSecond;
+        minSpinDurationSeconds = template.minSpinDurationSeconds;
+        reverseSpinDirection = template.reverseSpinDirection;
+
+        // Stop shake
+        enableStopShake = template.enableStopShake;
+        stopShakeMagnitudeDeg = template.stopShakeMagnitudeDeg;
+        stopShakeDuration = template.stopShakeDuration;
+        stopShakeFrequency = template.stopShakeFrequency;
+        stopShakeDamping = template.stopShakeDamping;
+
+        if (rebuildNow)
+            ForceRebuild(resetStep: true);
+    }
+
+    /// <summary>
+    /// Sets the number of quads used to render this reel.
+    /// Useful for non-standard reels (ex: Monster Reels) where the strip size is small.
+    /// </summary>
+    public void SetQuadCount(int newQuadCount, bool rebuildNow = true)
+    {
+        newQuadCount = Mathf.Clamp(newQuadCount, 3, 64);
+        if (quadCount == newQuadCount)
+        {
+            if (rebuildNow) EnsureBuilt();
+            return;
+        }
+
+        quadCount = newQuadCount;
+
+        if (rebuildNow)
+            ForceRebuild(resetStep: true);
+    }
+
+    /// <summary>
+    /// Forces the visual ring to be rebuilt immediately (destroy + rebuild quads).
+    /// </summary>
+    public void ForceRebuild(bool resetStep = false)
+    {
+        // Stop active routines that might be referencing old quads.
+        if (_routine != null)
+        {
+            StopCoroutine(_routine);
+            _routine = null;
+        }
+
+        IsSpinning = false;
+        _isNudging = false;
+
+        if (resetStep)
+            _currentStep = 0;
+
+        if (_iconsRoot != null)
+        {
+            for (int i = _iconsRoot.childCount - 1; i >= 0; i--)
+                Destroy(_iconsRoot.GetChild(i).gameObject);
+        }
+
+        _quads.Clear();
+        _fixedSymbolOnQuad.Clear();
+        _currentSymbolOnQuad.Clear();
+        _tempTransmuteOriginalOnQuad.Clear();
+        _doubledQuads.Clear();
+        _shadowRenderers.Clear();
+        _glowingQuads.Clear();
+
+        // Rebuild
+        EnsureBuilt();
+
+        // Re-align
+        SetPrimaryAxisAngle(_currentStep * StepDeg);
+    }
+
+
     /// <summary>Current spin speed in degrees/second. Can be modified at runtime.</summary>
     public float SpinDegreesPerSecond
     {
@@ -668,6 +771,11 @@ public class Reel3DColumn : MonoBehaviour
 
         Vector3 axis = localSpinAxis.normalized;
         if (axis.sqrMagnitude < 0.0001f) axis = Vector3.right;
+
+        // If no camera was assigned, try to use Camera.main so the ring is oriented
+        // the same way as the Character Selection reels.
+        if (viewCamera == null)
+            viewCamera = Camera.main;
 
         // Deterministic "front" direction for quad 0:
         Vector3 toCamWorld = viewCamera != null
