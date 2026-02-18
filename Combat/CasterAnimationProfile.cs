@@ -19,11 +19,17 @@ public sealed class CasterAnimationProfile : MonoBehaviour
     public struct AnimationKeyStateOverride
     {
         [Tooltip("Ability animation key (recommended to be stable and not player-facing).")]
-        public string animationKey;    // e.g. "BasicAttack"
+        public AbilityAnimationKey animationKey;    // e.g. AbilityAnimationKey.BasicAttack
         [Tooltip("Optional class name scope. Leave blank to apply to all classes using this profile.")]
         public string className;       // e.g. "Templar" (optional)
         [Tooltip("Animator state name to play.")]
         public string attackStateName; // e.g. "templar_basic_attack"
+
+        [Header("Windup Hold")]
+        public bool enableWindupHold;
+        [Range(0f, 0.95f)]
+        public float windupHoldNormalizedTime; // 0..1, where to freeze while awaiting target
+
     }
 
     [Serializable]
@@ -31,6 +37,10 @@ public sealed class CasterAnimationProfile : MonoBehaviour
     {
         public string abilityName;     // e.g. "Slash"
         public string attackStateName; // e.g. "fighter_basic_attack"
+        public bool enableWindupHold;
+        [Range(0f, 0.95f)]
+        public float windupHoldNormalizedTime;
+
     }
 
     /// <summary>
@@ -50,7 +60,7 @@ public sealed class CasterAnimationProfile : MonoBehaviour
                 var entry = perAnimationKeyOverrides[i];
                 if (string.IsNullOrWhiteSpace(entry.attackStateName)) continue;
 
-                if (string.Equals(Normalize(entry.animationKey), key, StringComparison.OrdinalIgnoreCase) &&
+                if (string.Equals(Normalize(entry.animationKey.ToString()), key, StringComparison.OrdinalIgnoreCase) &&
                     !string.IsNullOrEmpty(cls) &&
                     string.Equals(Normalize(entry.className), cls, StringComparison.OrdinalIgnoreCase))
                 {
@@ -64,7 +74,7 @@ public sealed class CasterAnimationProfile : MonoBehaviour
                 var entry = perAnimationKeyOverrides[i];
                 if (string.IsNullOrWhiteSpace(entry.attackStateName)) continue;
 
-                if (string.Equals(Normalize(entry.animationKey), key, StringComparison.OrdinalIgnoreCase) &&
+                if (string.Equals(Normalize(entry.animationKey.ToString()), key, StringComparison.OrdinalIgnoreCase) &&
                     string.IsNullOrWhiteSpace(entry.className))
                 {
                     return entry.attackStateName.Trim();
@@ -92,6 +102,76 @@ public sealed class CasterAnimationProfile : MonoBehaviour
         return string.IsNullOrWhiteSpace(defaultAttackState) ? null : defaultAttackState.Trim();
     }
 
+
+    /// <summary>
+    /// Resolves per-animation-key (optionally class-scoped) windup-hold settings.
+    /// Returns true if an override explicitly enabled windup hold.
+    /// If no override is found, returns false and leaves outputs defaulted.
+    /// </summary>
+    public bool ResolveWindupHold(string animationKey, string className, string abilityNameFallback, out bool enableWindupHold, out float windupHoldNormalizedTime)
+    {
+        enableWindupHold = false;
+        windupHoldNormalizedTime = -1f;
+
+        string key = Normalize(animationKey);
+        string cls = Normalize(className);
+
+        if (!string.IsNullOrEmpty(key))
+        {
+            // exact class match first
+            for (int i = 0; i < perAnimationKeyOverrides.Count; i++)
+            {
+                var entry = perAnimationKeyOverrides[i];
+                if (!entry.enableWindupHold) continue;
+
+                if (string.Equals(Normalize(entry.animationKey.ToString()), key, StringComparison.OrdinalIgnoreCase) &&
+                    !string.IsNullOrEmpty(cls) &&
+                    string.Equals(Normalize(entry.className), cls, StringComparison.OrdinalIgnoreCase))
+                {
+                    enableWindupHold = true;
+                    windupHoldNormalizedTime = entry.windupHoldNormalizedTime;
+                    return true;
+                }
+            }
+
+            // then any-class mapping
+            for (int i = 0; i < perAnimationKeyOverrides.Count; i++)
+            {
+                var entry = perAnimationKeyOverrides[i];
+                if (!entry.enableWindupHold) continue;
+
+                if (string.Equals(Normalize(entry.animationKey.ToString()), key, StringComparison.OrdinalIgnoreCase) &&
+                    string.IsNullOrWhiteSpace(entry.className))
+                {
+                    enableWindupHold = true;
+                    windupHoldNormalizedTime = entry.windupHoldNormalizedTime;
+                    return true;
+                }
+            }
+        }
+
+        // legacy: per-ability override
+        string abilityName = Normalize(abilityNameFallback);
+        if (!string.IsNullOrEmpty(abilityName))
+        {
+            for (int i = 0; i < perAbilityOverrides.Count; i++)
+            {
+                var entry = perAbilityOverrides[i];
+                if (!entry.enableWindupHold) continue;
+
+                if (!string.IsNullOrWhiteSpace(entry.abilityName) &&
+                    string.Equals(Normalize(entry.abilityName), abilityName, StringComparison.OrdinalIgnoreCase))
+                {
+                    enableWindupHold = true;
+                    windupHoldNormalizedTime = entry.windupHoldNormalizedTime;
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// Backwards-compatible convenience method.
     /// </summary>
@@ -104,3 +184,6 @@ public sealed class CasterAnimationProfile : MonoBehaviour
         return s.Trim();
     }
 }
+
+
+////////////////////////////////////////////////////////////

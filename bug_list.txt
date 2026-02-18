@@ -3,7 +3,9 @@ bugs/issues
 - increase size of monster status icons
 - hook up all animations
 - ensure ability description panel is disabled after casting ability
-features
+- max level seems to be 5. Whenever an evolved hero gets to level 6, it resets to 5.
+
+Features
 - add some type of indictor (arrow, glow) to enemy unit being targeted
 - add status icon for fighter's battle rhythm with stack count
 - add tooltips for status icons

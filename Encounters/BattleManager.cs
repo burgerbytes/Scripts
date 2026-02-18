@@ -1,5 +1,3 @@
-// GUID: 30f201f35d336bf4d840162cd6fd1fde
-////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -41,6 +39,14 @@ public class BattleManager : MonoBehaviour
     [Header("VFX / Casting Aura")]
     [Tooltip("If true, when a hero ability is selected for casting, the hero prefab can show a casting aura (via a HeroCastingAura component on the hero avatar prefab).")]
     [SerializeField] private bool enableHeroCastingAura = true;
+
+
+    [Header("Ability Windup Hold")]
+    [Tooltip("If true, when selecting an ability that requires a target, we immediately play the hero's cast/attack animation and freeze it at a class-scoped windup point until the target is confirmed.")]
+    [SerializeField] private bool enableWindupHoldWhileTargeting = true;
+
+    [Tooltip("Default normalized time (0..1) to freeze at when a profile override enables windup hold but does not specify a time.")]
+    [SerializeField, Range(0f, 0.95f)] private float defaultWindupHoldNormalizedTime = 0.35f;
 
 
     [Header("VFX / Hit Reaction")]
@@ -500,6 +506,15 @@ private Coroutine _battleMusicFadeRoutine;
     private bool _resolving;
     private bool _impactFired;
     private bool _attackFinished;
+
+
+    // Windup hold (targeting) runtime
+    private Coroutine _windupHoldRoutine;
+    private Animator _windupAnimator;
+    private string _windupStateName;
+    private int _windupActorIndex = -1;
+    private bool _windupActive;
+
     private Camera _mainCam;
 
     private Coroutine _startBattleRoutine;
@@ -1455,10 +1470,166 @@ private bool TryRunLevel5EvolutionNow()
         _previewPartyTargetIndex = -1;
         HideConfirmText();
         AbilityCastState.RaiseTargetConfirmed();
+        // Resume windup animation (if it was being held).
+        ResumePendingWindupHold();
         StartCoroutine(ResolvePendingAbility());
         NotifyPartyChanged();
         return true;
     }
+
+
+    private void BeginPendingWindupHoldIfNeeded(PartyMemberRuntime actor, AbilityDefinitionSO ability)
+    {
+        if (!enableWindupHoldWhileTargeting) return;
+        if (actor == null || ability == null) return;
+
+        // Only do this for abilities that are awaiting a target.
+        if (!(ability.targetType == AbilityTargetType.Enemy ||
+              ability.targetType == AbilityTargetType.Ally ||
+              ability.targetType == AbilityTargetType.Self))
+            return;
+
+        // Abilities that intentionally play no animation should skip.
+        if (IsNoAnimAbility(ability)) return;
+
+        Animator anim = actor.animator;
+        if (anim == null && actor.avatarGO != null)
+            anim = actor.avatarGO.GetComponentInChildren<Animator>(true);
+        if (anim == null) return;
+
+        var profile = anim.GetComponentInParent<CasterAnimationProfile>();
+        string actorClassName = GetActorClassName(actor.stats);
+
+        string animationKey = ability.GetAnimationKeyString();
+
+        // Resolve animator state to play (same logic as ResolvePendingAbility, but without applying effects).
+        string stateToPlay = profile != null
+            ? profile.ResolveAttackState(animationKey, actorClassName, abilityNameFallback: ability.name)
+            : null;
+
+        if (string.IsNullOrWhiteSpace(stateToPlay) && !string.IsNullOrWhiteSpace(animationKey))
+        {
+            int hash = Animator.StringToHash(animationKey);
+            if (anim.HasState(0, hash))
+                stateToPlay = animationKey;
+        }
+
+        if (string.IsNullOrWhiteSpace(stateToPlay) && !string.IsNullOrWhiteSpace(actorClassName))
+        {
+            string classBasic = $"{actorClassName.ToLowerInvariant()}_basic_attack";
+            int hash = Animator.StringToHash(classBasic);
+            if (anim.HasState(0, hash))
+                stateToPlay = classBasic;
+        }
+
+        if (string.IsNullOrWhiteSpace(stateToPlay))
+            stateToPlay = "fighter_basic_attack";
+
+        // Ask the profile if windup hold is enabled for this (key + optional class scope).
+        bool enableHold = false;
+        float holdNorm = -1f;
+        if (profile != null)
+            profile.ResolveWindupHold(animationKey, actorClassName, abilityNameFallback: ability.name, out enableHold, out holdNorm);
+
+        if (!enableHold) return;
+
+        if (holdNorm < 0f) holdNorm = defaultWindupHoldNormalizedTime;
+        holdNorm = Mathf.Clamp(holdNorm, 0f, 0.95f);
+
+        // Stop previous hold if any.
+        CancelPendingWindupHold(resetAnimatorToDefault: false);
+
+        _windupAnimator = anim;
+        _windupStateName = stateToPlay;
+        _windupActorIndex = _pendingActorIndex;
+        _windupActive = true;
+
+        // Play immediately, then freeze when we reach hold point.
+        anim.speed = 1f;
+        anim.CrossFadeInFixedTime(stateToPlay, 0.05f, 0, 0f);
+
+        _windupHoldRoutine = StartCoroutine(WindupHoldRoutine(anim, stateToPlay, holdNorm));
+    }
+
+    private IEnumerator WindupHoldRoutine(Animator anim, string stateName, float holdNormalizedTime)
+    {
+        if (anim == null || string.IsNullOrWhiteSpace(stateName))
+            yield break;
+
+        int hash = Animator.StringToHash(stateName);
+
+        // Wait until we actually enter the state (or a short timeout).
+        float timeout = 0.5f;
+        while (timeout > 0f)
+        {
+            var st = anim.GetCurrentAnimatorStateInfo(0);
+            if (st.shortNameHash == hash || st.fullPathHash == hash)
+                break;
+            timeout -= Time.deltaTime;
+            yield return null;
+        }
+
+        while (true)
+        {
+            if (!_windupActive) yield break;
+            if (anim == null) yield break;
+
+            var st = anim.GetCurrentAnimatorStateInfo(0);
+            float t = st.normalizedTime;
+            // normalizedTime can exceed 1 on looping states
+            t = t - Mathf.Floor(t);
+
+            if (t >= holdNormalizedTime)
+                break;
+
+            yield return null;
+        }
+
+        // Freeze at windup hold point.
+        if (anim != null)
+            anim.speed = 0f;
+    }
+
+    private void ResumePendingWindupHold()
+    {
+        if (_windupAnimator != null)
+            _windupAnimator.speed = 1f;
+
+        _windupActive = false;
+
+        if (_windupHoldRoutine != null)
+        {
+            StopCoroutine(_windupHoldRoutine);
+            _windupHoldRoutine = null;
+        }
+    }
+
+    private void CancelPendingWindupHold(bool resetAnimatorToDefault)
+    {
+        _windupActive = false;
+
+        if (_windupHoldRoutine != null)
+        {
+            StopCoroutine(_windupHoldRoutine);
+            _windupHoldRoutine = null;
+        }
+
+        if (_windupAnimator != null)
+        {
+            _windupAnimator.speed = 1f;
+            if (resetAnimatorToDefault)
+            {
+                // Rebind snaps back to default state (usually Idle) safely without requiring a state name.
+                _windupAnimator.Rebind();
+                _windupAnimator.Update(0f);
+            }
+        }
+
+        _windupAnimator = null;
+        _windupStateName = null;
+        _windupActorIndex = -1;
+    }
+
 
     public void BeginAbilityUseFromMenu(HeroStats hero, AbilityDefinitionSO ability)
     {
@@ -1531,6 +1702,9 @@ private bool TryRunLevel5EvolutionNow()
             _selectedEnemyTarget = null;
             _previewEnemyTarget = null;
             if (logFlow) Debug.Log($"[Battle][AbilityTarget] Awaiting ENEMY target for {ability.abilityName}");
+
+            // Start windup immediately while awaiting target.
+            BeginPendingWindupHoldIfNeeded(actor, ability);
         }
         else if ((ability.targetType == AbilityTargetType.Self || ability.targetType == AbilityTargetType.Ally) && (ability.shieldAmount > 0 || ability.healAmount > 0))
         {
@@ -1544,6 +1718,9 @@ private bool TryRunLevel5EvolutionNow()
                 string mode = (ability.targetType == AbilityTargetType.Self) ? "SELF" : "ALLY";
                 Debug.Log($"[Battle][AbilityTarget] Awaiting {mode} confirm for {ability.abilityName} (ally/self ability)");
             }
+
+            // Start windup immediately while awaiting target.
+            BeginPendingWindupHoldIfNeeded(actor, ability);
         }
         else
         {
@@ -1589,6 +1766,8 @@ private bool TryRunLevel5EvolutionNow()
             Debug.Log($"[Battle][AbilityTarget] Target confirmed: {target.name}. Resolving ability.");
 
         AbilityCastState.RaiseTargetConfirmed();
+        // Resume windup animation (if it was being held).
+        ResumePendingWindupHold();
         StartCoroutine(ResolvePendingAbility());
 
     }
@@ -2335,8 +2514,8 @@ applyDamage?.Invoke();
             string actorClassName = GetActorClassName(actorStats);
             // Prefer the explicit animation key on the ability asset.
             // Leave blank to fall back to legacy name-based mapping.
-            string animationKey = (ability != null && !string.IsNullOrWhiteSpace(ability.animationKey))
-                ? ability.animationKey.Trim()
+            string animationKey = (ability != null)
+                ? ability.GetAnimationKeyString()
                 : null;
 
             // Some abilities intentionally play no cast animation.
@@ -6123,6 +6302,9 @@ if (logPassiveBridge)
 
 ////////////////////////////////////////////////////////////
 
+
+
+////////////////////////////////////////////////////////////
 
 
 ////////////////////////////////////////////////////////////

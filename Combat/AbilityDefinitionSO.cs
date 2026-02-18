@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 public enum AbilityTargetType
 {
@@ -46,8 +48,15 @@ public class AbilityDefinitionSO : ScriptableObject
     public Sprite icon;
 
     [Header("Animation")]
-    [Tooltip("Stable animation key used to map this ability to an Animator state via CasterAnimationProfile (e.g. 'BasicAttack', 'MageCast'). Leave blank to fall back to legacy name-based mapping.")]
-    public string animationKey;
+    [Tooltip("Stable animation key used to map this ability to an Animator state via CasterAnimationProfile (e.g. BasicAttack, MageCast). Prefer the enum for consistency across classes.")]
+    public AbilityAnimationKey animationKey = AbilityAnimationKey.None;
+
+    [Tooltip("Optional custom key string when Animation Key is set to Custom.")]
+    public string customAnimationKey = "";
+
+    // Backwards-compat: previously this was a string field named 'animationKey'.
+    [SerializeField, FormerlySerializedAs("animationKey")]
+    private string legacyAnimationKey = "";
 
     [Header("Type")]
     [Tooltip("Active abilities are executed by the player. Passive abilities are always-on event listeners.")]
@@ -87,11 +96,11 @@ public class AbilityDefinitionSO : ScriptableObject
 
     [Header("Special Rules")]
 
-[Tooltip("If true, this ability consumes ALL current Attack resources (ATK) from the shared ResourcePool when cast. The ability is unusable if ATK is 0.")]
-public bool spendAllAttackResources = false;
+    [Tooltip("If true, this ability consumes ALL current Attack resources (ATK) from the shared ResourcePool when cast. The ability is unusable if ATK is 0.")]
+    public bool spendAllAttackResources = false;
 
-[Tooltip("If spendAllAttackResources is true, this many bonus damage is added per Attack resource consumed.")]
-public int bonusDamagePerAttackResource = 2;
+    [Tooltip("If spendAllAttackResources is true, this many bonus damage is added per Attack resource consumed.")]
+    public int bonusDamagePerAttackResource = 2;
 
 
     [Tooltip("If true, this ability costs 0 Attack while the user is Hidden.")]
@@ -164,6 +173,42 @@ public int bonusDamagePerAttackResource = 2;
     [Tooltip("How many to summon when this ability resolves (if summonPrefab is assigned).")]
     [Min(1)]
     public int summonCount = 1;
+
+        /// <summary>
+    /// Returns the resolved animation key string used for lookup in CasterAnimationProfile.
+    /// - If Animation Key is Custom, returns customAnimationKey.
+    /// - Otherwise returns the enum name (e.g. BasicAttack).
+    /// - If enum is None and legacy key exists, returns legacy key (backwards compatibility).
+    /// </summary>
+    public string GetAnimationKeyString()
+    {
+        if (animationKey == AbilityAnimationKey.Custom)
+            return string.IsNullOrWhiteSpace(customAnimationKey) ? string.Empty : customAnimationKey;
+
+        if (animationKey != AbilityAnimationKey.None)
+            return animationKey.ToString();
+
+        // Legacy fallback (old projects stored a string key)
+        return string.IsNullOrWhiteSpace(legacyAnimationKey) ? string.Empty : legacyAnimationKey;
+    }
+
+#if UNITY_EDITOR
+    // Editor-only: try to auto-migrate legacy string values into the enum where possible.
+    private void OnValidate()
+    {
+        // Only attempt migration if enum is unset and we have a legacy string.
+        if (animationKey != AbilityAnimationKey.None) return;
+        if (string.IsNullOrWhiteSpace(legacyAnimationKey)) return;
+
+        // If the legacy key matches an enum name, migrate it.
+        if (Enum.TryParse<AbilityAnimationKey>(legacyAnimationKey, ignoreCase: true, out var parsed) &&
+            parsed != AbilityAnimationKey.None && parsed != AbilityAnimationKey.Custom)
+        {
+            animationKey = parsed;
+            // Keep legacyAnimationKey populated as a safety net.
+        }
+    }
+#endif
 }
 
 
@@ -172,3 +217,8 @@ public int bonusDamagePerAttackResource = 2;
 ////////////////////////////////////////////////////////////
 
 
+
+
+
+
+////////////////////////////////////////////////////////////
