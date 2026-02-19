@@ -152,7 +152,7 @@ public class AbilityDefinitionSO : ScriptableObject
     [Tooltip("Clamp for the combo spin speed multiplier.")]
     [Min(0.1f)] public float comboSpinSpeedMultiplierMax = 3f;
 
-[Header("Status Effects")]
+    [Header("Status Effects")]
     public bool inflictsFocusRune = false;
     public bool inflictsBurn = false;
     public bool inflictsFreeze = false;
@@ -174,7 +174,7 @@ public class AbilityDefinitionSO : ScriptableObject
     [Min(1)]
     public int summonCount = 1;
 
-        /// <summary>
+    /// <summary>
     /// Returns the resolved animation key string used for lookup in CasterAnimationProfile.
     /// - If Animation Key is Custom, returns customAnimationKey.
     /// - Otherwise returns the enum name (e.g. BasicAttack).
