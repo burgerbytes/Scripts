@@ -29,6 +29,7 @@ public class MonsterAnimationDriver : MonoBehaviour
     public string deathTrigger = "Death";
     public string attack1Trigger = "Attack1";
     public string attack2Trigger = "Attack2";
+    public string spellTrigger = "Spell";
 
     [Header("Attack Mapping")]
     [Tooltip("If true, wait for an Animator Event to apply damage on enemy attacks. " +
@@ -118,7 +119,10 @@ public class MonsterAnimationDriver : MonoBehaviour
         else
             FireTrigger(attack1Trigger);
     }
-
+    public void PlaySpell()
+    {
+        FireTrigger(spellTrigger);
+    }
     private void FireTrigger(string param)
     {
         if (animator == null || string.IsNullOrWhiteSpace(param))
