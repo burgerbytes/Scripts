@@ -275,6 +275,7 @@ public class EnemyIntentVisualizer : MonoBehaviour
             enemyIndex,
             intent.targetPartyIndex,
             intent.type,
+            intent.category,
             lr,
             iconImg,
             dotImg,
@@ -418,6 +419,7 @@ public class EnemyIntentVisualizer : MonoBehaviour
         private readonly int enemyIndex;
         private readonly int targetIndex;
         private readonly BattleManager.IntentType type;
+        private readonly IntentCategory category;
         private readonly LineRenderer lr;
         private readonly Image icon;
         private readonly Image dot;
@@ -435,6 +437,7 @@ public class EnemyIntentVisualizer : MonoBehaviour
             int enemyIndex,
             int targetIndex,
             BattleManager.IntentType type,
+            IntentCategory category,
             LineRenderer lr,
             Image icon,
             Image dot,
@@ -450,6 +453,7 @@ public class EnemyIntentVisualizer : MonoBehaviour
             this.enemyIndex = enemyIndex;
             this.targetIndex = targetIndex;
             this.type = type;
+            this.category = category;
             this.lr = lr;
             this.icon = icon;
             this.dot = dot;
@@ -489,7 +493,10 @@ public class EnemyIntentVisualizer : MonoBehaviour
         {
             if (enemyTf == null) return;
 
-            if (showLine && lr != null)
+            // IntentCategory is a project-level enum (Assets/Scripts/Combat/IntentCategory.cs), not nested in BattleManager.
+            bool isSelfBuff = (category == IntentCategory.SelfBuff) || (type == BattleManager.IntentType.SelfBuff);
+
+            if (showLine && lr != null && !isSelfBuff)
             {
                 Vector3 heroWorld;
                 if (TryGetHeroCenterWorldPosition(bm, targetIndex, out heroWorld))
@@ -556,13 +563,22 @@ public class EnemyIntentVisualizer : MonoBehaviour
                     icon.rectTransform.anchoredPosition = local;
                 }
 
-                Color targetColor = GetTargetColor(bm, targetIndex, fighterColor, mageColor, ninjaColor, fallbackColor);
-
-                if (dot != null)
-                    dot.color = targetColor;
-
-                if (dmg != null)
+                if (isSelfBuff)
                 {
+                    // Self-buffs / non-target intents: hide target dot + damage number to avoid misleading UI.
+                    if (dot != null) dot.enabled = false;
+                    if (dmg != null) dmg.text = "";
+                }
+
+                if (!isSelfBuff)
+                {
+                    Color targetColor = GetTargetColor(bm, targetIndex, fighterColor, mageColor, ninjaColor, fallbackColor);
+
+                    if (dot != null)
+                        dot.color = targetColor;
+
+                    if (dmg != null)
+                    {
                     int raw = 0;
 
                     if (bm != null)
@@ -591,6 +607,12 @@ public class EnemyIntentVisualizer : MonoBehaviour
 
                     dmg.text = raw.ToString();
                     dmg.color = Color.white;
+                    }
+                }
+                else
+                {
+                    if (dmg != null) dmg.text = "";
+                    if (dot != null) dot.enabled = false;
                 }
 
                 // IMPORTANT: never enable a sprite-less image (prevents white squares)

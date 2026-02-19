@@ -22,7 +22,7 @@ public class BattleManager : MonoBehaviour
 
     public enum BattleState { Idle, BattleStart, PlayerPhase, EnemyPhase, BattleEnd }
     public enum PlayerActionType { None, Ability1, Ability2 }
-    public enum IntentType { Attack, AoEAttack, Summon }
+    public enum IntentType { Attack, AoEAttack, Summon, SelfBuff }
 
     [Serializable]
     private class PartyMemberRuntime
@@ -157,11 +157,19 @@ public class BattleManager : MonoBehaviour
         public bool isSummon;
         public int summonCount;
         public int maxSummonsPerBattle;
+
+
+        public bool isConsume;
+        public int consumeVictimInstanceId;
+        public int consumeHealAmount;
+
     }
 
-    private static IntentCategory ComputeIntentCategory(int damage, bool isAoe, bool stunsTarget, bool appliesBleed, bool appliesCorrosion, bool isSummon)
+    private static IntentCategory ComputeIntentCategory(int damage, bool isAoe, bool stunsTarget, bool appliesBleed, bool appliesCorrosion, bool isSummon, bool isConsume)
     {
         if (isSummon) return IntentCategory.Summon;
+        if (isConsume) return IntentCategory.SelfBuff;
+
 
         bool hasStatus = stunsTarget || appliesBleed || appliesCorrosion;
 
@@ -233,6 +241,10 @@ public class BattleManager : MonoBehaviour
         public bool isSummon;
         public int summonCount;
         public int maxSummonsPerBattle;
+
+        public bool isConsume;
+        public int consumeVictimInstanceId;
+        public int consumeHealAmount;
     }
 
     [Serializable]
@@ -1934,6 +1946,14 @@ private bool TryRunLevel5EvolutionNow()
                 continue;
             }
 
+            // Consume (self-buff) intent
+            if (intent.type == IntentType.SelfBuff || intent.isConsume)
+            {
+                ExecuteMonsterConsumeIntent(intent);
+                yield return new WaitForSeconds(0.15f);
+                continue;
+            }
+
             // Build target list
             List<int> targets = new List<int>();
 
@@ -3489,7 +3509,7 @@ applyDamage?.Invoke();
 
             // Only meaningful for single-target attack intents.
             if (intent.isAoe) continue;
-            if (intent.type == IntentType.Summon) continue;
+            if (intent.type == IntentType.Summon || intent.type == IntentType.SelfBuff) continue;
 
             intent.targetPartyIndex = newTargetPartyIndex;
             _plannedIntents[i] = intent;
@@ -3535,7 +3555,8 @@ applyDamage?.Invoke();
                 out int corrosionIconCount,
                 out bool isSummon,
                 out int summonCount,
-                out int maxSummonsPerBattle);
+                out int maxSummonsPerBattle,
+                out bool isConsume);
             Debug.Log(
                 $"[SUMMON][PLAN] Monster={m.name} " +
                 $"atkIdx={attackIndex} isSummon={isSummon} " +
@@ -3545,10 +3566,10 @@ applyDamage?.Invoke();
 
             _plannedIntents.Add(new EnemyIntent
             {
-                type = isSummon ? IntentType.Summon : (isAoe ? IntentType.AoEAttack : IntentType.Attack),
-                category = ComputeIntentCategory(damage, isAoe, stunsTarget, appliesBleed, appliesCorrosion, isSummon),
+                type = isSummon ? IntentType.Summon : (isConsume ? IntentType.SelfBuff : (isAoe ? IntentType.AoEAttack : IntentType.Attack)),
+                category = ComputeIntentCategory(damage, isAoe, stunsTarget, appliesBleed, appliesCorrosion, isSummon, isConsume),
                 enemy = m,
-                targetPartyIndex = targetIdx,
+                targetPartyIndex = isConsume ? -1 : targetIdx,
 
                 attackIndex = attackIndex,
                 damage = damage,
@@ -3565,7 +3586,11 @@ applyDamage?.Invoke();
 
                 isSummon = isSummon,
                 summonCount = summonCount,
-                maxSummonsPerBattle = maxSummonsPerBattle
+                maxSummonsPerBattle = maxSummonsPerBattle,
+
+                isConsume = isConsume,
+                consumeVictimInstanceId = 0,
+                consumeHealAmount = 0
             });
 
 
@@ -3590,7 +3615,8 @@ applyDamage?.Invoke();
         out int corrosionIconCount,
         out bool isSummon,
         out int summonCount,
-        out int maxSummonsPerBattle)
+        out int maxSummonsPerBattle,
+        out bool isConsume)
     {
         attackIndex = -1;
         damage = 0;
@@ -3605,6 +3631,8 @@ applyDamage?.Invoke();
         isSummon = false;
         summonCount = 1;
         maxSummonsPerBattle = 1;
+
+        isConsume = false;
 
         if (m == null) return;
 
@@ -3658,6 +3686,46 @@ applyDamage?.Invoke();
             atkType = atk.GetType();
 
             bool candidateIsSummon = ReadBool(atk, atkType, "isSummon", false);
+            bool candidateIsConsume = ReadBool(atk, atkType, "isConsume", false);
+
+            // Sacrifice gating:
+            // If the rolled ability requires a Pawn sacrifice but there are no Pawn allies available,
+            // use the authored backupAbilityId if provided; otherwise reroll.
+            bool candidateIsSacrifice = ReadBool(atk, atkType, "isSacrifice", false) || candidateIsConsume;
+            if (candidateIsSacrifice)
+            {
+                bool onlySummoned = candidateIsConsume ? ReadBool(atk, atkType, "consumeOnlySummoned", true) : false;
+                if (!HasEligiblePawnSacrificeTarget(m, onlySummoned))
+                {
+                    string backupId = ReadString(atk, atkType, "backupAbilityId", "");
+                    int backupIdx = FindAttackIndexById(attacksArray, backupId);
+
+                    if (backupIdx >= 0)
+                    {
+                        var backupAtk = attacksArray.GetValue(backupIdx);
+                        if (backupAtk != null)
+                        {
+                            var backupType = backupAtk.GetType();
+                            bool backupIsSummon = ReadBool(backupAtk, backupType, "isSummon", false);
+
+                            // If the backup is a summon, ensure it has remaining uses.
+                            if (!backupIsSummon || m.CanUseSummonAttack(backupIdx, ReadInt(backupAtk, backupType, "maxSummonsPerBattle", 1)))
+                            {
+                                attackIndex = backupIdx;
+                                atk = backupAtk;
+                                atkType = backupType;
+                                break;
+                            }
+                        }
+                    }
+
+                    // No valid backup found -> reroll
+                    atk = null;
+                    atkType = null;
+                    continue;
+                }
+            }
+
             if (!candidateIsSummon)
                 break;
 
@@ -3689,6 +3757,7 @@ applyDamage?.Invoke();
 
         // Summon support (optional attack behavior).
         isSummon = ReadBool(atk, atkType, "isSummon", false);
+        isConsume = ReadBool(atk, atkType, "isConsume", false);
         summonCount = Mathf.Max(1, ReadInt(atk, atkType, "summonCount", 1));
         maxSummonsPerBattle = ReadInt(atk, atkType, "maxSummonsPerBattle", 1);
 
@@ -3709,6 +3778,26 @@ applyDamage?.Invoke();
                 $"atkIdx={attackIndex} count={summonCount} max={maxSummonsPerBattle}",
                 m
             );
+        }
+
+        // Consume support (optional attack behavior).
+        if (isConsume)
+        {
+            // Consume is a self-buff; it does not deal damage directly.
+            damage = 0;
+            isAoe = false;
+
+            stunsTarget = false;
+            stunPlayerPhases = 1;
+            appliesBleed = false;
+            bleedStacks = 0;
+            appliesCorrosion = false;
+            corrosionIconCount = 1;
+
+            // Ensure this isn't treated as a summon.
+            isSummon = false;
+            summonCount = 0;
+            maxSummonsPerBattle = 0;
         }
 
         if (corrosionIconCount == 1) corrosionIconCount = Mathf.Max(1, ReadInt(atk, atkType, "corrosionCount", 1));
@@ -3736,8 +3825,138 @@ applyDamage?.Invoke();
     }
 
 
+    private static string ReadString(object obj, Type t, string name, string fallback)
+    {
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        var fi = t.GetField(name, flags);
+        if (fi != null && fi.FieldType == typeof(string)) return (string)fi.GetValue(obj);
+        var pi = t.GetProperty(name, flags);
+        if (pi != null && pi.PropertyType == typeof(string)) return (string)pi.GetValue(obj, null);
+        return fallback;
+    }
 
+    private static int FindAttackIndexById(System.Array attacksArray, string abilityId)
+    {
+        if (attacksArray == null) return -1;
+        if (string.IsNullOrWhiteSpace(abilityId)) return -1;
+
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        string needle = abilityId.Trim();
+
+        for (int i = 0; i < attacksArray.Length; i++)
+        {
+            var atk = attacksArray.GetValue(i);
+            if (atk == null) continue;
+
+            var t = atk.GetType();
+            var fi = t.GetField("id", flags);
+            if (fi != null && fi.FieldType == typeof(string))
+            {
+                var id = (string)fi.GetValue(atk);
+                if (string.Equals(id, needle, StringComparison.OrdinalIgnoreCase))
+                    return i;
+            }
+
+            var pi = t.GetProperty("id", flags);
+            if (pi != null && pi.PropertyType == typeof(string))
+            {
+                var id = (string)pi.GetValue(atk, null);
+                if (string.Equals(id, needle, StringComparison.OrdinalIgnoreCase))
+                    return i;
+            }
+        }
+
+        return -1;
+    }
+
+
+
+    
     // =======================
+    // Consume support (Monsters)
+    // =======================
+    private bool HasEligiblePawnSacrificeTarget(Monster caster, bool onlySummoned)
+    {
+        if (caster == null) return false;
+        if (_activeMonsters == null) return false;
+
+        for (int i = 0; i < _activeMonsters.Count; i++)
+        {
+            var m = _activeMonsters[i];
+            if (m == null || m == caster || m.IsDead) continue;
+            if (!m.IsPawn) continue;
+            if (onlySummoned && !m.isSummonedMonster) continue;
+            return true;
+        }
+        return false;
+    }
+
+    private Monster ChooseConsumeVictim(Monster caster, bool onlySummoned)
+    {
+        if (caster == null) return null;
+        if (_activeMonsters == null) return null;
+
+        Monster best = null;
+        int bestHp = int.MaxValue;
+
+        // Prefer lowest current HP (keeps behavior predictable and prevents the boss from always eating the biggest body).
+        for (int i = 0; i < _activeMonsters.Count; i++)
+        {
+            var m = _activeMonsters[i];
+            if (m == null || m == caster || m.IsDead) continue;
+            if (!m.IsPawn) continue;
+            if (onlySummoned && !m.isSummonedMonster) continue;
+
+            int hp = m.CurrentHp;
+            if (hp < bestHp)
+            {
+                bestHp = hp;
+                best = m;
+            }
+        }
+
+        // If onlySummoned=true and we found none, return null.
+        if (best != null) return best;
+
+        return null;
+    }
+
+    private void ExecuteMonsterConsumeIntent(EnemyIntent intent)
+    {
+        if (intent.enemy == null) return;
+
+        // Pull authored consume settings from the attack definition.
+        bool onlySummoned = true;
+        float mult = 1f;
+        bool canOverheal = false;
+
+        if (intent.enemy.TryGetAttack(intent.attackIndex, out var atk) && atk != null)
+        {
+            onlySummoned = atk.consumeOnlySummoned;
+            mult = Mathf.Max(0f, atk.consumeHealMultiplier);
+            canOverheal = atk.consumeCanOverheal;
+        }
+
+        Monster victim = ChooseConsumeVictim(intent.enemy, onlySummoned);
+        if (victim == null)
+            return;
+
+        int healAmount = Mathf.RoundToInt(victim.MaxHp * mult);
+
+        // Kill the victim (treat as lethal damage).
+        int lethalIncoming = victim.CurrentHp + Mathf.Max(0, victim.Defense) + 9999;
+        victim.TakeDamage(lethalIncoming);
+
+        if (victim.IsDead)
+            HandleMonsterKilled(victim);
+
+        // Heal the caster.
+        intent.enemy.Heal(healAmount, canOverheal);
+
+        NotifyPartyChanged();
+    }
+
+// =======================
     // Summon support (Monsters)
     // =======================
     private void ExecuteMonsterSummonIntent(EnemyIntent intent)
@@ -5852,7 +6071,7 @@ private static List<ItemOptionSO> RollUnique(List<ItemOptionSO> pool, int count)
                 _plannedIntents.Add(new EnemyIntent
                 {
                     type = it.type,
-                    category = ComputeIntentCategory(it.damage, it.isAoe, it.stunsTarget, it.appliesBleed, it.appliesCorrosion, it.isSummon),
+                    category = ComputeIntentCategory(it.damage, it.isAoe, it.stunsTarget, it.appliesBleed, it.appliesCorrosion, it.isSummon, it.isConsume),
                     enemy = em,
                     targetPartyIndex = it.targetPartyIndex,
                     attackIndex = it.attackIndex,

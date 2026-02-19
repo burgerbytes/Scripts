@@ -60,7 +60,30 @@ public class Monster : MonoBehaviour
         [Tooltip("Max uses of this summon attack per battle for THIS monster instance. 0 = never, 1 = once, -1 = unlimited.")]
         public int maxSummonsPerBattle = 1;
 
-    }
+    
+        [Header("Consume (Sacrifice)")]
+        [Header("Sacrifice")]
+        [Tooltip("If true, this ability requires at least one allied monster with the Pawn property on the field to be usable.")]
+        public bool isSacrifice = false;
+
+        [Tooltip("If this ability is unusable (e.g., no Pawn targets), we will use this backup ability id instead (must match another MonsterAttack.id).")]
+        public string backupAbilityId = "";
+
+
+        [Tooltip("If true, this attack consumes (sacrifices) another monster ally and heals the caster.")]
+        public bool isConsume = false;
+
+        [Tooltip("If true, Consume can ONLY sacrifice summoned monsters (recommended for bosses).")]
+        public bool consumeOnlySummoned = true;
+
+        [Tooltip("Multiplier applied to the sacrificed monster's Max HP to compute heal amount (1.0 = full).")]
+        [Range(0f, 5f)]
+        public float consumeHealMultiplier = 1f;
+
+        [Tooltip("If true, Consume can heal above the caster's Max HP (overheal). If false, clamps to Max HP.")]
+        public bool consumeCanOverheal = false;
+
+}
 
     public event Action<int, int> OnHpChanged;
     public event Action OnStatusChanged;
@@ -68,6 +91,13 @@ public class Monster : MonoBehaviour
     
 
     [HideInInspector] public bool isSummonedMonster = false;
+
+    [Header("Pawn")]
+    [Tooltip("If true, this monster can be sacrificed/consumed as a resource by abilities with the Sacrifice property.")]
+    [SerializeField] private bool isPawn = false;
+
+    public bool IsPawn => isPawn;
+
     public enum MonsterTag
     {
         Beast,
@@ -428,6 +458,27 @@ public class Monster : MonoBehaviour
 
         return ApplyRawDamage(actual);
     }
+
+
+    /// <summary>
+    /// Heals this monster. By default, healing is clamped to MaxHp unless allowOverheal is true.
+    /// </summary>
+    public void Heal(int amount, bool allowOverheal = false)
+    {
+        if (amount <= 0) return;
+        int before = _currentHp;
+
+        if (allowOverheal)
+            _currentHp = Mathf.Max(0, _currentHp + amount);
+        else
+            _currentHp = Mathf.Clamp(_currentHp + amount, 0, maxHp);
+
+        if (debugDamageLogs)
+            Debug.Log($"[Monster] Heal monster={name} +{amount} hp {before}->{_currentHp}/{maxHp} overheal={allowOverheal}", this);
+
+        OnHpChanged?.Invoke(_currentHp, maxHp);
+    }
+
 
     // ✅ Required by MonsterEncounterManager
     public float PlayDeathEffects()
@@ -828,4 +879,3 @@ public int ApplySabotageToRandomAttack(int stacks)
 
 
 ////////////////////////////////////////////////////////////
-

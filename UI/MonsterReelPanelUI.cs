@@ -364,7 +364,13 @@ public class MonsterReelPanelUI : MonoBehaviour
 
         List<string> bits = new List<string>(8);
 
-        if (atk.isSummon)
+        if (atk.isConsume)
+        {
+            string only = atk.consumeOnlySummoned ? "summoned " : "";
+            bits.Add($"Consumes a {only}ally.");
+            bits.Add("Heals self for the ally's Max HP.");
+        }
+        else if (atk.isSummon)
         {
             string who = (atk.summonPrefab != null) ? atk.summonPrefab.name : "ally";
             bits.Add($"Summons {atk.summonCount}× {who}.");
