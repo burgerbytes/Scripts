@@ -4,6 +4,13 @@ using System.Collections;
 
 public class Monster : MonoBehaviour
 {
+    public enum MonsterAnimCue
+    {
+        Attack = 0,
+        Spell = 1,
+        Cast = 2
+    }
+
     [Serializable]
     public class MonsterAttack
     {
@@ -23,6 +30,10 @@ public class Monster : MonoBehaviour
 
         [Tooltip("AoE abilities hit all allies.")]
         public bool isAoe = false;
+
+        [Header("Animation")]
+        [Tooltip("Which animation trigger to fire when using this attack. Attack uses Attack1/Attack2 mapping; Spell/Cast fire the corresponding triggers on MonsterAnimationDriver.")]
+        public MonsterAnimCue animationCue = MonsterAnimCue.Attack;
 
         [Header("Status Effects")]
         [Tooltip("If true, this attack will stun the target hero (preventing them from acting) for upcoming Player Phases.")]
@@ -879,3 +890,4 @@ public int ApplySabotageToRandomAttack(int stacks)
 
 
 ////////////////////////////////////////////////////////////
+

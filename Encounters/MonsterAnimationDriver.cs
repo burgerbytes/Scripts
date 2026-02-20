@@ -30,11 +30,16 @@ public class MonsterAnimationDriver : MonoBehaviour
     public string attack1Trigger = "Attack1";
     public string attack2Trigger = "Attack2";
     public string spellTrigger = "Spell";
+    public string castTrigger = "Cast";
 
     [Header("Attack Mapping")]
     [Tooltip("If true, wait for an Animator Event to apply damage on enemy attacks. " +
              "Add an Animation Event calling MonsterAnimationDriver.AnimationEvent_AttackImpact() on the attack clips.")]
     public bool waitForAttackImpactEvent = false;
+
+    [Tooltip("If true, BattleManager can wait for a Cast release animation event before spawning spell VFX. " +
+             "Add an Animation Event calling MonsterAnimationDriver.AnimationEvent_CastRelease() on the cast clip.")]
+    public bool waitForCastReleaseEvent = true;
 
     [Tooltip("Mapping from EnemyIntent.attackIndex -> which attack animation to use. " +
              "If array is empty or index out of range, Attack1 is used.")]
@@ -53,8 +58,10 @@ public class MonsterAnimationDriver : MonoBehaviour
     public float deathDurationSeconds = 0.8f;
 
     private bool _attackImpactFired;
+    private bool _castReleaseFired;
 
     public bool AttackImpactFired => _attackImpactFired;
+    public bool CastReleaseFired => _castReleaseFired;
 
     private void Awake()
     {
@@ -68,6 +75,11 @@ public class MonsterAnimationDriver : MonoBehaviour
     public void ResetAttackImpact()
     {
         _attackImpactFired = false;
+    }
+
+    public void ResetCastRelease()
+    {
+        _castReleaseFired = false;
     }
 
     // Animation Event hook (call this from the attack clip at the impact frame)
@@ -123,6 +135,11 @@ public class MonsterAnimationDriver : MonoBehaviour
     {
         FireTrigger(spellTrigger);
     }
+
+    public void PlayCast()
+    {
+        FireTrigger(castTrigger);
+    }
     private void FireTrigger(string param)
     {
         if (animator == null || string.IsNullOrWhiteSpace(param))
@@ -132,3 +149,4 @@ public class MonsterAnimationDriver : MonoBehaviour
         animator.SetTrigger(param);
     }
 }
+

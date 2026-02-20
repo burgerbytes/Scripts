@@ -340,6 +340,11 @@ private Coroutine _battleMusicFadeRoutine;
     [Tooltip("Fallback destroy time if the prefab has no ParticleSystems or duration can't be computed.")]
     [SerializeField] private float healVfxFallbackDestroySeconds = 2.0f;
 
+    [Header("Spell Effect VFX")]
+    [Tooltip("Prefab spawned on the target when a monster uses a spell-style ability (e.g., Consume). Should contain a SpriteRenderer+Animator and SpellEffectEntity.")]
+    [SerializeField] private GameObject spellEffectPrefab;
+
+
     [Tooltip("If Damage Number Prefab is not assigned, BattleManager will spawn a simple TextMeshPro damage number in world-space.")]
     [SerializeField] private bool enableRuntimeDamageNumbers = true;
 
@@ -1949,7 +1954,7 @@ private bool TryRunLevel5EvolutionNow()
             // Consume (self-buff) intent
             if (intent.type == IntentType.SelfBuff || intent.isConsume)
             {
-                ExecuteMonsterConsumeIntent(intent);
+                yield return ExecuteMonsterConsumeIntentRoutine(intent);
                 yield return new WaitForSeconds(0.15f);
                 continue;
             }
@@ -2164,6 +2169,48 @@ if (summoned)
         mover.position = to;
     }
 
+
+    // =======================
+    // Monster animation cue support (Attack / Spell / Cast)
+    // =======================
+    private Monster.MonsterAnimCue GetMonsterAnimCueSafe(Monster enemy, int attackIndex)
+    {
+        if (enemy == null) return Monster.MonsterAnimCue.Attack;
+
+        try
+        {
+            if (enemy.TryGetAttack(attackIndex, out Monster.MonsterAttack atk) && atk != null)
+                return atk.animationCue;
+        }
+        catch { }
+
+        return Monster.MonsterAnimCue.Attack;
+    }
+
+    private void PlayMonsterAnimationCue(Monster enemy, int attackIndex)
+    {
+        if (enemy == null) return;
+
+        MonsterAnimationDriver animDriver = enemy.GetComponentInChildren<MonsterAnimationDriver>(true);
+        if (animDriver == null) return;
+
+        var cue = GetMonsterAnimCueSafe(enemy, attackIndex);
+
+        switch (cue)
+        {
+            case Monster.MonsterAnimCue.Cast:
+                animDriver.PlayCast();
+                break;
+            case Monster.MonsterAnimCue.Spell:
+                animDriver.PlaySpell();
+                break;
+            default:
+                animDriver.PlayAttackForAttackIndex(attackIndex);
+                break;
+        }
+    }
+
+
     private IEnumerator EnemyLungeAttack(Monster enemy, Transform target, int attackIndex, Action applyDamage)
     {
 
@@ -2212,22 +2259,34 @@ if (summoned)
         visual.position = peakPos;
 
         // If this monster has an Animator-driven attack, trigger it now and (optionally) wait for an impact event.
+        // If the authored attack uses Spell/Cast cues, we fire those triggers instead and skip the impact-event wait.
         if (animDriver != null)
         {
-            if (animDriver.waitForAttackImpactEvent) animDriver.ResetAttackImpact();
-            animDriver.PlayAttackForAttackIndex(attackIndex);
+            var cue = GetMonsterAnimCueSafe(enemy, attackIndex);
 
-            if (animDriver.waitForAttackImpactEvent)
+            if (cue == Monster.MonsterAnimCue.Attack)
             {
-                float elapsedImpact = 0f;
-                const float impactFailSafeSeconds = 2.0f;
-                while (!animDriver.AttackImpactFired && elapsedImpact < impactFailSafeSeconds)
+                if (animDriver.waitForAttackImpactEvent) animDriver.ResetAttackImpact();
+                animDriver.PlayAttackForAttackIndex(attackIndex);
+
+                if (animDriver.waitForAttackImpactEvent)
                 {
-                    elapsedImpact += Time.deltaTime;
-                    yield return null;
+                    float elapsedImpact = 0f;
+                    const float impactFailSafeSeconds = 2.0f;
+                    while (!animDriver.AttackImpactFired && elapsedImpact < impactFailSafeSeconds)
+                    {
+                        elapsedImpact += Time.deltaTime;
+                        yield return null;
+                    }
                 }
             }
+            else
+            {
+                // Spell/Cast: just fire the trigger. (If you want precise timing, use animation events later.)
+                PlayMonsterAnimationCue(enemy, attackIndex);
+            }
         }
+
 
         
         // Sabotage: if this attack is sabotaged, the monster takes self-damage now.
@@ -3920,41 +3979,118 @@ applyDamage?.Invoke();
 
         return null;
     }
+private IEnumerator ExecuteMonsterConsumeIntentRoutine(EnemyIntent intent)
+{
+    if (intent.enemy == null) yield break;
 
-    private void ExecuteMonsterConsumeIntent(EnemyIntent intent)
+    // Pull authored consume settings from the attack definition.
+    bool onlySummoned = true;
+    float mult = 1f;
+    bool canOverheal = false;
+
+    if (intent.enemy.TryGetAttack(intent.attackIndex, out var atk) && atk != null)
     {
-        if (intent.enemy == null) return;
-
-        // Pull authored consume settings from the attack definition.
-        bool onlySummoned = true;
-        float mult = 1f;
-        bool canOverheal = false;
-
-        if (intent.enemy.TryGetAttack(intent.attackIndex, out var atk) && atk != null)
-        {
-            onlySummoned = atk.consumeOnlySummoned;
-            mult = Mathf.Max(0f, atk.consumeHealMultiplier);
-            canOverheal = atk.consumeCanOverheal;
-        }
-
-        Monster victim = ChooseConsumeVictim(intent.enemy, onlySummoned);
-        if (victim == null)
-            return;
-
-        int healAmount = Mathf.RoundToInt(victim.MaxHp * mult);
-
-        // Kill the victim (treat as lethal damage).
-        int lethalIncoming = victim.CurrentHp + Mathf.Max(0, victim.Defense) + 9999;
-        victim.TakeDamage(lethalIncoming);
-
-        if (victim.IsDead)
-            HandleMonsterKilled(victim);
-
-        // Heal the caster.
-        intent.enemy.Heal(healAmount, canOverheal);
-
-        NotifyPartyChanged();
+        onlySummoned = atk.consumeOnlySummoned;
+        mult = Mathf.Max(0f, atk.consumeHealMultiplier);
+        canOverheal = atk.consumeCanOverheal;
     }
+
+    Monster victim = ChooseConsumeVictim(intent.enemy, onlySummoned);
+    if (victim == null)
+        yield break;
+
+    // VISUALS:
+    // - Caster plays CAST (not Spell).
+    // - A separate SpellEffect prefab spawns on the victim and plays SPELL.
+    // - Gameplay effects resolve AFTER the spell visual completes.
+    MonsterAnimationDriver casterAnim = intent.enemy.GetComponentInChildren<MonsterAnimationDriver>(true);
+    if (casterAnim != null)
+    {
+        casterAnim.ResetCastRelease();
+        casterAnim.PlayCast();
+
+        // Prefer an animation event for release timing (cast->spell handoff). Falls back to a short delay.
+        if (casterAnim.waitForCastReleaseEvent)
+        {
+            float elapsed = 0f;
+            const float failSafeSeconds = 2.0f;
+            while (!casterAnim.CastReleaseFired && elapsed < failSafeSeconds)
+            {
+                elapsed += Time.deltaTime;
+                yield return null;
+            }
+        }
+        else
+        {
+            // Small delay so the Cast trigger is visually perceived before the effect spawns.
+            yield return new WaitForSeconds(0.1f);
+        }
+    }
+    else
+    {
+        // No animation driver; keep legacy behavior for gameplay, and just delay slightly for readability.
+        yield return new WaitForSeconds(0.05f);
+    }
+
+    // Spawn Spell effect on the victim (CenterPoint if present).
+    yield return SpawnSpellEffectOnTargetRoutine(victim);
+
+    // GAMEPLAY RESOLUTION (unchanged from prior behavior)
+    int healAmount = Mathf.RoundToInt(victim.MaxHp * mult);
+
+    // Kill the victim (treat as lethal damage).
+    int lethalIncoming = victim.CurrentHp + Mathf.Max(0, victim.Defense) + 9999;
+    victim.TakeDamage(lethalIncoming);
+
+    if (victim.IsDead)
+        HandleMonsterKilled(victim);
+
+    // Heal the caster.
+    intent.enemy.Heal(healAmount, canOverheal);
+
+    NotifyPartyChanged();
+}
+
+// Legacy entry point kept for safety; any older call sites still compile.
+private void ExecuteMonsterConsumeIntent(EnemyIntent intent)
+{
+    StartCoroutine(ExecuteMonsterConsumeIntentRoutine(intent));
+}
+
+[Header("BoD Spell Spawner")]
+[SerializeField] private float spellEffectVerticalOffset = 0.5f;
+private IEnumerator SpawnSpellEffectOnTargetRoutine(Monster target)
+{
+    if (spellEffectPrefab == null || target == null)
+        yield break;
+
+    Transform anchor = GetMonsterCenterPointTransform(target.transform);
+    Vector3 pos = (anchor != null ? anchor.position : target.transform.position) + Vector3.up * spellEffectVerticalOffset;
+
+    // Parent to the anchor if available so it follows motion.
+    Transform parent = anchor != null ? anchor : null;
+
+    GameObject go = Instantiate(spellEffectPrefab, pos, Quaternion.identity, parent);
+
+    SpellEffectEntity effect = go.GetComponentInChildren<SpellEffectEntity>(true);
+    if (effect == null)
+    {
+        // No controller; destroy with a conservative fallback so we don't leak objects.
+        Destroy(go, 2.0f);
+        yield break;
+    }
+
+    bool finished = false;
+    effect.Play(() => finished = true);
+
+    float elapsed = 0f;
+    const float failSafeSeconds = 5.0f;
+    while (!finished && elapsed < failSafeSeconds)
+    {
+        elapsed += Time.deltaTime;
+        yield return null;
+    }
+}
 
 // =======================
     // Summon support (Monsters)
@@ -3968,6 +4104,11 @@ applyDamage?.Invoke();
 
         if (!intent.enemy.CanUseSummonAttack(intent.attackIndex, maxPerBattle))
             return;
+
+        // NOTE:
+        // Summon intents bypass the normal "lunge + attack" execution path (which triggers animations).
+        // Fire the authored animation cue (Attack/Spell/Cast) here so Summon attacks can animate.
+        PlayMonsterAnimationCue(intent.enemy, intent.attackIndex);
 
         int spawnCount = Mathf.Max(1, count);
 
@@ -4027,6 +4168,8 @@ applyDamage?.Invoke();
 
         Vector3 pos = GetSummonSpawnPosition();
         GameObject go = Instantiate(prefab, pos, Quaternion.identity);
+        // If the monster prefab defines a visual CenterPoint, align it to the intended summon position.
+        AlignMonsterToWorldPositionUsingCenterPoint(go, pos);
 
         Monster summoned = go.GetComponentInChildren<Monster>(true);
         if (summoned == null)
@@ -4127,7 +4270,12 @@ applyDamage?.Invoke();
                     var m = _activeMonsters[j];
                     if (m == null || m.IsDead) continue;
 
-                    if (Vector3.SqrMagnitude(m.transform.position - sp.position) < 0.01f)
+                    // IMPORTANT:
+                    // Monsters may be CenterPoint-aligned, meaning the monster root transform.position
+                    // will NOT equal the spawn point position. Use the monster's CenterPoint (if present)
+                    // when determining whether a spawn point is occupied.
+                    Vector3 monsterPos = GetMonsterWorldPositionForSpawnOccupancy(m);
+                    if (Vector3.SqrMagnitude(monsterPos - sp.position) < 0.01f)
                     {
                         occupied = true;
                         break;
@@ -4144,6 +4292,23 @@ applyDamage?.Invoke();
         }
 
         return Vector3.zero;
+    }
+
+    /// <summary>
+    /// Returns the world position to use when checking whether a monster occupies a spawn point.
+    /// If the monster prefab uses a child named 'CenterPoint' for alignment, we use that position;
+    /// otherwise we fall back to the monster root transform position.
+    /// </summary>
+    private static Vector3 GetMonsterWorldPositionForSpawnOccupancy(Monster m)
+    {
+        if (m == null) return Vector3.zero;
+
+        // Prefer a CenterPoint child if present.
+        Transform t = m.transform;
+        Transform cp = t.Find("CenterPoint");
+        if (cp != null) return cp.position;
+
+        return t.position;
     }
 
     private static void ApplyBleedStacksToHero(HeroStats hs, int stacksToAdd)
@@ -4375,6 +4540,11 @@ applyDamage?.Invoke();
                 Vector3 pos = spawn != null ? spawn.position : Vector3.zero;
 
                 GameObject go = Instantiate(prefab, pos, Quaternion.identity);
+                // If the monster prefab defines a visual CenterPoint, align it to the spawn point (like heroes).
+                if (spawn != null)
+                {
+                    AlignMonsterToSpawnPointUsingCenterPoint(go, spawn);
+                }
                 Monster m = go.GetComponentInChildren<Monster>(true);
                 if (m != null)
                 {
@@ -5611,6 +5781,36 @@ private void LayoutHeroStatusIcons(Transform statusIconRoot)
     }
 
 
+    // ---------------- MONSTER CENTERPOINT HELPERS ----------------
+    // Monsters can optionally define a child transform named "CenterPoint" to represent their visual anchor.
+    // When present, we align that CenterPoint to the spawn position (matching hero spawn behavior).
+    private void AlignMonsterToSpawnPointUsingCenterPoint(GameObject monsterGO, Transform spawnPoint)
+    {
+        if (monsterGO == null || spawnPoint == null) return;
+        AlignMonsterToWorldPositionUsingCenterPoint(monsterGO, spawnPoint.position);
+    }
+
+    private void AlignMonsterToWorldPositionUsingCenterPoint(GameObject monsterGO, Vector3 desiredCenterWorld)
+    {
+        if (monsterGO == null) return;
+
+        Transform root = monsterGO.transform;
+        Transform centerTf = GetMonsterCenterPointTransform(root);
+        if (centerTf == null) return; // No CenterPoint -> spawn as usual.
+
+        Vector3 delta = desiredCenterWorld - centerTf.position;
+        root.position += delta;
+    }
+
+    private static Transform GetMonsterCenterPointTransform(Transform fallbackRoot)
+    {
+        if (fallbackRoot == null) return null;
+        if (fallbackRoot.name == "CenterPoint") return fallbackRoot;
+        return FindChildRecursive(fallbackRoot, "CenterPoint");
+    }
+
+
+
     // ---------------- HERO CENTERPOINT HELPERS ----------------
     // Many VFX/status visuals should be anchored to a hero's sprite center,
     // not necessarily the hero GameObject's root transform.
@@ -6514,16 +6714,6 @@ if (logPassiveBridge)
         return _selectedEnemyTarget.transform;
     }
 }
-
-
-////////////////////////////////////////////////////////////
-
-
-////////////////////////////////////////////////////////////
-
-
-
-////////////////////////////////////////////////////////////
 
 
 ////////////////////////////////////////////////////////////
