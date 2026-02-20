@@ -1,3 +1,5 @@
+// GUID: 30f201f35d336bf4d840162cd6fd1fde
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -4452,11 +4454,11 @@ private IEnumerator SpawnSpellEffectOnTargetRoutine(Monster target)
         }
         else if (enemyPartyPool != null && enemyPartyPool.Count > 0)
         {
-            // Progression gating: EnemyPartyCompositionSO is eligible ONLY for a single fight index (0-based).
-            // We treat the current fight index as: "number of battles already completed in this stretch".
-            int fightIndex = 0;
+            // Progression gating: EnemyPartyCompositionSO is eligible ONLY for a single fight number (1-based).
+            // We treat the current fight number as: "number of battles already completed in this stretch" + 1.
+            int fightNumber = 1;
             if (stretchController != null)
-                fightIndex = Mathf.Max(0, stretchController.BattlesCompleted);
+                fightNumber = Mathf.Max(1, stretchController.BattlesCompleted + 1);
 
             // Build eligible pool for this fight.
             List<EnemyPartyCompositionSO> eligible = new List<EnemyPartyCompositionSO>(enemyPartyPool.Count);
@@ -4464,7 +4466,7 @@ private IEnumerator SpawnSpellEffectOnTargetRoutine(Monster target)
             {
                 var p = enemyPartyPool[i];
                 if (p == null) continue;
-                if (p.IsEligibleForFight(fightIndex))
+                if (p.IsEligibleForFight(fightNumber))
                     eligible.Add(p);
             }
 
@@ -4478,7 +4480,7 @@ private IEnumerator SpawnSpellEffectOnTargetRoutine(Monster target)
                     if (p != null) eligible.Add(p);
                 }
 
-                Debug.LogWarning($"[BattleManager] No EnemyPartyCompositionSO matched fightIndex={fightIndex}. Falling back to ungated pool selection.", this);
+                Debug.LogWarning($"[BattleManager] No EnemyPartyCompositionSO matched fightNumber={fightNumber}. Falling back to ungated pool selection.", this);
             }
 
             if (eligible.Count > 0)
@@ -6722,3 +6724,6 @@ if (logPassiveBridge)
 
 ////////////////////////////////////////////////////////////
 
+
+
+////////////////////////////////////////////////////////////

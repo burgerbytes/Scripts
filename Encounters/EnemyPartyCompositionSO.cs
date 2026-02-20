@@ -1,6 +1,8 @@
-// PATH: Assets/Scripts/Encounters/EnemyPartyCompositionSO.cs
+// GUID: 1c937d95378ca214b803d88af41aac88
+////////////////////////////////////////////////////////////
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 /// <summary>
 /// Defines a fixed enemy lineup ("enemy party") and an optional loot table override.
@@ -31,21 +33,23 @@ public class EnemyPartyCompositionSO : ScriptableObject
     public RewardReelConfigSO rewardReelConfig;
 
     [Header("Progression Gating")]
-    [Tooltip("First fight index this party can appear (1-based).")]
-    [Min(1)] public int minFightIndex = 1;
-
-    [Tooltip("Last fight index this party can appear (inclusive).")]
-    [Min(1)] public int maxFightIndex = 999;
+    [Tooltip("The ONLY fight number this party can appear on (1-based). Example: 3 = the 3rd battle of the run.")]
+    [FormerlySerializedAs("minFightIndex")]
+    [Min(1)] public int fightIndex = 1;
 
     [Tooltip("Relative chance when multiple parties are eligible for the same fight.")]
     [Min(0f)] public float selectionWeight = 1f;
 
-    public bool IsEligibleForFight(int fightIndex)
-    {
-        return fightIndex >= minFightIndex && fightIndex <= maxFightIndex;
-    }
+    /// <summary>
+    /// Returns true only when the provided fight number matches this composition's fightIndex.
+    /// fightNumber is expected to be 1-based (1 = first battle of the run).
+    /// </summary>
+    public bool IsEligibleForFight(int fightNumber)
+        => fightNumber == fightIndex;
 
     [Header("Loot (Optional Override)")]
     [Tooltip("If set, post-battle rewards will be rolled ONLY from this list for this encounter.\nIf null/empty, BattleManager uses the global reward pool (existing behavior).")]
     public List<ItemOptionSO> lootTable;
 }
+
+////////////////////////////////////////////////////////////
