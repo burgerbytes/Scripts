@@ -286,21 +286,25 @@ public class BattleManager : MonoBehaviour
 
 
 
-[Header("Audio / Music")]
-[Tooltip("Optional audio source used for battle music. If null, BattleManager will create one at runtime.")]
-[SerializeField] private AudioSource battleMusicSource;
 
-[Tooltip("Music clip to play for battles (e.g., Area 1 battle theme).")]
-[SerializeField] private AudioClip battleMusicClip;
+    [Tooltip("If true, the shared ResourcePool is cleared to 0 at the end of each player turn.")]
+    [SerializeField] private bool clearResourcesAtEndOfPlayerTurn = false;
 
-[Range(0f, 1f)]
-[SerializeField] private float battleMusicVolume = 0.7f;
+    [Header("Audio / Music")]
+    [Tooltip("Optional audio source used for battle music. If null, BattleManager will create one at runtime.")]
+    [SerializeField] private AudioSource battleMusicSource;
 
-[Tooltip("Fade in/out duration in seconds. Set to 0 for instant.")]
-[SerializeField] private float battleMusicFadeSeconds = 0.5f;
+    [Tooltip("Music clip to play for battles (e.g., Area 1 battle theme).")]
+    [SerializeField] private AudioClip battleMusicClip;
 
-[Tooltip("If true, music loops while the battle is active.")]
-[SerializeField] private bool loopBattleMusic = true;
+    [Range(0f, 1f)]
+    [SerializeField] private float battleMusicVolume = 0.7f;
+
+    [Tooltip("Fade in/out duration in seconds. Set to 0 for instant.")]
+    [SerializeField] private float battleMusicFadeSeconds = 0.5f;
+
+    [Tooltip("If true, music loops while the battle is active.")]
+    [SerializeField] private bool loopBattleMusic = true;
 
 private Coroutine _battleMusicFadeRoutine;
 
@@ -1812,7 +1816,7 @@ private bool TryRunLevel5EvolutionNow()
         if (_resolving) return;
         if (_enemyTurnRoutine != null) return;
 
-        if (resourcePool != null)
+        if (clearResourcesAtEndOfPlayerTurn && resourcePool != null)
             resourcePool.ClearAll();
 
         TickBleedingAtEndOfPlayerTurn();
@@ -6717,3 +6721,4 @@ if (logPassiveBridge)
 
 
 ////////////////////////////////////////////////////////////
+
