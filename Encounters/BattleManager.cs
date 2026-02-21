@@ -1,5 +1,7 @@
 // GUID: 30f201f35d336bf4d840162cd6fd1fde
 ////////////////////////////////////////////////////////////
+// GUID: 30f201f35d336bf4d840162cd6fd1fde
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -536,7 +538,9 @@ private Coroutine _battleMusicFadeRoutine;
     private Animator _windupAnimator;
     private string _windupStateName;
     private int _windupActorIndex = -1;
-    private bool _windupActive;
+        private bool _windupActive;
+    private float _windupHeldNormalizedTime = 0f;
+    private Coroutine _windupReverseRoutine;
 
     private Camera _mainCam;
 
@@ -1546,16 +1550,13 @@ private bool TryRunLevel5EvolutionNow()
         }
 
         if (string.IsNullOrWhiteSpace(stateToPlay))
-            stateToPlay = "fighter_basic_attack";
-
-        // Ask the profile if windup hold is enabled for this (key + optional class scope).
-        bool enableHold = false;
+            stateToPlay = "fighter_basic_attack";        // Windup hold is always enabled while awaiting a target (data-driven pause point still optional).
         float holdNorm = -1f;
         if (profile != null)
-            profile.ResolveWindupHold(animationKey, actorClassName, abilityNameFallback: ability.name, out enableHold, out holdNorm);
-
-        if (!enableHold) return;
-
+        {
+            bool _unusedEnable;
+            profile.ResolveWindupHold(animationKey, actorClassName, abilityNameFallback: ability.name, out _unusedEnable, out holdNorm);
+        }
         if (holdNorm < 0f) holdNorm = defaultWindupHoldNormalizedTime;
         holdNorm = Mathf.Clamp(holdNorm, 0f, 0.95f);
 
@@ -1610,7 +1611,19 @@ private bool TryRunLevel5EvolutionNow()
 
         // Freeze at windup hold point.
         if (anim != null)
+        {
+            // Capture the exact held pose so cancel/reverse can start from THIS frame.
+            var st = anim.GetCurrentAnimatorStateInfo(0);
+            float t = st.normalizedTime;
+            t = t - Mathf.Floor(t);
+            _windupHeldNormalizedTime = Mathf.Clamp01(t);
+
+            // Force the animator to the held frame before freezing to avoid a 1-frame overshoot.
+            anim.Play(stateName, 0, _windupHeldNormalizedTime);
+            anim.Update(0f);
+
             anim.speed = 0f;
+        }
     }
 
     private void ResumePendingWindupHold()
@@ -1648,10 +1661,106 @@ private bool TryRunLevel5EvolutionNow()
             }
         }
 
+        _windupHeldNormalizedTime = 0f;
+
+        if (_windupReverseRoutine != null)
+        {
+            StopCoroutine(_windupReverseRoutine);
+            _windupReverseRoutine = null;
+        }
+
         _windupAnimator = null;
         _windupStateName = null;
         _windupActorIndex = -1;
     }
+
+    private void ReversePendingWindupToIdle()
+    {
+        if (_windupAnimator == null || string.IsNullOrWhiteSpace(_windupStateName))
+        {
+            // Nothing to reverse; just make sure we aren't stuck frozen.
+            CancelPendingWindupHold(resetAnimatorToDefault: true);
+            return;
+        }
+
+        // Stop the hold routine so it doesn't fight us.
+        _windupActive = false;
+        if (_windupHoldRoutine != null)
+        {
+            StopCoroutine(_windupHoldRoutine);
+            _windupHoldRoutine = null;
+        }
+
+        if (_windupReverseRoutine != null)
+        {
+            StopCoroutine(_windupReverseRoutine);
+            _windupReverseRoutine = null;
+        }
+
+        float startNorm = _windupHeldNormalizedTime;
+        if (startNorm <= 0f && _windupAnimator != null)
+        {
+            var st = _windupAnimator.GetCurrentAnimatorStateInfo(0);
+            float t = st.normalizedTime;
+            t = t - Mathf.Floor(t);
+            startNorm = Mathf.Clamp01(t);
+        }
+
+        Animator anim = _windupAnimator;
+        string stateName = _windupStateName;
+
+        // Clear tracking immediately; coroutine has its own copies.
+        _windupAnimator = null;
+        _windupStateName = null;
+        _windupActorIndex = -1;
+        _windupHeldNormalizedTime = 0f;
+
+        _windupReverseRoutine = StartCoroutine(ReverseWindupToIdleRoutine_Manual(anim, stateName, startNorm));
+    }
+
+    private IEnumerator ReverseWindupToIdleRoutine_Manual(Animator anim, string stateName, float startNormalized)
+    {
+        if (anim == null || string.IsNullOrWhiteSpace(stateName))
+            yield break;
+
+        // Force pose at the starting point (the held frame).
+        float t = Mathf.Clamp01(startNormalized);
+
+        // Freeze time; we will drive the pose manually.
+        float prevSpeed = anim.speed;
+        anim.speed = 0f;
+
+        anim.Play(stateName, 0, t);
+        anim.Update(0f);
+
+        // Estimate clip length for consistent reverse speed.
+        float clipLen = 0.25f; // fallback
+        try
+        {
+            var clips = anim.GetCurrentAnimatorClipInfo(0);
+            if (clips != null && clips.Length > 0 && clips[0].clip != null)
+                clipLen = Mathf.Max(0.05f, clips[0].clip.length);
+        }
+        catch { /* ignore */ }
+
+        while (t > 0f)
+        {
+            // Step backwards in normalized time.
+            t -= Time.deltaTime / clipLen;
+            if (t < 0f) t = 0f;
+
+            anim.Play(stateName, 0, t);
+            anim.Update(0f);
+
+            yield return null;
+        }
+
+        // Restore normal speed and return to default controller state (usually Idle).
+        anim.speed = (prevSpeed == 0f) ? 1f : prevSpeed;
+        anim.Rebind();
+        anim.Update(0f);
+    }
+
 
 
     public void BeginAbilityUseFromMenu(HeroStats hero, AbilityDefinitionSO ability)
@@ -2663,7 +2772,25 @@ applyDamage?.Invoke();
 	        if (!deferAttackAnimToComboLoop && !string.IsNullOrWhiteSpace(stateToPlay))
 	        {
 	            if (logFlow) Debug.Log($"[Battle][Resolve] Playing animation state '{stateToPlay}'. useImpactSync={useImpactSync}", this);
-	            anim.Play(stateToPlay, 0, 0f);
+
+	            // If we already started this exact state during target selection (windup hold),
+	            // do NOT restart it from time=0 on cast; just continue from the held frame.
+	            bool startedDuringTargeting =
+	                (_windupAnimator == anim) &&
+	                (_windupActorIndex == _pendingActorIndex) &&
+	                string.Equals(_windupStateName, stateToPlay, StringComparison.Ordinal);
+
+	            if (startedDuringTargeting)
+	            {
+	                if (logFlow) Debug.Log($"[Battle][Resolve] Windup hold already started state '{stateToPlay}' during targeting. Continuing without restart.", this);
+	                anim.speed = 1f; // ensure unfrozen
+	                // Clear windup tracking now that we're committing the cast.
+	                CancelPendingWindupHold(resetAnimatorToDefault: false);
+	            }
+	            else
+	            {
+	                anim.Play(stateToPlay, 0, 0f);
+	            }
 	        }
             else
             {
@@ -3492,6 +3619,9 @@ applyDamage?.Invoke();
 
         // Turn off any active casting aura before we wipe pending indices.
         ClearCastingAura();
+
+        // If the player cancels while targeting, play the caster windup back in reverse to idle.
+        ReversePendingWindupToIdle();
 
         _pendingAction = PlayerActionType.None;
         _pendingAbility = null;
@@ -6720,10 +6850,6 @@ if (logPassiveBridge)
         return _selectedEnemyTarget.transform;
     }
 }
-
-
-////////////////////////////////////////////////////////////
-
 
 
 ////////////////////////////////////////////////////////////
