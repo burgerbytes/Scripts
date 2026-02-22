@@ -1,3 +1,5 @@
+// GUID: 5a8a06222baaa2b4883d4bb71239e8a6
+////////////////////////////////////////////////////////////
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
@@ -375,6 +377,32 @@ public class PartyHUD : MonoBehaviour
         ForceResyncReelcraftForwarders();
     }
 
+    // ------------------- Hero Prefab Click API -------------------
+
+    /// <summary>
+    /// Called by HeroPrefabClickForwarder when the player clicks a hero's world prefab.
+    /// Uses the same logic path as clicking the PartyHUD portrait.
+    /// </summary>
+    public void HandleHeroPrefabClicked(HeroStats hero)
+    {
+        if (hero == null) return;
+        if (battleManager == null) return;
+
+        int idx = battleManager.GetPartyIndexForHeroStats(hero);
+        if (idx < 0) return;
+
+        OnSlotClicked(idx);
+    }
+
+    /// <summary>
+    /// Optional index-based entrypoint for world clicks.
+    /// </summary>
+    public void HandleHeroPrefabClicked(int partyIndex)
+    {
+        if (partyIndex < 0) return;
+        OnSlotClicked(partyIndex);
+    }
+
     private void OnSlotClicked(int index)
     {
         if (battleManager == null) return;
@@ -459,3 +487,6 @@ public class PartyHUD : MonoBehaviour
 }
 
 
+
+
+////////////////////////////////////////////////////////////
