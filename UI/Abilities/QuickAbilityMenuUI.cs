@@ -390,12 +390,10 @@ public class QuickAbilityMenuUI : MonoBehaviour
         _inSelectionMode = true;
         _selectedButton = selected;
 
-        for (int i = 0; i < _spawned.Count; i++)
-        {
-            var b = _spawned[i];
-            if (b == null) continue;
-            b.gameObject.SetActive(b == selected);
-        }
+        // Hide/disable the entire quick ability grid while an ability is pending (cast/targeting).
+        // The only visible UI should be the details panel for the pending ability.
+        if (listParent != null)
+            listParent.gameObject.SetActive(false);
     }
 
     private void ExitSelectionMode()
@@ -404,6 +402,10 @@ public class QuickAbilityMenuUI : MonoBehaviour
         _inSelectionMode = false;
         _selectedButton = null;
 
+        if (listParent != null)
+            listParent.gameObject.SetActive(true);
+
+        // Safety: ensure any spawned buttons are visible again if the grid is re-enabled.
         for (int i = 0; i < _spawned.Count; i++)
         {
             var b = _spawned[i];
@@ -411,6 +413,7 @@ public class QuickAbilityMenuUI : MonoBehaviour
             b.gameObject.SetActive(true);
         }
     }
+    
 
     private void HandlePendingAbilityCleared()
     {
@@ -460,5 +463,7 @@ public class QuickAbilityMenuUI : MonoBehaviour
         }
     }
 }
+
+
 
 
