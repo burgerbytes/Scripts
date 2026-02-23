@@ -11,6 +11,7 @@ public class PartyHUD : MonoBehaviour
     [SerializeField] private AbilityMenuUI abilityMenu;
     [SerializeField] private HeroStatsPanelUI statsPanel;
     [SerializeField] private QuickAbilityMenuUI quickAbilityMenu;
+    [SerializeField] private InfoPanelController infoPanelController;
 
     [Header("Quick Ability Menu")]
     [Tooltip("If true, the QuickAbilitiesButton will be enabled and will toggle the QuickAbilityMenuUI.\nPortrait click ability menu remains available either way.")]
@@ -78,6 +79,9 @@ public class PartyHUD : MonoBehaviour
         if (quickAbilityMenu == null)
             quickAbilityMenu = FindFirstObjectByType<QuickAbilityMenuUI>(FindObjectsInactive.Include);
 
+        if (infoPanelController == null)
+            infoPanelController = FindFirstObjectByType<InfoPanelController>(FindObjectsInactive.Include);
+
         if (quickAbilitiesButton == null)
         {
             var go = GameObject.Find("QuickAbilitiesButton");
@@ -97,7 +101,7 @@ public class PartyHUD : MonoBehaviour
             for (int i = 0; i < slots.Length; i++)
             {
                 if (slots[i] == null) continue;
-                slots[i].Initialize(OnSlotClicked);
+                slots[i].Initialize(OnSlotClicked, OnSlotHeld);
                 AssignPortraitToSlot(i);
             }
         }
@@ -403,6 +407,44 @@ public class PartyHUD : MonoBehaviour
         OnSlotClicked(partyIndex);
     }
 
+
+private void OnSlotHeld(int index)
+{
+    if (battleManager == null) return;
+    if (infoPanelController == null) return;
+
+    // Don't pop info panels while the player is targeting/casting.
+    if (battleManager.IsInAbilityCastingState)
+        return;
+
+    // Respect single-panel locking (InfoPanelController also locks, but this avoids work).
+    if (enforceSingleOpenPanel && IsAnyPanelOpen() && GetCurrentOpenPanel() != UIPanelType.InfoPanel)
+        return;
+
+    HeroStats hero = battleManager.GetHeroAtPartyIndex(index);
+    if (hero == null) return;
+
+    infoPanelController.ShowHero(hero);
+}
+
+
+public void HandleHeroPrefabHeld(HeroStats hero)
+{
+    if (hero == null) return;
+    if (battleManager == null) return;
+
+    int idx = battleManager.GetPartyIndexForHeroStats(hero);
+    if (idx < 0) return;
+
+    OnSlotHeld(idx);
+}
+
+public void HandleHeroPrefabHeld(int partyIndex)
+{
+    if (partyIndex < 0) return;
+    OnSlotHeld(partyIndex);
+}
+
     private void OnSlotClicked(int index)
     {
         if (battleManager == null) return;
@@ -490,3 +532,5 @@ public class PartyHUD : MonoBehaviour
 
 
 ////////////////////////////////////////////////////////////
+
+

@@ -72,11 +72,13 @@ public class InfoPanelController : MonoBehaviour
     public bool IsOpen => (infoPanelRoot != null ? infoPanelRoot.activeInHierarchy : gameObject.activeInHierarchy);
 
     private Monster _currentMonster;
+    private HeroStats _currentHero;
 
     private enum Mode
     {
         Generic,
-        Monster
+        Monster,
+        Hero
     }
 
     private Mode _mode = Mode.Generic;
@@ -244,6 +246,78 @@ public class InfoPanelController : MonoBehaviour
     /// <summary>
     /// Convenience: show monster info using the monster's DisplayName/Description if available.
     /// </summary>
+
+public void ShowHero(HeroStats hero)
+{
+    if (hero == null)
+    {
+        if (logFlow) Debug.LogWarning($"{TAG} ShowHero called with null hero. Falling back to generic.", this);
+        Show(new InfoPanelData { title = "", body = "", image = null });
+        return;
+    }
+
+    string body = BuildHeroBody(hero);
+    ShowHero(hero, new InfoPanelData
+    {
+        title = hero.name,
+        body = body,
+        image = hero.Portrait
+    });
+}
+
+public void ShowHero(HeroStats hero, InfoPanelData dataFromContent)
+{
+    if (hero == null)
+    {
+        if (logFlow) Debug.LogWarning($"{TAG} ShowHero(hero,data) called with null hero. Falling back to generic.", this);
+        Show(dataFromContent);
+        return;
+    }
+
+    _mode = Mode.Hero;
+    _currentHero = hero;
+    _currentMonster = null;
+
+    // Hero inspection does not use the Reel tab.
+    ApplyTabVisibility(false, false, "ShowHero");
+
+    // Ensure the monster reel root is hidden if it exists.
+    if (monsterReelTabRoot != null)
+        monsterReelTabRoot.SetActive(false);
+
+    // Show the core info and open.
+    ShowCore(dataFromContent);
+    Open();
+}
+
+private string BuildHeroBody(HeroStats hero)
+{
+    if (hero == null) return "";
+
+    // Keep this fairly short—this panel is meant to be glanceable on mobile.
+    // You can expand this later (traits, passives, equipment, etc.).
+    string className = "";
+    try
+    {
+        var classDef = hero.AdvancedClassDef != null ? hero.AdvancedClassDef : hero.BaseClassDef;
+        if (classDef != null) className = classDef.className;
+    }
+    catch { /* ignore */ }
+
+    System.Text.StringBuilder sb = new System.Text.StringBuilder();
+
+    if (!string.IsNullOrWhiteSpace(className))
+        sb.AppendLine(className);
+
+    sb.AppendLine($"Lv {hero.Level}");
+    sb.AppendLine($"HP {hero.CurrentHp}/{hero.MaxHp}  SHD {hero.Shield}");
+    sb.AppendLine($"STA {hero.CurrentStamina:0}/{hero.MaxStamina}");
+    sb.AppendLine($"ATK {hero.Attack}  DEF {hero.Defense}  SPD {hero.Speed}");
+    sb.AppendLine($"G {hero.Gold}");
+
+    return sb.ToString().Trim();
+}
+
     public void ShowMonster(Monster monster)
     {
         if (monster == null)
@@ -532,3 +606,5 @@ public class InfoPanelBackgroundRaycastFilter : MonoBehaviour, ICanvasRaycastFil
         return !overPanel;
     }
 }
+
+

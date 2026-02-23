@@ -1,15 +1,21 @@
+using System;
 using System.Collections;
 using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
-public class PartyHUDSlot : MonoBehaviour
+public class PartyHUDSlot : MonoBehaviour, IPointerDownHandler, IPointerUpHandler, IPointerExitHandler
 {
     [Header("Index")]
     [SerializeField] private int partyIndex = 0;
 
     [Header("UI Root")]
     [SerializeField] private Button slotButton;
+
+    [Header("Info Panel Hold")]
+    [Tooltip("Seconds the pointer must be held down on this slot to trigger the InfoPanel (instead of a normal click).")]
+    [SerializeField] private float infoPanelHoldSeconds = 0.35f;
 
     [Header("Portrait")]
     [Tooltip("Image used to display the hero/class portrait on this slot button.")]
@@ -93,6 +99,14 @@ public class PartyHUDSlot : MonoBehaviour
     private bool _lastShowActualShield = false;
     private int _lastShieldValue = -1;
 
+
+// Click/hold runtime
+private Action<int> _onSlotClicked;
+private Action<int> _onSlotHeld;
+private bool _pointerDown = false;
+private bool _holdFired = false;
+private float _pointerDownTime = 0f;
+
     // Aura runtime
     private Coroutine _auraRoutine;
     private CanvasGroup _auraCg;
@@ -117,15 +131,23 @@ public class PartyHUDSlot : MonoBehaviour
         portraitImage.preserveAspect = true;
     }
 
-    public void Initialize(System.Action<int> onSlotClicked)
+    public void Initialize(Action<int> onSlotClicked)
+    {
+        Initialize(onSlotClicked, null);
+    }
+
+    public void Initialize(Action<int> onSlotClicked, Action<int> onSlotHeld)
     {
         if (slotButton == null)
             slotButton = GetComponent<Button>();
 
+        _onSlotClicked = onSlotClicked;
+        _onSlotHeld = onSlotHeld;
+
         if (slotButton != null)
         {
+            // We handle click vs hold ourselves via pointer events.
             slotButton.onClick.RemoveAllListeners();
-            slotButton.onClick.AddListener(() => onSlotClicked?.Invoke(partyIndex));
         }
 
         SetSelected(false);
@@ -136,8 +158,53 @@ public class PartyHUDSlot : MonoBehaviour
 
         SetCastingAuraVisible(false);
 
-        SetPortrait(null);
+
+
     }
+
+private void Update()
+{
+    // Hold detection uses unscaled time so it still works if Time.timeScale changes during UI.
+    if (_pointerDown && !_holdFired)
+    {
+        if (Time.unscaledTime - _pointerDownTime >= infoPanelHoldSeconds)
+        {
+            _holdFired = true;
+            _onSlotHeld?.Invoke(partyIndex);
+        }
+    }
+
+    // Aura pulse is handled by the aura coroutine (if enabled).
+
+}
+
+public void OnPointerDown(PointerEventData eventData)
+{
+    if (slotButton != null && !slotButton.interactable)
+        return;
+
+    _pointerDown = true;
+    _holdFired = false;
+    _pointerDownTime = Time.unscaledTime;
+}
+
+public void OnPointerUp(PointerEventData eventData)
+{
+    if (!_pointerDown) return;
+
+    _pointerDown = false;
+
+    if (!_holdFired)
+        _onSlotClicked?.Invoke(partyIndex);
+}
+
+public void OnPointerExit(PointerEventData eventData)
+{
+    // If the user drags off the slot, cancel the pending click/hold.
+    _pointerDown = false;
+    _holdFired = false;
+}
+
 
     public void Render(
         BattleManager.PartyMemberSnapshot snapshot,
@@ -433,3 +500,5 @@ public class PartyHUDSlot : MonoBehaviour
             blockValueText.text = string.Empty;
     }
 }
+
+

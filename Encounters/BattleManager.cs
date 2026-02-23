@@ -428,6 +428,13 @@ private Coroutine _battleMusicFadeRoutine;
     // OnCurrentLandedChanged fires immediately after OnSpinLanded for the same spin.
     [Header("Input / Targeting")]
     [SerializeField] private bool allowClickToSelectMonsterTarget = true;
+
+    [Header("Info Panel Hold")]
+    [Tooltip("Seconds the player must hold the mouse/touch on a monster to open the InfoPanel (prevents accidental opens when selecting targets).")]
+    [SerializeField] private float infoPanelHoldSeconds = 0.35f;
+
+    [Tooltip("Pixels the pointer can drift while holding before we cancel the hold (treat it as a drag).")]
+    [SerializeField] private float infoPanelHoldMoveThresholdPx = 18f;
     [Tooltip("If true, clicking hero world sprites (their prefab colliders) can be used to select ALLY/SELF targets while an ability is awaiting a party target.")]
     [SerializeField] private bool allowClickHeroSpritesToTargetAllies = true;
     [SerializeField] private bool ignoreClicksOverUI = true;
@@ -525,6 +532,15 @@ private Coroutine _battleMusicFadeRoutine;
     private bool _awaitingEnemyTarget = false;
     private bool _awaitingPartyTarget = false; // used for self/ally targeting like Block
     private Monster _selectedEnemyTarget;
+
+
+// InfoPanel hold runtime (monster inspection)
+private bool _monsterInfoHoldArmed = false;
+private bool _monsterInfoHoldOpened = false;
+private float _monsterInfoHoldDownTime = 0f;
+private Vector3 _monsterInfoHoldDownPos;
+private Monster _monsterInfoHoldCandidate;
+
 
     private Monster _previewEnemyTarget = null;
 
@@ -719,6 +735,58 @@ private Coroutine _battleMusicFadeRoutine;
         if (!IsPlayerPhase || _resolving)
             return;
 
+
+// Resolve CLICK + HOLD to open monster info panels.
+if (_monsterInfoHoldArmed)
+{
+    // Released -> clear.
+    if (!Input.GetMouseButton(0))
+    {
+        _monsterInfoHoldArmed = false;
+        _monsterInfoHoldOpened = false;
+        _monsterInfoHoldCandidate = null;
+    }
+    else
+    {
+        // If the player drags, cancel the hold.
+        if ((Input.mousePosition - _monsterInfoHoldDownPos).sqrMagnitude > (infoPanelHoldMoveThresholdPx * infoPanelHoldMoveThresholdPx))
+        {
+            _monsterInfoHoldArmed = false;
+            _monsterInfoHoldOpened = false;
+            _monsterInfoHoldCandidate = null;
+        }
+        else if (!_monsterInfoHoldOpened && (Time.unscaledTime - _monsterInfoHoldDownTime) >= infoPanelHoldSeconds)
+        {
+            Monster m = _monsterInfoHoldCandidate;
+
+            // Only show if it's still valid.
+            if (m != null && _activeMonsters.Contains(m) && !m.IsDead && !IsInAbilityCastingState)
+            {
+                if (infoPanelController != null)
+                {
+                    string statsText = (monsterInfoController != null) ? monsterInfoController.BuildStatsForPanel(m) : null;
+                    string body = string.IsNullOrWhiteSpace(statsText)
+                        ? (m.Description ?? "")
+                        : (statsText + " " + (m.Description ?? ""));
+
+                    infoPanelController.ShowMonster(m, new InfoPanelData
+                    {
+                        title = m.DisplayName,
+                        body = body,
+                        image = null
+                    });
+                }
+                else if (monsterInfoController != null)
+                {
+                    monsterInfoController.Show(m);
+                }
+            }
+
+            _monsterInfoHoldOpened = true;
+        }
+    }
+}
+
         if (!Input.GetMouseButtonDown(0))
             return;
 
@@ -768,30 +836,17 @@ private Coroutine _battleMusicFadeRoutine;
             return;
         }
 
-        // Guard: do not open info panels while an ability is pending/targeting.
-        if (!IsInAbilityCastingState)
-        {
-            // Prefer the unified InfoPanelController (disables reels while open). Fall back to the legacy
-            // MonsterInfoController if the unified panel isn't wired yet.
-            if (infoPanelController != null)
-            {
-                string statsText = (monsterInfoController != null) ? monsterInfoController.BuildStatsForPanel(clicked) : null;
-                string body = string.IsNullOrWhiteSpace(statsText)
-                    ? (clicked.Description ?? "")
-                    : (statsText + " " + (clicked.Description ?? ""));
 
-                infoPanelController.ShowMonster(clicked, new InfoPanelData
-                {
-                    title = clicked.DisplayName,
-                    body = body,
-                    image = null
-                });
-            }
-            else if (monsterInfoController != null)
-            {
-                monsterInfoController.Show(clicked);
-            }
-        }
+// Guard: do not open info panels while an ability is pending/targeting.
+// InfoPanel now requires CLICK + HOLD (prevents accidental opens when selecting monsters).
+if (!IsInAbilityCastingState)
+{
+    _monsterInfoHoldArmed = true;
+    _monsterInfoHoldOpened = false;
+    _monsterInfoHoldDownTime = Time.unscaledTime;
+    _monsterInfoHoldDownPos = Input.mousePosition;
+    _monsterInfoHoldCandidate = clicked;
+}
     }
 
     public void NotifyAttackImpact()
@@ -6853,3 +6908,4 @@ if (logPassiveBridge)
 
 
 ////////////////////////////////////////////////////////////
+
