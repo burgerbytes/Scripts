@@ -203,6 +203,8 @@ public void OnPointerExit(PointerEventData eventData)
     // If the user drags off the slot, cancel the pending click/hold.
     _pointerDown = false;
     _holdFired = false;
+
+    SetPortrait(null);
 }
 
 
