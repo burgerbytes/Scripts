@@ -204,7 +204,8 @@ public void OnPointerExit(PointerEventData eventData)
     _pointerDown = false;
     _holdFired = false;
 
-    SetPortrait(null);
+    // IMPORTANT: Do NOT clear the portrait on hover/exit.
+    // The portrait is driven by PartyHUD/Render and should persist.
 }
 
 
@@ -502,5 +503,3 @@ public void OnPointerExit(PointerEventData eventData)
             blockValueText.text = string.Empty;
     }
 }
-
-
