@@ -12,7 +12,6 @@ public class HeroStats : MonoBehaviour
 
     private const string SHADOW_FADE_ABILITY_NAME = "Shadow Fade";
 
-
     [Header("Visual Anchors")]
     [Tooltip("Optional explicit reference to the hero prefab's CenterPoint child transform. If left null, we will auto-find a child named 'CenterPoint'.")]
     [SerializeField] private Transform centerPoint;
@@ -24,7 +23,6 @@ public class HeroStats : MonoBehaviour
     public Transform CenterPointTransform { get; private set; }
 
     public Vector3 CenterPointWorldPosition => (CenterPointTransform != null ? CenterPointTransform.position : transform.position);
-
 
     [Header("Passive Abilities")]
     [Tooltip("Always-on passives. These are NOT shown in the Ability Menu.")]
@@ -53,10 +51,10 @@ public class HeroStats : MonoBehaviour
     [Tooltip("How many level-ups are queued to be resolved at the campfire.")]
     [SerializeField] private int pendingLevelUps = 0;
 
-    
     [Tooltip("True when this hero has reached the evolution threshold (Level 5) and should be offered an Advanced class choice post-battle.")]
     [SerializeField] private bool evolutionPending = false;
-// ---------------- Core Stats ----------------
+
+    // ---------------- Core Stats ----------------
     [Header("Core Stats")]
     [SerializeField] private int maxHp = 100;
     [SerializeField] private int attack = 3;
@@ -162,23 +160,16 @@ public class HeroStats : MonoBehaviour
     [SerializeField] private ClassDefinitionSO baseClassDef;
     [SerializeField] private ClassDefinitionSO advancedClassDef;
 
+    // ---------------- Audio (PER HERO, NOT CLASS DEF) ----------------
     [Header("Audio")]
-    [Tooltip("Optional override. If null, uses the Base Class definition's victory jingle (ClassDefinitionSO.victoryJingleClip).")]
-    [SerializeField] private AudioClip victoryJingleClipOverride;
+    [Tooltip("Victory jingle for this hero (assigned on the hero prefab/instance).")]
+    [SerializeField] private AudioClip victoryJingleClip;
 
-    public AudioClip VictoryJingleClip
-    {
-        get
-        {
-            if (victoryJingleClipOverride != null)
-                return victoryJingleClipOverride;
+    [Tooltip("Battle music stem for this hero. All stems play together; this stem stops when the hero dies.")]
+    [SerializeField] private AudioClip battleMusicStemClip;
 
-            if (baseClassDef != null && baseClassDef.victoryJingleClip != null)
-                return baseClassDef.victoryJingleClip;
-
-            return null;
-        }
-    }
+    public AudioClip VictoryJingleClip => victoryJingleClip;
+    public AudioClip BattleMusicStemClip => battleMusicStemClip;
 
     public ClassDefinitionSO BaseClassDef => baseClassDef;
     public ClassDefinitionSO AdvancedClassDef => advancedClassDef;
@@ -231,13 +222,11 @@ public class HeroStats : MonoBehaviour
         }
     }
 
-
     // ---------------- Ability Choice (Post-Battle) ----------------
     public bool HasPendingAbilityChoices => pendingAbilityChoiceLevels != null && pendingAbilityChoiceLevels.Count > 0;
     public int PendingAbilityChoices => (pendingAbilityChoiceLevels != null) ? pendingAbilityChoiceLevels.Count : 0;
     public int NextPendingAbilityChoiceLevel => HasPendingAbilityChoices ? pendingAbilityChoiceLevels[0] : -1;
 
-    
     // ---------------- Evolution (Level 5) ----------------
     public bool HasPendingEvolution =>
         evolutionPending && level >= 5 && baseClassDef != null && advancedClassDef == null;
@@ -252,7 +241,7 @@ public class HeroStats : MonoBehaviour
         NotifyChanged();
     }
 
-/// <summary>
+    /// <summary>
     /// Returns up to <paramref name="count"/> ability options for the specified unlock level.
     /// Options are pulled from the hero's base class and (if present) advanced class definitions.
     /// Starter-choice abilities are excluded; this panel is for learned abilities.
@@ -272,7 +261,7 @@ public class HeroStats : MonoBehaviour
         {
             AddAbilityOptionsFromClassDef(baseClassDef, unlockLevel, count, options);
         }
-        
+
         // Level 5 special: if there are no exact-match options at unlockLevel 5,
         // fall back to offering up to 'count' not-yet-unlocked abilities from the (current) class defs
         // whose unlockAtLevel <= 5. This supports the "Evolution AND Ability" moment even if data
@@ -284,15 +273,15 @@ public class HeroStats : MonoBehaviour
             else
                 AddFallbackAbilityOptionsFromClassDef(baseClassDef, unlockLevel, count, options);
 
-            Debug.Log($"[Hero][AbilityUpgrade] Level5 fallback options hero='{name}' unlockLevel={unlockLevel} optionsCount={options.Count} first={(options.Count>0?options[0].abilityName:"<none>")} second={(options.Count>1?options[1].abilityName:"<none>")}");
+            Debug.Log($"[Hero][AbilityUpgrade] Level5 fallback options hero='{name}' unlockLevel={unlockLevel} optionsCount={options.Count} first={(options.Count > 0 ? options[0].abilityName : "<none>")} second={(options.Count > 1 ? options[1].abilityName : "<none>")}");
         }
 
-Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlockLevel} optionsCount={options.Count} first={(options.Count>0?options[0].abilityName:"<none>")} second={(options.Count>1?options[1].abilityName:"<none>")}");
+        Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlockLevel} optionsCount={options.Count} first={(options.Count > 0 ? options[0].abilityName : "<none>")} second={(options.Count > 1 ? options[1].abilityName : "<none>")}");
 
         return options;
     }
 
-        private IEnumerable<AbilityDefinitionSO> EnumerateClassAbilities(ClassDefinitionSO classDef)
+    private IEnumerable<AbilityDefinitionSO> EnumerateClassAbilities(ClassDefinitionSO classDef)
     {
         if (classDef == null) yield break;
 
@@ -332,7 +321,7 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
                 options.Add(a);
         }
     }
-    
+
     private void AddFallbackAbilityOptionsFromClassDef(ClassDefinitionSO classDef, int unlockLevel, int maxCount, List<AbilityDefinitionSO> options)
     {
         if (classDef == null) return;
@@ -388,7 +377,6 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
         return true;
     }
 
-    
     /// <summary>
     /// Defensive escape hatch: consumes the next pending ability-choice level without unlocking anything.
     /// Use this when data is misconfigured (no valid options) so the post-battle flow cannot soft-lock.
@@ -403,7 +391,7 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
         return true;
     }
 
-/// <summary>
+    /// <summary>
     /// Returns true if this hero should be allowed to use the given ability right now,
     /// based on Starter Choice rules + unlock level gating + persistent unlocks.
     ///
@@ -453,17 +441,17 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
         List<AbilityDefinitionSO> results = new List<AbilityDefinitionSO>();
 
         // 1) Add abilities from the provided class definition (filtered)
-    // Note: supports both legacy (ability1/ability2) and new (abilities list) class data.
-    if (classDef != null)
-    {
-        foreach (AbilityDefinitionSO a in EnumerateClassAbilities(classDef))
+        // Note: supports both legacy (ability1/ability2) and new (abilities list) class data.
+        if (classDef != null)
         {
-            if (a == null) continue;
-            if (a.kind == AbilityKind.Passive) continue;
-            if (IsAbilityUnlocked(a) && !results.Contains(a))
-                results.Add(a);
+            foreach (AbilityDefinitionSO a in EnumerateClassAbilities(classDef))
+            {
+                if (a == null) continue;
+                if (a.kind == AbilityKind.Passive) continue;
+                if (IsAbilityUnlocked(a) && !results.Contains(a))
+                    results.Add(a);
+            }
         }
-    }
 
         // 2) Add any permanently unlocked abilities (filtered) so they persist across level ups/class changes
         for (int i = 0; i < permanentlyUnlockedAbilities.Count; i++)
@@ -592,7 +580,6 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
         RefreshEquipSlotsFromGrid(); // runtime EquipGrid watcher
         NotifyChanged();
     }
-
 
     private void ResolveCenterPoint()
     {
@@ -893,9 +880,9 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
         {
             if (!CanUpgradeTo(def)) return;
             advancedClassDef = def;
-        
+
             evolutionPending = false;
-}
+        }
 
         // Apply definition modifiers
         canBlock = def.canBlock;
@@ -925,7 +912,6 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
         NotifyChanged();
     }
 
-
     /// <summary>
     /// Shadow Fade passive: first time this hero is hit each battle, queue Conceal.
     /// The conceal application is deferred until after the current hit resolves so it is not immediately consumed
@@ -946,6 +932,7 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
             SetHidden(true);
         }
     }
+
     // ---------------- Bleeding ----------------
     public void AddBleedStacks(int stacks)
     {
@@ -1284,10 +1271,10 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
         if (level >= maxLevel) return;
         level += 1;
 
-        
         // Level 5 is the evolution threshold.
         if (level == 5) evolutionPending = true;
-// Stat growth is defined by the hero's active class (Advanced if present, else Base).
+
+        // Stat growth is defined by the hero's active class (Advanced if present, else Base).
         // If no class is assigned yet, fall back to the previous default growth.
         ClassDefinitionSO growthDef = GetActiveClassDefinition();
 
@@ -1722,6 +1709,10 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
         baseClassDef = src.baseClassDef;
         advancedClassDef = src.advancedClassDef;
 
+        // Audio (per hero)
+        victoryJingleClip = src.victoryJingleClip;
+        battleMusicStemClip = src.battleMusicStemClip;
+
         // Abilities / unlocks
         startingAbilityOverride = src.startingAbilityOverride;
         permanentlyUnlockedAbilities = (src.permanentlyUnlockedAbilities != null)
@@ -1785,16 +1776,9 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
         for (int i = 0; i < permanentlyUnlockedAbilities.Count; i++)
         {
             var a = permanentlyUnlockedAbilities[i];
-            if (a != null && a.abilityName == abilityName) 
+            if (a != null && a.abilityName == abilityName)
                 return true;
         }
         return false;
     }
 }
-
-
-
-
-////////////////////////////////////////////////////////////
-
-

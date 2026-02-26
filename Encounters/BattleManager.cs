@@ -335,8 +335,27 @@ public class BattleManager : MonoBehaviour
     [Tooltip("If true, music loops while the battle is active.")]
     [SerializeField] private bool loopBattleMusic = true;
 
+
+    [Header("Audio / Music (Hero Stems)")]
+    [Tooltip("If true, battle music will be layered from per-hero stems (ClassDefinitionSO.battleMusicStemClip) instead of a single battleMusicClip.")]
+    [SerializeField] private bool useHeroBattleMusicStems = true;
+
+    [Tooltip("Optional parent transform where hero stem AudioSources will be created. If null, BattleManager will use its own GameObject.")]
+    [SerializeField] private Transform battleMusicStemRoot;
+
+    [Tooltip("Fade out duration for a single hero stem when that hero dies.")]
+    [SerializeField] private float heroStemFadeOutSeconds = 0.35f;
+
+    [Tooltip("If true, automatically scales each stem volume down when multiple stems are active to avoid clipping.")]
+    [SerializeField] private bool normalizeStemVolume = true;
+
 private Coroutine _battleMusicFadeRoutine;
 
+
+    // Hero stem music runtime
+    private readonly Dictionary<HeroStats, AudioSource> _heroMusicStemSources = new Dictionary<HeroStats, AudioSource>(8);
+    private readonly HashSet<HeroStats> _heroStemStoppedForDead = new HashSet<HeroStats>();
+    private Coroutine _heroStemFadeAllRoutine;
     [Header("Party (Run Instance)")]
     [SerializeField] private Transform[] partySpawnPoints;
     [SerializeField] private GameObject[] partyMemberPrefabs = new GameObject[3];
@@ -2082,6 +2101,9 @@ private bool TryRunLevel5EvolutionNow()
                 SpawnDamageNumber(GetHeroCenterWorldPosition(hs, pm.avatarGO.transform), dealt);
         }
 
+        // If any heroes died from bleed ticks, stop their battle music stems.
+        CheckAndHandleNewlyDeadHeroesForStems();
+
         if (IsPartyDefeated())
         {
             Debug.Log("[BattleManager] Party defeated (bleed tick).", this);
@@ -2276,6 +2298,9 @@ private bool TryRunLevel5EvolutionNow()
                 }
             });
 
+
+            // If any heroes died from this attack, stop their battle music stems.
+            CheckAndHandleNewlyDeadHeroesForStems();
             // Execute queued Resolve spins AFTER the lunge + damage application completes.
             if (reelSpinSystem != null && resolveSpinQueue.Count > 0)
             {
@@ -5488,17 +5513,217 @@ private IEnumerator FadeMusicRoutine(AudioSource src, float from, float to, floa
         src.Stop();
 }
 
-    private void SetState(BattleState s)
+    
+
+// ---------------- Battle Music (Hero Stems) ----------------
+private bool TryStartHeroBattleMusicStems()
+{
+    if (!useHeroBattleMusicStems) return false;
+    if (_party == null || _party.Count == 0) return false;
+
+    // Clear any prior runtime bookkeeping (without forcing stop if already playing).
+    _heroStemStoppedForDead.Clear();
+
+    // Pick root
+    Transform root = battleMusicStemRoot != null ? battleMusicStemRoot : this.transform;
+
+    // Gather clips for living heroes
+    var stemsToPlay = new List<(HeroStats hero, AudioClip clip)>();
+    for (int i = 0; i < _party.Count; i++)
+    {
+        var pm = _party[i];
+        if (pm == null || pm.stats == null || pm.IsDead) continue;
+
+        var hs = pm.stats;
+        AudioClip clip = null;
+        try { clip = hs.BattleMusicStemClip; } catch { clip = null; }
+
+        if (clip != null)
+            stemsToPlay.Add((hs, clip));
+    }
+
+    if (stemsToPlay.Count == 0)
+        return false;
+
+    // Stop generic track if it was playing (stems take over).
+    if (battleMusicSource != null && battleMusicSource.isPlaying)
+        battleMusicSource.Stop();
+
+    // Clean up any old stems first
+    StopHeroBattleMusicStemsImmediate();
+
+    // Compute per-stem volume
+    float perStemVolume = battleMusicVolume;
+    if (normalizeStemVolume && stemsToPlay.Count > 1)
+        perStemVolume = battleMusicVolume / Mathf.Sqrt(stemsToPlay.Count);
+
+    // Schedule all stems to start at the same DSP time
+    double dspStart = AudioSettings.dspTime + 0.075;
+
+    for (int i = 0; i < stemsToPlay.Count; i++)
+    {
+        var (hero, clip) = stemsToPlay[i];
+
+        var src = root.gameObject.AddComponent<AudioSource>();
+        src.playOnAwake = false;
+        src.spatialBlend = 0f; // 2D
+        src.loop = loopBattleMusic;
+        src.clip = clip;
+        src.volume = (battleMusicFadeSeconds > 0f) ? 0f : perStemVolume;
+
+        _heroMusicStemSources[hero] = src;
+
+        // Start all stems sample-synced
+        src.PlayScheduled(dspStart);
+
+        // Fade-in if desired
+        if (battleMusicFadeSeconds > 0f)
+            StartCoroutine(FadeMusicRoutine(src, 0f, perStemVolume, battleMusicFadeSeconds, playIfStopped: false));
+    }
+
+    return true;
+}
+
+private void StartBattleMusicForEncounter()
+{
+    // Prefer hero stems. If none are configured, fall back to single clip.
+    if (TryStartHeroBattleMusicStems())
+        return;
+
+    StartBattleMusic();
+}
+
+private void StopAllBattleMusic()
+{
+    // Stop hero stems first (if any), then stop generic track.
+    StopHeroBattleMusicStems();
+    StopBattleMusic();
+}
+
+private void StopHeroBattleMusicStems()
+{
+    if (_heroMusicStemSources.Count == 0)
+        return;
+
+    // If we have a fade duration, fade all sources down and stop.
+    if (battleMusicFadeSeconds > 0f)
+    {
+        if (_heroStemFadeAllRoutine != null)
+            StopCoroutine(_heroStemFadeAllRoutine);
+
+        _heroStemFadeAllRoutine = StartCoroutine(FadeOutAndStopAllHeroStemsRoutine(battleMusicFadeSeconds));
+    }
+    else
+    {
+        StopHeroBattleMusicStemsImmediate();
+    }
+}
+
+private IEnumerator FadeOutAndStopAllHeroStemsRoutine(float seconds)
+{
+    // Snapshot (sources may be modified while fading)
+    var sources = new List<AudioSource>(_heroMusicStemSources.Values);
+
+    for (int i = 0; i < sources.Count; i++)
+    {
+        var src = sources[i];
+        if (src == null) continue;
+
+        // Fade to zero, then stop.
+        StartCoroutine(FadeMusicRoutine(src, src.volume, 0f, seconds, playIfStopped: false, stopAtEnd: true));
+    }
+
+    // Wait out the fade, then clean up components.
+    yield return new WaitForSeconds(Mathf.Max(0f, seconds) + 0.02f);
+
+    StopHeroBattleMusicStemsImmediate();
+    _heroStemFadeAllRoutine = null;
+}
+
+private void StopHeroBattleMusicStemsImmediate()
+{
+    if (_heroStemFadeAllRoutine != null)
+    {
+        StopCoroutine(_heroStemFadeAllRoutine);
+        _heroStemFadeAllRoutine = null;
+    }
+
+    foreach (var kvp in _heroMusicStemSources)
+    {
+        var src = kvp.Value;
+        if (src == null) continue;
+        try { src.Stop(); } catch { }
+        Destroy(src);
+    }
+
+    _heroMusicStemSources.Clear();
+    _heroStemStoppedForDead.Clear();
+}
+
+private void FadeOutHeroStemIfNeeded(HeroStats hero)
+{
+    if (!useHeroBattleMusicStems) return;
+    if (hero == null) return;
+    if (_heroStemStoppedForDead.Contains(hero)) return;
+
+    if (_heroMusicStemSources.TryGetValue(hero, out var src) && src != null)
+    {
+        _heroStemStoppedForDead.Add(hero);
+
+        float fade = Mathf.Max(0f, heroStemFadeOutSeconds);
+
+        if (fade <= 0f)
+        {
+            src.Stop();
+            Destroy(src);
+            _heroMusicStemSources.Remove(hero);
+            return;
+        }
+
+        StartCoroutine(FadeOutAndStopSingleStemRoutine(hero, src, fade));
+    }
+}
+
+private IEnumerator FadeOutAndStopSingleStemRoutine(HeroStats hero, AudioSource src, float seconds)
+{
+    if (src == null) yield break;
+
+    // Fade out and stop.
+    yield return FadeMusicRoutine(src, src.volume, 0f, seconds, playIfStopped: false, stopAtEnd: true);
+
+    if (src != null)
+        Destroy(src);
+
+    if (hero != null)
+        _heroMusicStemSources.Remove(hero);
+}
+
+private void CheckAndHandleNewlyDeadHeroesForStems()
+{
+    if (!useHeroBattleMusicStems) return;
+    if (_party == null) return;
+
+    for (int i = 0; i < _party.Count; i++)
+    {
+        var pm = _party[i];
+        if (pm == null || pm.stats == null) continue;
+
+        // We only want to stop stems once, at the moment they first become dead.
+        if (pm.IsDead)
+            FadeOutHeroStemIfNeeded(pm.stats);
+    }
+}
+
+private void SetState(BattleState s)
     {
         if (_state == s) return;
         _state = s;
 
         // Battle music: start when battle begins, stop when battle ends.
         if (s == BattleState.BattleStart)
-            StartBattleMusic();
+            StartBattleMusicForEncounter();
         else if (s == BattleState.BattleEnd)
-            StopBattleMusic();
-
+            StopAllBattleMusic();
         if (s == BattleState.BattleEnd)
             Debug.Log($"[Battle] Battle ended. state={s} time={Time.time:0.00}", this);
 

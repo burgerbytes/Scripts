@@ -16,10 +16,6 @@ public class ClassDefinitionSO : ScriptableObject
     [TextArea(2, 6)]
     public string description;
 
-    [Header("Audio")]
-    [Tooltip("Optional victory jingle for this class (typically set on Base classes).")]
-    public AudioClip victoryJingleClip;
-
     [Tooltip("Small icon used in menus, lists, or ability UIs")]
     public Sprite icon;
 
@@ -68,5 +64,3 @@ public class ClassDefinitionSO : ScriptableObject
     [Header("Passive Abilities")]
     public List<PassiveAbilitySO> passiveAbilities = new List<PassiveAbilitySO>();
 }
-
-
