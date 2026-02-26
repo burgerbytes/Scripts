@@ -162,6 +162,24 @@ public class HeroStats : MonoBehaviour
     [SerializeField] private ClassDefinitionSO baseClassDef;
     [SerializeField] private ClassDefinitionSO advancedClassDef;
 
+    [Header("Audio")]
+    [Tooltip("Optional override. If null, uses the Base Class definition's victory jingle (ClassDefinitionSO.victoryJingleClip).")]
+    [SerializeField] private AudioClip victoryJingleClipOverride;
+
+    public AudioClip VictoryJingleClip
+    {
+        get
+        {
+            if (victoryJingleClipOverride != null)
+                return victoryJingleClipOverride;
+
+            if (baseClassDef != null && baseClassDef.victoryJingleClip != null)
+                return baseClassDef.victoryJingleClip;
+
+            return null;
+        }
+    }
+
     public ClassDefinitionSO BaseClassDef => baseClassDef;
     public ClassDefinitionSO AdvancedClassDef => advancedClassDef;
 
@@ -1778,3 +1796,5 @@ Debug.Log($"[Hero][AbilityUpgrade] Options found hero='{name}' unlockLevel={unlo
 
 
 ////////////////////////////////////////////////////////////
+
+

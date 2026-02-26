@@ -1,7 +1,3 @@
-// GUID: 30f201f35d336bf4d840162cd6fd1fde
-////////////////////////////////////////////////////////////
-// GUID: 30f201f35d336bf4d840162cd6fd1fde
-////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -78,8 +74,37 @@ public class BattleManager : MonoBehaviour
 
     private AudioSource _heroHitSfxSource;
 
+    // =============================
+    // Victory Jingle (Hero-specific)
+    // =============================
+    [Header("Audio / Victory Jingle")]
+    [SerializeField] private bool playVictoryJingle = true;
 
-    // Tracks which hero currently has their casting aura active (while an ability is pending).
+    [Tooltip("Optional AudioSource to play the victory jingle. If null, one will be created at runtime.")]
+    [SerializeField] private AudioSource victoryJingleSource;
+
+    [Tooltip("Fallback jingle used if we can't determine a hero-specific clip.")]
+    [SerializeField] private AudioClip defaultVictoryJingle;
+
+    [SerializeField] [Range(0f, 1f)] private float victoryJingleVolume = 0.9f;
+
+    [Tooltip("If true, randomizes pitch slightly for variation.")]
+    [SerializeField] private bool randomizeVictoryJinglePitch = false;
+
+    [SerializeField] private Vector2 victoryJinglePitchRange = new Vector2(0.98f, 1.02f);
+
+    [Tooltip("Extra logging for diagnosing jingle start/stop timing.")]
+    [SerializeField] private bool victoryJingleDebugLogs = true;
+
+    // Last hero recorded as having killed a monster (used to select the victory jingle).
+    private HeroStats _victoryKillerHero;
+
+
+
+    
+    // Prevent duplicate jingle playback if victory routine triggers more than once.
+    private bool _victoryJinglePlayedThisEncounter;
+// Tracks which hero currently has their casting aura active (while an ability is pending).
     private int _castingAuraPartyIndex = -1;
 
 
@@ -2511,7 +2536,11 @@ applyDamage?.Invoke();
         CleanupExistingEncounter();
         SetState(BattleState.BattleStart);
 
-        ResetPartyRoundFlags();
+        
+
+        _victoryKillerHero = null;
+        _victoryJinglePlayedThisEncounter = false;
+ResetPartyRoundFlags();
         if (reelSpinSystem != null)
         {
             reelSpinSystem.ResetBattleSubstitutionState();
@@ -3151,6 +3180,7 @@ applyDamage?.Invoke();
                         if (ability != null && ability.momentumOnKill && reelSpinSystem != null)
                             yield return StartCoroutine(reelSpinSystem.MomentumSpinAndInstantCollect(_pendingActorIndex));
 
+                        RecordVictoryKillerFromPendingActor("Ability kill");
                         HandleMonsterKilled(target);
 
                         // If we still have casts remaining, pick a new living target and continue.
@@ -3208,6 +3238,7 @@ applyDamage?.Invoke();
                 if (ability != null && ability.momentumOnKill && reelSpinSystem != null)
                     yield return StartCoroutine(reelSpinSystem.MomentumSpinAndInstantCollect(_pendingActorIndex));
                     
+                RecordVictoryKillerFromPendingActor("Ability kill");
                 HandleMonsterKilled(enemyTarget);
             }
         }
@@ -4907,6 +4938,9 @@ private IEnumerator SpawnSpellEffectOnTargetRoutine(Monster target)
         if (scrollingBackground != null)
             scrollingBackground.SetPaused(false);
 
+        // Play hero-specific victory jingle (waits in realtime so it won't be cut short by pauses).
+        StartCoroutine(PlayVictoryJingleRoutine());
+
         HeroStats goldOwner = null;
         if (_party != null && _party.Count > 0)
             goldOwner = _party[0]?.stats;
@@ -6162,7 +6196,181 @@ private void LayoutHeroStatusIcons(Transform statusIconRoot)
 
     
 
-    /// <summary>
+    
+
+    // -----------------------------
+    // Victory Jingle Helpers
+    // -----------------------------
+    private void RecordVictoryKillerFromPendingActor(string reason)
+    {
+        var hs = GetHeroAtPartyIndex(_pendingActorIndex);
+        if (hs == null)
+            return;
+
+        _victoryKillerHero = hs;
+
+        if (victoryJingleDebugLogs)
+        {
+            string heroName = hs != null ? hs.gameObject.name : "<null>";
+            string baseClass = (hs != null && hs.BaseClassDef != null) ? hs.BaseClassDef.className : "<unknown>";
+            Debug.Log($"[VictoryJingle][KILLER] Recorded killer from pending actor. hero={heroName} baseClass={baseClass} reason={reason} time={Time.time:0.00} rt={Time.realtimeSinceStartup:0.00}", this);
+        }
+    }
+
+    private AudioClip ResolveVictoryJingleClip(HeroStats killer)
+    {
+        // Prefer a hero-level override if it exists, else fall back to BaseClassDef field, else default.
+        AudioClip clip = null;
+
+        if (killer != null)
+        {
+            // Try property "VictoryJingleClip" (recommended).
+            try
+            {
+                var prop = killer.GetType().GetProperty("VictoryJingleClip", BindingFlags.Public | BindingFlags.Instance);
+                if (prop != null)
+                    clip = prop.GetValue(killer, null) as AudioClip;
+            }
+            catch { /* ignore */ }
+
+            // Try field "victoryJingleClip" or "victoryJingleClipOverride".
+            if (clip == null)
+            {
+                try
+                {
+                    var f = killer.GetType().GetField("victoryJingleClip", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance);
+                    if (f != null)
+                        clip = f.GetValue(killer) as AudioClip;
+                }
+                catch { /* ignore */ }
+            }
+            if (clip == null)
+            {
+                try
+                {
+                    var f = killer.GetType().GetField("victoryJingleClipOverride", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance);
+                    if (f != null)
+                        clip = f.GetValue(killer) as AudioClip;
+                }
+                catch { /* ignore */ }
+            }
+
+            // Base class fallback: ClassDefinitionSO.victoryJingleClip (via reflection to avoid hard dependency).
+            if (clip == null && killer.BaseClassDef != null)
+            {
+                try
+                {
+                    var cf = killer.BaseClassDef.GetType().GetField("victoryJingleClip", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance);
+                    if (cf != null)
+                        clip = cf.GetValue(killer.BaseClassDef) as AudioClip;
+                }
+                catch { /* ignore */ }
+            }
+        }
+
+        if (clip == null)
+            clip = defaultVictoryJingle;
+
+        return clip;
+    }
+
+    private const string VictoryJingleChildName = "VictoryJingle_AudioSource";
+
+private AudioSource GetOrCreateVictoryJingleSource()
+{
+    if (victoryJingleSource != null)
+        return victoryJingleSource;
+
+    // IMPORTANT:
+    // Do NOT add this AudioSource to the BattleManager GameObject itself.
+    // Some UI/SFX systems call GetComponent<AudioSource>() on shared objects; if we attach here,
+    // the victory jingle source can get reused for button clicks / enable/disable sounds.
+    // Instead, we create a dedicated hidden child.
+    Transform child = transform.Find(VictoryJingleChildName);
+    GameObject go;
+    if (child != null)
+    {
+        go = child.gameObject;
+    }
+    else
+    {
+        go = new GameObject(VictoryJingleChildName);
+        go.transform.SetParent(transform, false);
+        go.transform.localPosition = Vector3.zero;
+        go.transform.localRotation = Quaternion.identity;
+        go.transform.localScale = Vector3.one;
+    }
+
+    victoryJingleSource = go.GetComponent<AudioSource>();
+    if (victoryJingleSource == null)
+        victoryJingleSource = go.AddComponent<AudioSource>();
+
+    // Dedicated 2D one-shot style source.
+    victoryJingleSource.playOnAwake = false;
+    victoryJingleSource.loop = false;
+    victoryJingleSource.spatialBlend = 0f; // 2D
+    victoryJingleSource.ignoreListenerPause = true;
+    victoryJingleSource.ignoreListenerVolume = true;
+
+    return victoryJingleSource;
+}
+
+    private IEnumerator PlayVictoryJingleRoutine()
+    {
+        if (!playVictoryJingle)
+            yield break;
+
+        
+        if (_victoryJinglePlayedThisEncounter)
+            yield break;
+
+        _victoryJinglePlayedThisEncounter = true;
+AudioClip clip = ResolveVictoryJingleClip(_victoryKillerHero);
+        if (clip == null)
+        {
+            if (victoryJingleDebugLogs)
+                Debug.Log($"[VictoryJingle][SKIP] No clip resolved (killer={( _victoryKillerHero!=null ? _victoryKillerHero.gameObject.name : "<none>" )}). time={Time.time:0.00} rt={Time.realtimeSinceStartup:0.00}", this);
+            yield break;
+        }
+
+        string heroName = _victoryKillerHero != null ? _victoryKillerHero.gameObject.name : "<none>";
+        string baseClass = (_victoryKillerHero != null && _victoryKillerHero.BaseClassDef != null) ? _victoryKillerHero.BaseClassDef.className : "<unknown>";
+        string trackName = clip != null ? clip.name : "<null>";
+
+        if (victoryJingleDebugLogs)
+        {
+            Debug.Log($"[VictoryJingle][WILL] hero={heroName} baseClass={baseClass} track={trackName} clipLen={clip.length:0.00}s time={Time.time:0.00} rt={Time.realtimeSinceStartup:0.00}", this);
+        }
+
+        AudioSource src = GetOrCreateVictoryJingleSource();
+        src.Stop();
+        src.clip = clip;
+        src.volume = Mathf.Clamp01(victoryJingleVolume);
+
+        if (randomizeVictoryJinglePitch)
+            src.pitch = UnityEngine.Random.Range(victoryJinglePitchRange.x, victoryJinglePitchRange.y);
+        else
+            src.pitch = 1f;
+
+        float beginTime = Time.time;
+        float beginRt = Time.realtimeSinceStartup;
+
+        if (victoryJingleDebugLogs)
+            Debug.Log($"[VictoryJingle][BEGIN] hero={heroName} baseClass={baseClass} track={trackName} Time.time={beginTime:0.00} rt={beginRt:0.00}", this);
+
+        src.Play();
+
+        // Wait in realtime so pausing Time.timeScale won't truncate the perceived duration.
+        float wait = Mathf.Max(0.01f, clip.length);
+        yield return new WaitForSecondsRealtime(wait);
+
+        float endTime = Time.time;
+        float endRt = Time.realtimeSinceStartup;
+
+        if (victoryJingleDebugLogs)
+            Debug.Log($"[VictoryJingle][END] hero={heroName} track={trackName} Time.time={endTime:0.00} rt={endRt:0.00} elapsedRt={(endRt - beginRt):0.00}", this);
+    }
+/// <summary>
     /// Adds Magic resource directly to the battle resource pool (does nothing if resourcePool is missing).
     /// Used by effects like Arcane Transmutation granting an immediate MAG point.
     /// </summary>
@@ -6904,8 +7112,31 @@ if (logPassiveBridge)
 
         return _selectedEnemyTarget.transform;
     }
+
+    private void VJLog(string phase, HeroStats hero, AudioClip clip, float? clipLenOverride = null)
+    {
+        if (!victoryJingleDebugLogs) return;
+
+        string heroName = hero != null ? hero.name : "<null>";
+        string baseClass = "<unknown>";
+        try
+        {
+            // Adjust if your HeroStats exposes base class differently
+            if (hero != null && hero.BaseClassDef != null)
+                baseClass = hero.BaseClassDef.name;
+        }
+        catch { /* ignore */ }
+
+        string trackName = clip != null ? clip.name : "<null>";
+        float len = clipLenOverride ?? (clip != null ? clip.length : 0f);
+
+        Debug.Log(
+            $"[VictoryJingle][{phase}] " +
+            $"hero={heroName} baseClass={baseClass} track={trackName} clipLen={len:0.000}s " +
+            $"t={Time.time:0.000} rt={Time.realtimeSinceStartup:0.000}",
+            this
+        );
+    }
 }
 
-
-////////////////////////////////////////////////////////////
 
