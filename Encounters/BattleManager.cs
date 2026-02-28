@@ -1312,8 +1312,6 @@ ResetPartyRoundFlags();
         NotifyPartyChanged();
     }
 
-
-
     private ResourceCost GetEffectiveCost(HeroStats actor, AbilityDefinitionSO ability)
     {
         if (ability == null) return default;
@@ -1330,9 +1328,17 @@ ResetPartyRoundFlags();
             c.attack = Math.Max(0L, atk);
         }
 
+        // Ramping basic attacks: Slash / Dart / Quick Blade
+        // First cast is free, then each successive cast costs +1 ATK, +2 ATK, etc.
+        if (actor != null && HeroStats.IsRampingBasicAttackAbility(ability))
+        {
+            long add = actor.GetRampingBasicAttackAdditionalAtkCost(ability);
+            c.attack = Math.Max(0L, c.attack) + Math.Max(0L, add);
+        }
+
         return c;
     }
-
+    
     // ============================
     // Ability Animation Key Helpers
     // ============================

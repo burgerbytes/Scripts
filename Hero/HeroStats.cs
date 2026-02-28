@@ -143,6 +143,10 @@ public class HeroStats : MonoBehaviour
     [Tooltip("How many damaging attacks have been committed this turn (runtime).")]
     [SerializeField] private int damageAttacksUsedThisTurn = 0;
 
+    [Header("Ramping Basic Attacks (Runtime)")]
+    [Tooltip("Runtime: number of ramping basic attacks (Slash/Dart/Quick Blade) cast so far this player turn. Resets at the start of each new player phase.")]
+    [SerializeField] private int rampingBasicAttacksCastThisTurn = 0;
+
     [Tooltip("Self damage taken whenever the hero commits an attack (e.g., Barbed Blade).")]
     [SerializeField] private int selfDamagePerAttack = 0;
 
@@ -771,6 +775,12 @@ public class HeroStats : MonoBehaviour
     public bool CanUseAbilityThisTurn(AbilityDefinitionSO ability)
     {
         if (ability == null) return false;
+
+        // Special rule: these baseline attacks are NOT limited to once per turn.
+        // Their restriction is handled via a ramping ATK token cost that resets next round.
+        if (IsRampingBasicAttackAbility(ability))
+            return true;
+
         if (!ability.usableOncePerTurn) return true;
 
         int turn = (BattleManager.Instance != null) ? BattleManager.Instance.PlayerTurnNumber : 0;
@@ -784,10 +794,55 @@ public class HeroStats : MonoBehaviour
     {
         if (ability == null || !ability.usableOncePerTurn) return;
 
+        // Ramping basic attacks are intentionally NOT tracked by the once-per-turn system.
+        if (IsRampingBasicAttackAbility(ability))
+            return;
+
         int turn = (BattleManager.Instance != null) ? BattleManager.Instance.PlayerTurnNumber : 0;
         _abilityLastUsedOnPlayerTurn ??= new Dictionary<AbilityDefinitionSO, int>(16);
         _abilityLastUsedOnPlayerTurn[ability] = turn;
     }
+
+    // ---------------- Ramping Basic Attacks ----------------
+    /// <summary>
+    /// Returns true if this ability should use the ramping ATK token cost rule:
+    /// Slash, Dart, and Quick Blade.
+    /// </summary>
+    public static bool IsRampingBasicAttackAbility(AbilityDefinitionSO ability)
+    {
+        if (ability == null) return false;
+
+        // Prefer the player-facing name if present; otherwise fall back to asset name.
+        string n = !string.IsNullOrWhiteSpace(ability.abilityName) ? ability.abilityName : ability.name;
+        if (string.IsNullOrWhiteSpace(n)) return false;
+
+        n = n.Trim();
+
+        return string.Equals(n, "Slash", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(n, "Dart", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(n, "Quick Blade", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Additional ATK cost for the next ramping basic attack cast this turn.
+    /// First cast is free (0), then 1, then 2, etc.
+    /// </summary>
+    public int GetRampingBasicAttackAdditionalAtkCost(AbilityDefinitionSO ability)
+    {
+        if (!IsRampingBasicAttackAbility(ability)) return 0;
+        return Mathf.Max(0, rampingBasicAttacksCastThisTurn);
+    }
+
+    /// <summary>
+    /// Call after a ramping basic attack is successfully committed (cost spent).
+    /// </summary>
+    public void RegisterRampingBasicAttackCastThisTurn(AbilityDefinitionSO ability)
+    {
+        if (!IsRampingBasicAttackAbility(ability)) return;
+        rampingBasicAttacksCastThisTurn++;
+    }
+
+    public int RampingBasicAttacksCastThisTurn => rampingBasicAttacksCastThisTurn;
 
     private void NotifyChanged() => OnChanged?.Invoke();
 
@@ -1497,6 +1552,9 @@ public class HeroStats : MonoBehaviour
         turnAttackMultiplier = 1.0f;
         maxDamageAttacksThisTurn = int.MaxValue;
         damageAttacksUsedThisTurn = 0;
+
+        // Ramping basic attacks reset each player turn.
+        rampingBasicAttacksCastThisTurn = 0;
 
         // Triple Blade / turn-only flags
         tripleBladeEmpoweredThisTurn = false;

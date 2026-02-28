@@ -1,6 +1,8 @@
+using System;
 using System.Collections.Generic;
-using TMPro;
 using UnityEngine;
+using UnityEngine.UI;
+using TMPro;
 
 /// <summary>
 /// Ability menu that populates ability buttons and initiates casting via BattleManager.
@@ -32,6 +34,11 @@ public class AbilityMenuUI : MonoBehaviour
     private HeroStats currentHero;
     private PartyHUD _partyHUD;
 
+    // Refresh affordability when resources or dynamic costs change.
+    private bool _hasAffordabilitySnapshot;
+    private long _lastAtk, _lastDef, _lastMag, _lastWild;
+    private int _lastRampingBasic;
+
     // While an ability is in targeting/cast state, keep the description panel visible.
     private bool _descPinnedUntilCast = false;
 
@@ -54,58 +61,79 @@ public class AbilityMenuUI : MonoBehaviour
     }
 
     private void OnEnable()
-{
-    if (_partyHUD == null)
-        _partyHUD = FindFirstObjectByType<PartyHUD>(FindObjectsInactive.Include);
-    if (reelSpinSystem == null)
-        reelSpinSystem = FindFirstObjectByType<ReelSpinSystem>();
-    if (reelSpinSystem != null)
-        reelSpinSystem.OnReelPhaseChanged += HandleReelPhaseChanged;
-
-    AbilityCastState.OnTargetConfirmed += HandleTargetConfirmed;
-}
-
-private void OnDisable()
-{
-    if (reelSpinSystem != null)
-        reelSpinSystem.OnReelPhaseChanged -= HandleReelPhaseChanged;
-
-    AbilityCastState.OnTargetConfirmed -= HandleTargetConfirmed;
-}
-
-private void HandleReelPhaseChanged(bool inReelPhase)
-{
-    // Reel phase and player phase are unified. Abilities remain usable while reels are active.
-    // No-op.
-}
-
-
-private void HandleTargetConfirmed()
-{
-    // The player just confirmed a target. Hide the description panel immediately
-    // (before ResolvePendingAbility begins and attack animations play).
-    _descPinnedUntilCast = false;
-    HideAbilityDescPanel();
-    TryNotifyClosedIfFullyHidden();
-}
-
-private void Update()
     {
-        // If we pinned the description panel during targeting, hide it once the cast state clears.
-        if (_descPinnedUntilCast)
-        {
-            var cast = AbilityCastState.Instance;
-            bool hasPending = (cast != null && cast.HasPendingCast);
+        if (_partyHUD == null)
+            _partyHUD = FindFirstObjectByType<PartyHUD>(FindObjectsInactive.Include);
+        if (reelSpinSystem == null)
+            reelSpinSystem = FindFirstObjectByType<ReelSpinSystem>();
+        if (reelSpinSystem != null)
+            reelSpinSystem.OnReelPhaseChanged += HandleReelPhaseChanged;
 
-            if (!hasPending)
+        AbilityCastState.OnTargetConfirmed += HandleTargetConfirmed;
+    }
+
+    private void OnDisable()
+    {
+        if (reelSpinSystem != null)
+            reelSpinSystem.OnReelPhaseChanged -= HandleReelPhaseChanged;
+
+        AbilityCastState.OnTargetConfirmed -= HandleTargetConfirmed;
+    }
+
+    private void HandleReelPhaseChanged(bool inReelPhase)
+    {
+        // Reel phase and player phase are unified. Abilities remain usable while reels are active.
+        // No-op.
+}
+
+
+    private void HandleTargetConfirmed()
+    {
+        // The player just confirmed a target. Hide the description panel immediately
+        // (before ResolvePendingAbility begins and attack animations play).
+        _descPinnedUntilCast = false;
+        HideAbilityDescPanel();
+        TryNotifyClosedIfFullyHidden();
+    }
+
+    private void Update()
+        {
+            // If we pinned the description panel during targeting, hide it once the cast state clears.
+            if (_descPinnedUntilCast)
             {
-                if (debugLogs) Debug.Log("[AbilityMenuUI] Cast state cleared -> hiding AbilityDescPanel.", this);
-                _descPinnedUntilCast = false;
-                HideAbilityDescPanel();
-                TryNotifyClosedIfFullyHidden();
+                var cast = AbilityCastState.Instance;
+                bool hasPending = (cast != null && cast.HasPendingCast);
+
+                if (!hasPending)
+                {
+                    if (debugLogs) Debug.Log("[AbilityMenuUI] Cast state cleared -> hiding AbilityDescPanel.", this);
+                    _descPinnedUntilCast = false;
+                    HideAbilityDescPanel();
+                    TryNotifyClosedIfFullyHidden();
+                }
+            }
+
+            // Keep button affordability + dynamic cost text in sync as resources / ramping counters change.
+            if (root != null && root.activeSelf && currentHero != null && resourcePool != null)
+            {
+                long atk = resourcePool.Attack;
+                long def = resourcePool.Defense;
+                long mag = resourcePool.Magic;
+                long wild = resourcePool.Wild;
+                int ramp = currentHero.RampingBasicAttacksCastThisTurn;
+
+                if (!_hasAffordabilitySnapshot || atk != _lastAtk || def != _lastDef || mag != _lastMag || wild != _lastWild || ramp != _lastRampingBasic)
+                {
+                    RefreshAffordability();
+                    _hasAffordabilitySnapshot = true;
+                    _lastAtk = atk;
+                    _lastDef = def;
+                    _lastMag = mag;
+                    _lastWild = wild;
+                    _lastRampingBasic = ramp;
+                }
             }
         }
-    }
 
     public void OpenForHero(HeroStats hero, List<AbilityDefinitionSO> abilities)
     {
@@ -131,6 +159,7 @@ private void Update()
         if (hero == null) return;
 
         currentHero = hero;
+        _hasAffordabilitySnapshot = false;
 
         if (root == null)
         {
@@ -174,7 +203,8 @@ private void Update()
                     resourcePool,
                     OnAbilityButtonSelected,
                     OnAbilityConfirmed,
-                    CanUseAbilityNow
+                    CanUseAbilityNow,
+                    currentHero
                 );
 
                 buttons.Add(btn);
@@ -349,4 +379,3 @@ private void Update()
 
 
 ////////////////////////////////////////////////////////////
-

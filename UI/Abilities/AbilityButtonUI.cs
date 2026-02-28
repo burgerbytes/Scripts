@@ -1,4 +1,3 @@
-// GUID: 55d9a61f8cba7d34ba7f0c8ffb4a45f6
 ////////////////////////////////////////////////////////////
 using System;
 using System.Collections.Generic;
@@ -44,6 +43,9 @@ public class AbilityButtonUI : MonoBehaviour
     private ResourcePool resourcePool;
     private Func<AbilityDefinitionSO, bool> canUseExtraPredicate;
 
+    // Optional context for dynamic costs (e.g., ramping basic attacks).
+    private HeroStats heroContext;
+
     private System.Action<AbilityButtonUI> onSelected;
     private System.Action<AbilityDefinitionSO> onClickedConfirm;
 
@@ -61,7 +63,8 @@ public class AbilityButtonUI : MonoBehaviour
         ResourcePool resourcePool,
         System.Action<AbilityButtonUI> onSelectedCallback,
         System.Action<AbilityDefinitionSO> onClickedConfirmCallback = null,
-        Func<AbilityDefinitionSO, bool> canUseExtraPredicate = null
+        Func<AbilityDefinitionSO, bool> canUseExtraPredicate = null,
+        HeroStats heroContext = null
     )
     {
         this.ability = ability;
@@ -69,6 +72,7 @@ public class AbilityButtonUI : MonoBehaviour
         this.onSelected = onSelectedCallback;
         this.onClickedConfirm = onClickedConfirmCallback;
         this.canUseExtraPredicate = canUseExtraPredicate;
+        this.heroContext = heroContext;
 
         CacheOriginalsIfNeeded();
 
@@ -162,6 +166,10 @@ public class AbilityButtonUI : MonoBehaviour
 
     public void RefreshInteractable()
     {
+        // Cost can change during the turn (e.g., ramping basic attacks), so refresh it here.
+        if (costText != null)
+            costText.text = BuildCostString(ability);
+
         bool usable = IsUsable();
 
         if (button != null)
@@ -174,16 +182,12 @@ public class AbilityButtonUI : MonoBehaviour
     {
         if (ability == null || resourcePool == null) return false;
 
-        // Base rule: resource affordability.
-        ResourceCost effectiveCost = ability.cost;
+        // Base rule: resource affordability (with dynamic cost support).
+        ResourceCost effectiveCost = ComputeEffectiveCost();
 
-        // Special: consume-all-ATK abilities (e.g., Fighter "Heavy Strike")
-        if (ability.spendAllAttackResources)
-        {
-            long atk = resourcePool.Attack;
-            if (atk <= 0) return false;
-            effectiveCost.attack = atk;
-        }
+        // If we must spend ALL ATK, ensure we have some ATK.
+        if (ability.spendAllAttackResources && effectiveCost.attack <= 0)
+            return false;
 
         if (!resourcePool.CanAfford(effectiveCost)) return false;
 
@@ -194,14 +198,39 @@ public class AbilityButtonUI : MonoBehaviour
         return true;
     }
 
+    private ResourceCost ComputeEffectiveCost()
+    {
+        if (ability == null) return default;
+
+        ResourceCost c = ability.cost;
+
+        // Special: consume-all-ATK abilities (e.g., Fighter "Heavy Strike")
+        if (ability.spendAllAttackResources)
+        {
+            long atk = resourcePool != null ? resourcePool.Attack : 0;
+            c.attack = atk;
+        }
+
+        // Ramping basic attacks: Slash / Dart / Quick Blade
+        if (heroContext != null && HeroStats.IsRampingBasicAttackAbility(ability))
+        {
+            long add = heroContext.GetRampingBasicAttackAdditionalAtkCost(ability);
+            c.attack = System.Math.Max(0L, c.attack) + System.Math.Max(0L, add);
+        }
+
+        return c;
+    }
+
     private string BuildCostString(AbilityDefinitionSO ability)
     {
         if (ability == null) return string.Empty;
 
-        long cA = AbilityDefSOReader.GetCostAttack(ability);
-        long cD = AbilityDefSOReader.GetCostDefense(ability);
-        long cM = AbilityDefSOReader.GetCostMagic(ability);
-        long cW = AbilityDefSOReader.GetCostWild(ability);
+        ResourceCost effective = ComputeEffectiveCost();
+
+        long cA = effective.attack;
+        long cD = effective.defense;
+        long cM = effective.magic;
+        long cW = effective.wild;
 
         var parts = new List<string>(4);
 

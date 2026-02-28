@@ -349,14 +349,16 @@ public partial class BattleManager : MonoBehaviour
 
         ResourceCost cost = GetEffectiveCost(actor.stats, ability);
 
-        if (ability != null && ability.baseDamage > 0 && actor.stats != null && !actor.stats.CanCommitDamageAttackThisTurn())
+        bool isRampingBasic = HeroStats.IsRampingBasicAttackAbility(ability);
+
+        if (!isRampingBasic && ability != null && ability.baseDamage > 0 && actor.stats != null && !actor.stats.CanCommitDamageAttackThisTurn())
         {
             if (logFlow) Debug.Log($"[Battle][Ability] Blocked: {actor.name} has reached their attack limit for this turn.", this);
             return;
         }
 
         // Once-per-turn abilities (per hero)
-        if (actor.stats != null && !actor.stats.CanUseAbilityThisTurn(ability))
+        if (!isRampingBasic && actor.stats != null && !actor.stats.CanUseAbilityThisTurn(ability))
         {
             if (logFlow) Debug.Log($"[Battle][Ability] Blocked: {actor.name} already used '{ability.abilityName}' this player turn.", this);
             return;
@@ -546,8 +548,16 @@ public partial class BattleManager : MonoBehaviour
                 yield break;
             }
         }
-// Mark once-per-turn ability usage only after the cast is truly committed (cost successfully spent).
-        actorStats.RegisterAbilityUsedThisTurn(ability);
+        // Mark usage only after the cast is truly committed (cost successfully spent).
+        // - Once-per-turn abilities: tracked by RegisterAbilityUsedThisTurn.
+        // - Ramping basic attacks (Slash/Dart/Quick Blade): increment ramping counter instead.
+        if (actorStats != null)
+        {
+            if (HeroStats.IsRampingBasicAttackAbility(ability))
+                actorStats.RegisterRampingBasicAttackCastThisTurn(ability);
+            else
+                actorStats.RegisterAbilityUsedThisTurn(ability);
+        }
 
         if (logFlow) Debug.Log($"[Battle][Resolve] Resources spent. cost={cost}. Proceeding to apply ability effects.", this);
         _resolving = true;
