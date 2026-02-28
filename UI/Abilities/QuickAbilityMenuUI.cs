@@ -224,6 +224,9 @@ public class QuickAbilityMenuUI : MonoBehaviour
                 var ability = abilities[a];
                 if (ability == null) continue;
 
+                if (!GameDebugSettings.IsAbilityAllowed(ability))
+                    continue;
+
                 if (!CanUseAbilityNow(hero, ability))
                     continue;
 
@@ -321,6 +324,13 @@ public class QuickAbilityMenuUI : MonoBehaviour
         ShowDetails(hero, ability);
 
         // 3) Begin ability targeting flow.
+        if (!GameDebugSettings.IsAbilityAllowed(ability))
+        {
+            if (debugLogs)
+                Debug.Log($"[QuickAbilityMenuUI] Blocked debug-only ability while debug abilities are disabled: {ability.abilityName}", this);
+            return;
+        }
+
         battleManager.BeginAbilityUseFromMenu(hero, ability);
 
         _closeAfterThisPendingClears = closeWhenPendingCastClears;
@@ -463,6 +473,8 @@ public class QuickAbilityMenuUI : MonoBehaviour
         }
     }
 }
+
+
 
 
 

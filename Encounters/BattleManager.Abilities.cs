@@ -327,6 +327,13 @@ public partial class BattleManager : MonoBehaviour
         if (!IsPlayerPhase || _resolving) return;
         if (hero == null || ability == null) return;
 
+        // Global debug-only ability gate (e.g., Judgment)
+        if (ability.isDebugOnly && !GameDebugSettings.AllowDebugAbilities)
+        {
+            if (logFlow) Debug.Log($"[Battle][Ability] Blocked debug-only ability '{ability.abilityName}' because AllowDebugAbilities is false.", this);
+            return;
+        }
+
         int actorIndex = GetPartyIndexForHero(hero);
         if (!IsValidPartyIndex(actorIndex)) return;
 
@@ -1295,3 +1302,5 @@ public partial class BattleManager : MonoBehaviour
     }
 
 }
+
+

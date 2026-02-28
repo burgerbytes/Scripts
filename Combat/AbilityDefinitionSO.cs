@@ -76,6 +76,11 @@ public class AbilityDefinitionSO : ScriptableObject
     [Tooltip("Minimum hero level required for this ability to appear in the Ability Menu.")]
     [Min(1)] public int unlockAtLevel = 1;
 
+    [Header("Debug")]
+    [Tooltip("If true, this ability is intended for debug/dev only (e.g., Judgment). It can be globally disabled so it won\'t appear or be cast.")]
+    public bool isDebugOnly = false;
+
+
 
     [Header("Damage / Defense")]
     public int baseDamage = 0;

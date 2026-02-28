@@ -196,6 +196,9 @@ public class AbilityMenuUI : MonoBehaviour
             {
                 if (ability == null) continue;
 
+                if (!GameDebugSettings.IsAbilityAllowed(ability))
+                    continue;
+
                 var btn = Instantiate(buttonPrefab, listParent);
 
                 btn.Bind(
@@ -234,6 +237,13 @@ public class AbilityMenuUI : MonoBehaviour
     private void OnAbilityConfirmed(AbilityDefinitionSO ability)
     {
         if (ability == null) return;
+
+        if (!GameDebugSettings.IsAbilityAllowed(ability))
+        {
+            if (debugLogs)
+                Debug.Log($"[AbilityMenuUI] Blocked debug-only ability while debug abilities are disabled: {ability.abilityName}", this);
+            return;
+        }
 
         if (debugLogs)
             Debug.Log($"[AbilityMenuUI] Confirmed/begin targeting for ability: {ability.name}", this);
@@ -288,6 +298,9 @@ public class AbilityMenuUI : MonoBehaviour
     private bool CanUseAbilityNow(AbilityDefinitionSO ability)
     {
         if (currentHero == null || ability == null)
+            return false;
+
+        if (!GameDebugSettings.IsAbilityAllowed(ability))
             return false;
 
         // Once-per-turn abilities
@@ -379,3 +392,5 @@ public class AbilityMenuUI : MonoBehaviour
 
 
 ////////////////////////////////////////////////////////////
+
+
