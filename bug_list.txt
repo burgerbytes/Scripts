@@ -5,6 +5,7 @@ bugs/issues
 - ensure ability description panel is disabled after casting ability
 - max level seems to be 5. Whenever an evolved hero gets to level 6, it resets to 5.
 - make sure we can exit ability menu
+- increase font size on ability upgrade screen
 Features
 - add some type of indictor (arrow, glow) to enemy unit being targeted and to the current casting hero
 - add status icon for fighter's battle rhythm with stack count
