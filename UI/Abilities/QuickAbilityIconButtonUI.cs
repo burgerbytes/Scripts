@@ -58,7 +58,7 @@ public class QuickAbilityIconButtonUI : MonoBehaviour, IPointerDownHandler, IPoi
             if (showCostText)
             {
                 costText.richText = true;
-                costText.text = BuildCostStringStatic(ability, _resourcePool, attackSpriteIndex, defenseSpriteIndex, magicSpriteIndex, wildSpriteIndex);
+                costText.text = BuildCostStringStatic(_hero, ability, _resourcePool, attackSpriteIndex, defenseSpriteIndex, magicSpriteIndex, wildSpriteIndex);
             }
         }
     }
@@ -67,14 +67,10 @@ public class QuickAbilityIconButtonUI : MonoBehaviour, IPointerDownHandler, IPoi
     {
         if (_hero == null || _ability == null || _resourcePool == null) return false;
 
-        ResourceCost effectiveCost = _ability.cost;
+        ResourceCost effectiveCost = ComputeEffectiveCost();
 
-        if (_ability.spendAllAttackResources)
-        {
-            long atk = _resourcePool.Attack;
-            if (atk <= 0) return false;
-            effectiveCost.attack = atk;
-        }
+        if (_ability.spendAllAttackResources && effectiveCost.attack <= 0)
+            return false;
 
         if (!_resourcePool.CanAfford(effectiveCost))
             return false;
@@ -150,10 +146,16 @@ public class QuickAbilityIconButtonUI : MonoBehaviour, IPointerDownHandler, IPoi
 
     public static string BuildCostStringStatic(AbilityDefinitionSO ability, ResourcePool pool)
     {
-        return BuildCostStringStatic(ability, pool, 2, 0, 1, 3);
+        return BuildCostStringStatic(null, ability, pool, 2, 0, 1, 3);
+    }
+
+    public static string BuildCostStringStatic(HeroStats hero, AbilityDefinitionSO ability, ResourcePool pool)
+    {
+        return BuildCostStringStatic(hero, ability, pool, 2, 0, 1, 3);
     }
 
     private static string BuildCostStringStatic(
+        HeroStats hero,
         AbilityDefinitionSO ability,
         ResourcePool pool,
         int atkSprite,
@@ -172,6 +174,9 @@ public class QuickAbilityIconButtonUI : MonoBehaviour, IPointerDownHandler, IPoi
             cost.attack = atk < 0 ? 0 : atk;
         }
 
+        if (hero != null && HeroStats.IsRampingBasicAttackAbility(ability))
+            cost.attack = System.Math.Max(0L, cost.attack) + System.Math.Max(0L, hero.GetRampingBasicAttackAdditionalAtkCost(ability));
+
         System.Text.StringBuilder sb = new System.Text.StringBuilder();
 
         void AddPart(int spriteIdx, long amount)
@@ -189,5 +194,22 @@ public class QuickAbilityIconButtonUI : MonoBehaviour, IPointerDownHandler, IPoi
 
         return sb.ToString();
     }
-}
 
+    private ResourceCost ComputeEffectiveCost()
+    {
+        if (_ability == null) return default;
+
+        ResourceCost effectiveCost = _ability.cost;
+
+        if (_ability.spendAllAttackResources)
+        {
+            long atk = _resourcePool != null ? _resourcePool.Attack : 0;
+            effectiveCost.attack = atk <= 0 ? 0 : atk;
+        }
+
+        if (_hero != null && HeroStats.IsRampingBasicAttackAbility(_ability))
+            effectiveCost.attack = System.Math.Max(0L, effectiveCost.attack) + System.Math.Max(0L, _hero.GetRampingBasicAttackAdditionalAtkCost(_ability));
+
+        return effectiveCost;
+    }
+}

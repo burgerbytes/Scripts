@@ -840,6 +840,7 @@ public class HeroStats : MonoBehaviour
     {
         if (!IsRampingBasicAttackAbility(ability)) return;
         rampingBasicAttacksCastThisTurn++;
+        NotifyChanged();
     }
 
     public int RampingBasicAttacksCastThisTurn => rampingBasicAttacksCastThisTurn;
