@@ -68,6 +68,22 @@ public class MonsterInfoController : MonoBehaviour
         return AbilityCastState.Instance != null && AbilityCastState.Instance.HasPendingCast;
     }
 
+    private bool CurrentMonsterHasReelStrip()
+    {
+        return MonsterReelPanelUI.HasDisplayableReelStrip(_currentMonster);
+    }
+
+    private void RefreshReelTabAvailability()
+    {
+        bool hasReelStrip = CurrentMonsterHasReelStrip();
+
+        if (reelTabButton != null)
+            reelTabButton.interactable = hasReelStrip;
+
+        if (!hasReelStrip && _activeTab == ActiveTab.Reel)
+            SetActiveTab(ActiveTab.Info, force: true);
+    }
+
     private void Awake()
     {
         if (panelRect == null && monsterInfoPanel != null)
@@ -146,6 +162,7 @@ public class MonsterInfoController : MonoBehaviour
         }
 
         _currentMonster = monster;
+        RefreshReelTabAvailability();
 
         if (monsterInfoPanel != null)
             monsterInfoPanel.SetActive(true);
@@ -160,7 +177,11 @@ public class MonsterInfoController : MonoBehaviour
             monsterDescriptionText.text = monster.Description;
 
         // Default tab each time we open (keeps behavior predictable).
-        SetActiveTab(defaultTab, force: true);
+        ActiveTab openingTab = defaultTab;
+        if (openingTab == ActiveTab.Reel && !CurrentMonsterHasReelStrip())
+            openingTab = ActiveTab.Info;
+
+        SetActiveTab(openingTab, force: true);
 
         UpdatePanelPosition();
     }
@@ -231,6 +252,9 @@ public class MonsterInfoController : MonoBehaviour
     {
         _currentMonster = null;
 
+        if (reelTabButton != null)
+            reelTabButton.interactable = true;
+
         if (monsterInfoPanel != null)
             monsterInfoPanel.SetActive(false);
     }
@@ -266,11 +290,21 @@ public class MonsterInfoController : MonoBehaviour
 
     public void OnReelTabPressed()
     {
+        if (!CurrentMonsterHasReelStrip())
+        {
+            Debug.LogWarning($"[MonsterInfoController] Monster '{(_currentMonster != null ? _currentMonster.name : "NULL")}' has no reel strip assigned. Keeping monster info panel on the Info tab.", this);
+            SetActiveTab(ActiveTab.Info);
+            return;
+        }
+
         SetActiveTab(ActiveTab.Reel);
     }
 
     private void SetActiveTab(ActiveTab tab, bool force = false)
     {
+        if (tab == ActiveTab.Reel && !CurrentMonsterHasReelStrip())
+            tab = ActiveTab.Info;
+
         if (!force && _activeTab == tab) return;
         _activeTab = tab;
 
@@ -392,3 +426,4 @@ public class MonsterInfoController : MonoBehaviour
         return string.Empty;
     }
 }
+

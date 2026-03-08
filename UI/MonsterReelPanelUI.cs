@@ -100,6 +100,13 @@ public class MonsterReelPanelUI : MonoBehaviour
         ClearSpawnedIconButtons();
     }
 
+    public static bool HasDisplayableReelStrip(Monster monster)
+    {
+        return monster != null &&
+               monster.ReelDefinition != null &&
+               monster.ReelDefinition.Strip != null;
+    }
+
     public void ShowForMonster(Monster monster)
     {
         if (monster == null)
@@ -127,8 +134,12 @@ public class MonsterReelPanelUI : MonoBehaviour
 
         if (strip == null)
         {
-            Debug.LogError($"[MonsterReelPanelUI] Monster '{monster.name}' has no ReelDefinition strip assigned (Monster.ReelDefinition.Strip is null). Assign a MonsterReelDefinitionSO on the Monster component.", monster);
+            Debug.LogWarning($"[MonsterReelPanelUI] Monster '{monster.name}' has no ReelDefinition strip assigned. Skipping monster abilities/reel panel refresh.", monster);
             ClearUI();
+
+            if (slotsRoot != null)
+                slotsRoot.gameObject.SetActive(false);
+
             return;
         }
 
@@ -396,6 +407,12 @@ public class MonsterReelPanelUI : MonoBehaviour
 
     private void ClearUI()
     {
+        _currentStrip = null;
+        _currentSlotToAttack = null;
+        _selectedSlotIndex = -1;
+
+        ClearSpawnedIconButtons();
+
         if (attackNameText != null) attackNameText.text = "";
         if (attackDescText != null) attackDescText.text = "";
 
@@ -418,6 +435,9 @@ public class MonsterReelPanelUI : MonoBehaviour
                 sr.enabled = false;
             }
         }
+
+        if (slotsRoot != null)
+            slotsRoot.gameObject.SetActive(false);
     }
 
     // ------------------------------
@@ -501,3 +521,4 @@ public class MonsterReelPanelUI : MonoBehaviour
         }
     }
 }
+
