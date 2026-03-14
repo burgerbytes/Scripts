@@ -58,11 +58,26 @@ public class AnimatorImpactEvents : MonoBehaviour
     [Header("Fallback")]
     [SerializeField] private ImpactSfxType fallbackType = ImpactSfxType.Melee;
 
+    [Header("AttackImpact Camera Focus")]
+    [SerializeField] private bool enableImpactCameraFocus = true;
+    [SerializeField] private Transform cameraFocusAnchor;
+    [SerializeField, Range(0.5f, 1.0f)] private float impactZoomMultiplier = 0.85f;
+    [SerializeField] private float impactZoomInDuration = 0.08f;
+    [SerializeField] private float impactZoomHoldDuration = 0f;
+    [SerializeField] private float impactZoomOutDuration = 0.12f;
+
+    [Header("AttackImpact Animation Pause")]
+    [SerializeField] private bool pauseAnimatorAtMaxZoom = true;
+    [SerializeField, Range(0f, 1f)] private float pausedAnimatorSpeed = 0f;
+    [SerializeField, Min(0f)] private float pausedAnimatorSeconds = 1f;
+    [SerializeField] private Animator animatorToSlow;
+
     [Header("Debug")]
     [SerializeField] private bool logMissingClips = false;
 
     private BattleManager _bm;
     private AudioSource _audioSource;
+    private CameraFocusController _cameraFocus;
 
     private bool _hasPendingOverride;
     private ImpactSfxType _pendingOverride;
@@ -74,11 +89,10 @@ public class AnimatorImpactEvents : MonoBehaviour
         _audioSource = GetComponent<AudioSource>();
         if (_audioSource == null)
             _audioSource = GetComponentInParent<AudioSource>();
-    }
 
-    // ============================
-    // PUBLIC API (CALL BEFORE ANIM)
-    // ============================
+        if (animatorToSlow == null)
+            animatorToSlow = GetComponent<Animator>() ?? GetComponentInChildren<Animator>(true);
+    }
 
     public void SetImpactSfx(ImpactSfxType type)
     {
@@ -86,29 +100,26 @@ public class AnimatorImpactEvents : MonoBehaviour
         _pendingOverride = type;
     }
 
-    // Convenience helpers (optional but nice)
     public void SetImpactSfxMelee()        => SetImpactSfx(ImpactSfxType.Melee);
     public void SetImpactSfxBlock()        => SetImpactSfx(ImpactSfxType.Block);
-    public void SetImpactSfxFire()          => SetImpactSfx(ImpactSfxType.FireMagic);
-    public void SetImpactSfxIce()           => SetImpactSfx(ImpactSfxType.IceMagic);
-    public void SetImpactSfxThunder()       => SetImpactSfx(ImpactSfxType.ThunderMagic);
-    public void SetImpactSfxWater()         => SetImpactSfx(ImpactSfxType.WaterMagic);
-    public void SetImpactSfxWind()          => SetImpactSfx(ImpactSfxType.WindMagic);
-    public void SetImpactSfxEarth()         => SetImpactSfx(ImpactSfxType.EarthMagic);
-    public void SetImpactSfxAtkBuff()       => SetImpactSfx(ImpactSfxType.AtkBuff);
-    public void SetImpactSfxDefBuff()       => SetImpactSfx(ImpactSfxType.DefBuff);
-    public void SetImpactSfxCharge()        => SetImpactSfx(ImpactSfxType.Charge);
-    public void SetImpactSfxPoison()        => SetImpactSfx(ImpactSfxType.Poison);
-    public void SetImpactSfxHealing()       => SetImpactSfx(ImpactSfxType.HealingMagic);
+    public void SetImpactSfxFire()         => SetImpactSfx(ImpactSfxType.FireMagic);
+    public void SetImpactSfxIce()          => SetImpactSfx(ImpactSfxType.IceMagic);
+    public void SetImpactSfxThunder()      => SetImpactSfx(ImpactSfxType.ThunderMagic);
+    public void SetImpactSfxWater()        => SetImpactSfx(ImpactSfxType.WaterMagic);
+    public void SetImpactSfxWind()         => SetImpactSfx(ImpactSfxType.WindMagic);
+    public void SetImpactSfxEarth()        => SetImpactSfx(ImpactSfxType.EarthMagic);
+    public void SetImpactSfxAtkBuff()      => SetImpactSfx(ImpactSfxType.AtkBuff);
+    public void SetImpactSfxDefBuff()      => SetImpactSfx(ImpactSfxType.DefBuff);
+    public void SetImpactSfxCharge()       => SetImpactSfx(ImpactSfxType.Charge);
+    public void SetImpactSfxPoison()       => SetImpactSfx(ImpactSfxType.Poison);
+    public void SetImpactSfxHealing()      => SetImpactSfx(ImpactSfxType.HealingMagic);
 
     public void ClearImpactOverride() => _hasPendingOverride = false;
 
-    // ============================
-    // ANIMATION EVENTS
-    // ============================
-
     public void AttackImpact()
     {
+        TriggerImpactCameraFocus();
+
         if (_bm != null)
             _bm.NotifyAttackImpact();
 
@@ -123,8 +134,6 @@ public class AnimatorImpactEvents : MonoBehaviour
         if (_bm != null)
             _bm.NotifyAttackFinished();
 
-        // Safety: if this actor is using a mid-clip teleport offset (e.g., Ninja basic attack),
-        // restore the visual rig at the end of the attack so we never get stuck offset.
         var teleport = GetComponent<HeroTeleportVisualOffset>();
         if (teleport == null)
             teleport = GetComponentInChildren<HeroTeleportVisualOffset>(true);
@@ -132,9 +141,96 @@ public class AnimatorImpactEvents : MonoBehaviour
         teleport?.AttackFinished_AutoRestore();
     }
 
-    // ============================
-    // INTERNAL
-    // ============================
+    private void TriggerImpactCameraFocus()
+    {
+        if (!enableImpactCameraFocus)
+            return;
+
+        if (_cameraFocus == null && Camera.main != null)
+            _cameraFocus = Camera.main.GetComponentInParent<CameraFocusController>();
+
+        if (_cameraFocus == null)
+            _cameraFocus = FindObjectOfType<CameraFocusController>();
+
+        if (_cameraFocus == null)
+            return;
+
+        Transform focusTarget = ResolveCameraFocusTarget();
+        Transform attackerRoot = transform.root;
+        Transform defenderRoot = null;
+
+        if (_bm != null && _bm.TryGetImpactCameraContext(out Transform bmFocusTarget, out Transform bmAttackerRoot, out Transform bmDefenderRoot))
+        {
+            if (bmFocusTarget != null) focusTarget = bmFocusTarget;
+            if (bmAttackerRoot != null) attackerRoot = bmAttackerRoot;
+            defenderRoot = bmDefenderRoot;
+        }
+
+        Animator pauseTarget = pauseAnimatorAtMaxZoom ? ResolveAnimatorToSlow() : null;
+
+        var keepVisibleRoots = new System.Collections.Generic.List<Transform>(2);
+        if (attackerRoot != null) keepVisibleRoots.Add(attackerRoot);
+        if (defenderRoot != null && defenderRoot != attackerRoot) keepVisibleRoots.Add(defenderRoot);
+
+        _cameraFocus.FocusZoomTo(
+            focusTarget,
+            impactZoomMultiplier,
+            impactZoomInDuration,
+            impactZoomHoldDuration,
+            impactZoomOutDuration,
+            pauseTarget,
+            pausedAnimatorSpeed,
+            pausedAnimatorSeconds,
+            keepVisibleRoots);
+    }
+
+    private Transform ResolveCameraFocusTarget()
+    {
+        if (cameraFocusAnchor != null)
+            return cameraFocusAnchor;
+
+        Transform root = transform.root != null ? transform.root : transform;
+
+        if (root.name == "CenterPoint")
+            return root;
+
+        Transform center = FindChildRecursive(root, "CenterPoint");
+        if (center != null)
+            return center;
+
+        return root;
+    }
+
+    private static Transform FindChildRecursive(Transform root, string childName)
+    {
+        if (root == null || string.IsNullOrEmpty(childName))
+            return null;
+
+        for (int i = 0; i < root.childCount; i++)
+        {
+            Transform child = root.GetChild(i);
+            if (child == null)
+                continue;
+
+            if (child.name == childName)
+                return child;
+
+            Transform nested = FindChildRecursive(child, childName);
+            if (nested != null)
+                return nested;
+        }
+
+        return null;
+    }
+
+    private Animator ResolveAnimatorToSlow()
+    {
+        if (animatorToSlow != null)
+            return animatorToSlow;
+
+        animatorToSlow = GetComponent<Animator>() ?? GetComponentInChildren<Animator>(true);
+        return animatorToSlow;
+    }
 
     private void PlayImpactSfx(ImpactSfxType type)
     {

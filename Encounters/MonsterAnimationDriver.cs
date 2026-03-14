@@ -1,3 +1,7 @@
+// PATH: Assets/Scripts/Encounters/MonsterAnimationDriver.cs
+// GUID: 4eabbd0dfb7480c4cae6c91acd5e0fc8
+////////////////////////////////////////////////////////////
+using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
@@ -57,8 +61,23 @@ public class MonsterAnimationDriver : MonoBehaviour
     [Min(0f)]
     public float deathDurationSeconds = 0.8f;
 
+    [Header("AttackImpact Camera Focus")]
+    [SerializeField] private bool enableImpactCameraFocus = true;
+    [SerializeField] private Transform cameraFocusAnchor;
+    [SerializeField, Range(0.5f, 1.0f)] private float impactZoomMultiplier = 0.85f;
+    [SerializeField] private float impactZoomInDuration = 0.08f;
+    [SerializeField] private float impactZoomHoldDuration = 0f;
+    [SerializeField] private float impactZoomOutDuration = 0.12f;
+
+    [Header("AttackImpact Animation Pause")]
+    [SerializeField] private bool pauseAnimatorAtMaxZoom = true;
+    [SerializeField, Range(0f, 1f)] private float pausedAnimatorSpeed = 0f;
+    [SerializeField, Min(0f)] private float pausedAnimatorSeconds = 1f;
+    [SerializeField] private Animator animatorToSlow;
+
     private bool _attackImpactFired;
     private bool _castReleaseFired;
+    private CameraFocusController _cameraFocus;
 
     public bool AttackImpactFired => _attackImpactFired;
     public bool CastReleaseFired => _castReleaseFired;
@@ -70,6 +89,9 @@ public class MonsterAnimationDriver : MonoBehaviour
 
         if (spriteRenderer == null)
             spriteRenderer = GetComponentInChildren<SpriteRenderer>(true);
+
+        if (animatorToSlow == null)
+            animatorToSlow = animator != null ? animator : GetComponentInChildren<Animator>(true);
     }
 
     public void ResetAttackImpact()
@@ -82,10 +104,15 @@ public class MonsterAnimationDriver : MonoBehaviour
         _castReleaseFired = false;
     }
 
-    // Animation Event hook (call this from the attack clip at the impact frame)
     public void AnimationEvent_AttackImpact()
     {
         _attackImpactFired = true;
+        TriggerImpactCameraFocus();
+    }
+
+    public void AnimationEvent_CastRelease()
+    {
+        _castReleaseFired = true;
     }
 
     public void PlayIdle()
@@ -131,6 +158,7 @@ public class MonsterAnimationDriver : MonoBehaviour
         else
             FireTrigger(attack1Trigger);
     }
+
     public void PlaySpell()
     {
         FireTrigger(spellTrigger);
@@ -140,6 +168,102 @@ public class MonsterAnimationDriver : MonoBehaviour
     {
         FireTrigger(castTrigger);
     }
+
+    private void TriggerImpactCameraFocus()
+    {
+        if (!enableImpactCameraFocus)
+            return;
+
+        if (_cameraFocus == null && Camera.main != null)
+            _cameraFocus = Camera.main.GetComponentInParent<CameraFocusController>();
+
+        if (_cameraFocus == null)
+            _cameraFocus = FindObjectOfType<CameraFocusController>();
+
+        if (_cameraFocus == null)
+            return;
+
+        Transform focusTarget = ResolveCameraFocusTarget();
+        Transform attackerRoot = transform.root;
+        Transform defenderRoot = null;
+
+        BattleManager bm = BattleManager.Instance != null ? BattleManager.Instance : FindObjectOfType<BattleManager>();
+        if (bm != null && bm.TryGetImpactCameraContext(out Transform bmFocusTarget, out Transform bmAttackerRoot, out Transform bmDefenderRoot))
+        {
+            if (bmFocusTarget != null) focusTarget = bmFocusTarget;
+            if (bmAttackerRoot != null) attackerRoot = bmAttackerRoot;
+            defenderRoot = bmDefenderRoot;
+        }
+
+        Animator pauseTarget = pauseAnimatorAtMaxZoom ? ResolveAnimatorToSlow() : null;
+
+        List<Transform> keepVisibleRoots = new List<Transform>(2);
+        if (attackerRoot != null) keepVisibleRoots.Add(attackerRoot);
+        if (defenderRoot != null && defenderRoot != attackerRoot) keepVisibleRoots.Add(defenderRoot);
+
+        _cameraFocus.FocusZoomTo(
+            focusTarget,
+            impactZoomMultiplier,
+            impactZoomInDuration,
+            impactZoomHoldDuration,
+            impactZoomOutDuration,
+            pauseTarget,
+            pausedAnimatorSpeed,
+            pausedAnimatorSeconds,
+            keepVisibleRoots);
+    }
+
+    private Transform ResolveCameraFocusTarget()
+    {
+        if (cameraFocusAnchor != null)
+            return cameraFocusAnchor;
+
+        Transform root = transform.root != null ? transform.root : transform;
+
+        if (root.name == "CenterPoint")
+            return root;
+
+        Transform center = FindChildRecursive(root, "CenterPoint");
+        if (center != null)
+            return center;
+
+        return root;
+    }
+
+    private static Transform FindChildRecursive(Transform root, string childName)
+    {
+        if (root == null || string.IsNullOrEmpty(childName))
+            return null;
+
+        for (int i = 0; i < root.childCount; i++)
+        {
+            Transform child = root.GetChild(i);
+            if (child == null)
+                continue;
+
+            if (child.name == childName)
+                return child;
+
+            Transform nested = FindChildRecursive(child, childName);
+            if (nested != null)
+                return nested;
+        }
+
+        return null;
+    }
+
+    private Animator ResolveAnimatorToSlow()
+    {
+        if (animatorToSlow != null)
+            return animatorToSlow;
+
+        if (animator != null)
+            return animator;
+
+        animatorToSlow = GetComponentInChildren<Animator>(true);
+        return animatorToSlow;
+    }
+
     private void FireTrigger(string param)
     {
         if (animator == null || string.IsNullOrWhiteSpace(param))
@@ -150,3 +274,5 @@ public class MonsterAnimationDriver : MonoBehaviour
     }
 }
 
+
+////////////////////////////////////////////////////////////

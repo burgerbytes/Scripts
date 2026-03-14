@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
@@ -7,14 +8,15 @@ using UnityEngine;
 /// Features:
 /// - Zooms in (reduces orthographicSize) then restores.
 /// - Optionally pans camera to keep a target centered during the focus.
+/// - Can optionally pause a specific Animator once max zoom is reached.
 /// - Safe to call repeatedly (cancels previous focus and restores baseline first).
-///
-/// Typical use:
-///   FocusZoomTo(heroTransform);
-///   FocusZoomTo(heroTransform, multiplier:0.85f, inDur:0.10f, holdDur:0.80f, outDur:0.10f);
 /// </summary>
 public class CameraFocusController : MonoBehaviour
 {
+    [Header("Master Enable")]
+    [Tooltip("Master switch to enable/disable all camera focus behavior.")]
+    [SerializeField] private bool enableCameraFocus = true;
+
     [Header("References")]
     [Tooltip("If null, uses Camera.main at runtime.")]
     [SerializeField] private Camera cam;
@@ -44,18 +46,65 @@ public class CameraFocusController : MonoBehaviour
     [Range(1f, 40f)]
     [SerializeField] private float panSmoothing = 16f;
 
+    [Header("Optional Max-Zoom Animation Pause")]
+    [Tooltip("Animator speed to use while paused at max zoom. Normally 0.")]
+    [Range(0f, 1f)]
+    [SerializeField] private float defaultPausedAnimatorSpeed = 0f;
+
+    [Tooltip("Seconds to pause the animator once max zoom is reached.")]
+    [Min(0f)]
+    [SerializeField] private float defaultAnimatorPauseDuration = 1f;
+
+    [Header("Combatant Isolation During Focus")]
+    [Tooltip("If true, non-participating combatant sprites/models are hidden during the focus shot.")]
+    [SerializeField] private bool isolateNonParticipants = true;
+
+    [Tooltip("If true, disable SpriteRenderer, MeshRenderer, and SkinnedMeshRenderer on non-participants during focus.")]
+    [SerializeField] private bool isolateRenderersOnly = true;
+
     [Header("Debug")]
     [SerializeField] private bool logDebug = false;
+
+    public bool EnableCameraFocus
+    {
+        get => enableCameraFocus;
+        set
+        {
+            enableCameraFocus = value;
+            if (!enableCameraFocus)
+                CancelAndRestore();
+        }
+    }
 
     private Coroutine _routine;
 
     private float _baseOrthoSize;
     private Vector3 _baseCamPos;
 
+    private Animator _activeSlowedAnimator;
+    private float _activeSlowedAnimatorOriginalSpeed = 1f;
+
+    private readonly List<RendererState> _isolatedRenderers = new List<RendererState>(32);
+
+    private struct RendererState
+    {
+        public Renderer renderer;
+        public bool wasEnabled;
+    }
+
     private void Awake()
     {
-        if (cam == null) cam = Camera.main;
+        if (cam == null)
+            cam = GetComponentInChildren<Camera>(true);
+        if (cam == null)
+            cam = Camera.main;
+
         CacheBase();
+    }
+
+    private void OnDisable()
+    {
+        CancelAndRestore();
     }
 
     private void CacheBase()
@@ -67,25 +116,103 @@ public class CameraFocusController : MonoBehaviour
 
     public void FocusZoomTo(Transform target)
     {
-        FocusZoomTo(target, defaultZoomInMultiplier, defaultZoomInDuration, defaultHoldDuration, defaultZoomOutDuration);
+        if (!enableCameraFocus)
+            return;
+
+        FocusZoomTo(
+            target,
+            defaultZoomInMultiplier,
+            defaultZoomInDuration,
+            defaultHoldDuration,
+            defaultZoomOutDuration,
+            null,
+            defaultPausedAnimatorSpeed,
+            defaultAnimatorPauseDuration,
+            null);
     }
 
     public void FocusZoomTo(Transform target, float multiplier, float inDur, float holdDur, float outDur)
     {
-        if (cam == null || target == null) return;
+        if (!enableCameraFocus)
+            return;
 
-        // Cancel any in-progress focus and restore first.
+        FocusZoomTo(
+            target,
+            multiplier,
+            inDur,
+            holdDur,
+            outDur,
+            null,
+            defaultPausedAnimatorSpeed,
+            0f,
+            null);
+    }
+
+    public void FocusZoomTo(
+        Transform target,
+        float multiplier,
+        float inDur,
+        float holdDur,
+        float outDur,
+        Animator animatorToPause,
+        float pausedAnimatorSpeed,
+        float pauseDurationSeconds)
+    {
+        if (!enableCameraFocus)
+            return;
+
+        FocusZoomTo(
+            target,
+            multiplier,
+            inDur,
+            holdDur,
+            outDur,
+            animatorToPause,
+            pausedAnimatorSpeed,
+            pauseDurationSeconds,
+            null);
+    }
+
+    public void FocusZoomTo(
+        Transform target,
+        float multiplier,
+        float inDur,
+        float holdDur,
+        float outDur,
+        Animator animatorToPause,
+        float pausedAnimatorSpeed,
+        float pauseDurationSeconds,
+        IList<Transform> keepVisibleRoots)
+    {
+        if (!enableCameraFocus)
+            return;
+
+        if (cam == null || target == null)
+            return;
+
         if (_routine != null)
         {
             StopCoroutine(_routine);
             _routine = null;
-            RestoreImmediate();
         }
 
-        // Re-cache base in case another system changed the camera.
+        RestoreAnimatorSpeedImmediate();
+        RestoreIsolationImmediate();
+        RestoreImmediate();
+
         CacheBase();
 
-        _routine = StartCoroutine(FocusRoutine(target, multiplier, inDur, holdDur, outDur));
+        _routine = StartCoroutine(
+            FocusRoutine(
+                target,
+                multiplier,
+                inDur,
+                holdDur,
+                outDur,
+                animatorToPause,
+                pausedAnimatorSpeed,
+                pauseDurationSeconds,
+                keepVisibleRoots));
     }
 
     public void CancelAndRestore()
@@ -96,31 +223,57 @@ public class CameraFocusController : MonoBehaviour
             _routine = null;
         }
 
+        RestoreAnimatorSpeedImmediate();
+        RestoreIsolationImmediate();
         RestoreImmediate();
     }
 
     private void RestoreImmediate()
     {
         if (cam == null) return;
+
         cam.orthographicSize = _baseOrthoSize;
         cam.transform.position = _baseCamPos;
     }
 
-    private IEnumerator FocusRoutine(Transform target, float multiplier, float inDur, float holdDur, float outDur)
+    private void RestoreAnimatorSpeedImmediate()
     {
-        if (cam == null || target == null) yield break;
-        if (!cam.orthographic)
+        if (_activeSlowedAnimator != null)
         {
-            Debug.LogWarning("[CameraFocusController] Camera is not orthographic; this controller is intended for orthographic cameras.", this);
+            _activeSlowedAnimator.speed = _activeSlowedAnimatorOriginalSpeed;
+            _activeSlowedAnimator = null;
+            _activeSlowedAnimatorOriginalSpeed = 1f;
         }
+    }
 
-        if (logDebug) Debug.Log($"[CameraFocus] Start target='{target.name}'", this);
+    private IEnumerator FocusRoutine(
+        Transform target,
+        float multiplier,
+        float inDur,
+        float holdDur,
+        float outDur,
+        Animator animatorToPause,
+        float pausedAnimatorSpeed,
+        float pauseDurationSeconds,
+        IList<Transform> keepVisibleRoots)
+    {
+        if (cam == null || target == null)
+            yield break;
+
+        if (!cam.orthographic)
+            Debug.LogWarning("[CameraFocusController] Camera is not orthographic; this controller is intended for orthographic cameras.", this);
+
+        if (logDebug)
+            Debug.Log($"[CameraFocus] Start target='{target.name}'", this);
+
+        ApplyIsolation(keepVisibleRoots);
 
         float fromSize = _baseOrthoSize;
         float toSize = _baseOrthoSize * Mathf.Clamp(multiplier, 0.1f, 2f);
 
         Vector3 fromPos = _baseCamPos;
         Vector3 toPos = fromPos;
+
         if (panToTarget)
         {
             Vector3 desired = target.position + focusOffset;
@@ -128,14 +281,46 @@ public class CameraFocusController : MonoBehaviour
             toPos = desired;
         }
 
-        // Zoom/Pan in
-        yield return Tween(fromSize, toSize, fromPos, toPos, Mathf.Max(0.0001f, inDur), followDuringTween: target);
+        yield return Tween(fromSize, toSize, fromPos, toPos, Mathf.Max(0.0001f, inDur), target);
 
-        // Hold (keep following target if it moves)
+        if (animatorToPause != null && pauseDurationSeconds > 0f)
+        {
+            _activeSlowedAnimator = animatorToPause;
+            _activeSlowedAnimatorOriginalSpeed = animatorToPause.speed;
+            animatorToPause.speed = Mathf.Clamp(pausedAnimatorSpeed, 0f, 100f);
+
+            if (logDebug)
+            {
+                Debug.Log(
+                    $"[CameraFocus] Pausing animator='{animatorToPause.name}' speed={animatorToPause.speed} pauseSeconds={pauseDurationSeconds}",
+                    this);
+            }
+
+            float pauseElapsed = 0f;
+            while (pauseElapsed < pauseDurationSeconds)
+            {
+                pauseElapsed += Time.unscaledDeltaTime;
+
+                if (panToTarget && target != null)
+                {
+                    Vector3 desired = target.position + focusOffset;
+                    desired.z = cam.transform.position.z;
+                    cam.transform.position = Vector3.Lerp(
+                        cam.transform.position,
+                        desired,
+                        1f - Mathf.Exp(-panSmoothing * Time.unscaledDeltaTime));
+                }
+
+                yield return null;
+            }
+
+            RestoreAnimatorSpeedImmediate();
+        }
+
         float t = 0f;
         while (t < Mathf.Max(0f, holdDur))
         {
-            t += Time.deltaTime;
+            t += Time.unscaledDeltaTime;
 
             if (panToTarget && target != null)
             {
@@ -144,28 +329,110 @@ public class CameraFocusController : MonoBehaviour
                 cam.transform.position = Vector3.Lerp(
                     cam.transform.position,
                     desired,
-                    1f - Mathf.Exp(-panSmoothing * Time.deltaTime)
-                );
+                    1f - Mathf.Exp(-panSmoothing * Time.unscaledDeltaTime));
             }
 
             yield return null;
         }
 
-        // Zoom/Pan out back to baseline
-        yield return Tween(toSize, fromSize, cam.transform.position, _baseCamPos, Mathf.Max(0.0001f, outDur), followDuringTween: null);
+        yield return Tween(toSize, fromSize, cam.transform.position, _baseCamPos, Mathf.Max(0.0001f, outDur), null);
 
-        if (logDebug) Debug.Log($"[CameraFocus] End target='{target.name}'", this);
+        RestoreIsolationImmediate();
+
+        if (logDebug)
+            Debug.Log($"[CameraFocus] End target='{target.name}'", this);
+
         _routine = null;
     }
 
-    private IEnumerator Tween(float fromSize, float toSize, Vector3 fromPos, Vector3 toPos, float duration, Transform followDuringTween)
+    private void ApplyIsolation(IList<Transform> keepVisibleRoots)
+    {
+        RestoreIsolationImmediate();
+
+        if (!enableCameraFocus)
+            return;
+
+        if (!isolateNonParticipants || keepVisibleRoots == null || keepVisibleRoots.Count == 0)
+            return;
+
+        BattleManager bm = BattleManager.Instance != null ? BattleManager.Instance : FindObjectOfType<BattleManager>();
+        if (bm == null)
+            return;
+
+        IReadOnlyList<Transform> candidates = bm.GetCameraIsolationCandidateRoots();
+        if (candidates == null || candidates.Count == 0)
+            return;
+
+        HashSet<Transform> keepSet = new HashSet<Transform>();
+        for (int i = 0; i < keepVisibleRoots.Count; i++)
+        {
+            Transform root = keepVisibleRoots[i];
+            if (root != null)
+                keepSet.Add(root);
+        }
+
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            Transform candidate = candidates[i];
+            if (candidate == null || keepSet.Contains(candidate))
+                continue;
+
+            if (isolateRenderersOnly)
+                DisableRenderersUnder(candidate);
+            else
+                candidate.gameObject.SetActive(false);
+        }
+    }
+
+    private void DisableRenderersUnder(Transform root)
+    {
+        if (root == null)
+            return;
+
+        Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            Renderer r = renderers[i];
+            if (r == null)
+                continue;
+
+            _isolatedRenderers.Add(new RendererState
+            {
+                renderer = r,
+                wasEnabled = r.enabled
+            });
+
+            r.enabled = false;
+        }
+    }
+
+    private void RestoreIsolationImmediate()
+    {
+        for (int i = _isolatedRenderers.Count - 1; i >= 0; i--)
+        {
+            RendererState state = _isolatedRenderers[i];
+            if (state.renderer != null)
+                state.renderer.enabled = state.wasEnabled;
+        }
+
+        _isolatedRenderers.Clear();
+    }
+
+    private IEnumerator Tween(
+        float fromSize,
+        float toSize,
+        Vector3 fromPos,
+        Vector3 toPos,
+        float duration,
+        Transform followDuringTween)
     {
         float elapsed = 0f;
+
         while (elapsed < duration)
         {
-            elapsed += Time.deltaTime;
+            elapsed += Time.unscaledDeltaTime;
             float u = Mathf.Clamp01(elapsed / duration);
-            float s = u * u * (3f - 2f * u); // SmoothStep
+            float s = u * u * (3f - 2f * u);
 
             cam.orthographicSize = Mathf.Lerp(fromSize, toSize, s);
 
@@ -177,6 +444,7 @@ public class CameraFocusController : MonoBehaviour
                     desired = followDuringTween.position + focusOffset;
                     desired.z = fromPos.z;
                 }
+
                 cam.transform.position = Vector3.Lerp(fromPos, desired, s);
             }
 
@@ -184,6 +452,8 @@ public class CameraFocusController : MonoBehaviour
         }
 
         cam.orthographicSize = toSize;
-        if (panToTarget) cam.transform.position = toPos;
+
+        if (panToTarget)
+            cam.transform.position = toPos;
     }
 }

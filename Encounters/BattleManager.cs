@@ -1,3 +1,6 @@
+// PATH: Assets/Scripts/Encounters/BattleManager.cs
+// GUID: 30f201f35d336bf4d840162cd6fd1fde
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -532,6 +535,10 @@ private Monster _monsterInfoHoldCandidate;
     private bool _impactFired;
     private bool _attackFinished;
 
+    private Transform _impactCameraFocusTarget;
+    private Transform _impactCameraAttackerRoot;
+    private Transform _impactCameraDefenderRoot;
+
 
     // Windup hold (targeting) runtime
     private Coroutine _windupHoldRoutine;
@@ -555,6 +562,131 @@ private Monster _monsterInfoHoldCandidate;
     public TargetIndicatorUI indicatorPrefab;
     public Vector2 indicatorOffset;
     public float indicatorScale;
+
+    public void SetImpactCameraContext(Transform focusTarget, Transform attackerRoot, Transform defenderRoot)
+    {
+        _impactCameraFocusTarget = focusTarget;
+        _impactCameraAttackerRoot = attackerRoot;
+        _impactCameraDefenderRoot = defenderRoot;
+    }
+
+    public void ClearImpactCameraContext()
+    {
+        _impactCameraFocusTarget = null;
+        _impactCameraAttackerRoot = null;
+        _impactCameraDefenderRoot = null;
+    }
+
+    public bool TryGetImpactCameraContext(out Transform focusTarget, out Transform attackerRoot, out Transform defenderRoot)
+    {
+        focusTarget = _impactCameraFocusTarget;
+        attackerRoot = _impactCameraAttackerRoot;
+        defenderRoot = _impactCameraDefenderRoot;
+        return focusTarget != null;
+    }
+
+    public void ConfigureImpactCameraContextForEnemyAttack(Monster enemy, Transform defenderTarget)
+    {
+        if (enemy == null)
+        {
+            ClearImpactCameraContext();
+            return;
+        }
+
+        Transform attackerRoot = enemy.transform;
+        Transform defenderRoot = ResolvePartyAvatarRootFromTarget(defenderTarget);
+        HeroStats defenderStats = ResolvePartyHeroStatsFromTarget(defenderTarget);
+        Transform focusTarget = GetHeroCenterPointTransform(defenderStats, defenderRoot != null ? defenderRoot : defenderTarget);
+
+        if (focusTarget == null && defenderTarget != null)
+            focusTarget = defenderTarget;
+
+        SetImpactCameraContext(focusTarget, attackerRoot, defenderRoot);
+    }
+
+    private HeroStats ResolvePartyHeroStatsFromTarget(Transform target)
+    {
+        if (target == null)
+            return null;
+
+        HeroStats direct = target.GetComponentInParent<HeroStats>();
+        if (direct != null)
+            return direct;
+
+        if (_party != null)
+        {
+            for (int i = 0; i < _party.Count; i++)
+            {
+                PartyMemberRuntime pm = _party[i];
+                if (pm == null || pm.stats == null)
+                    continue;
+
+                Transform statsRoot = pm.stats.transform;
+                Transform avatarRoot = pm.avatarGO != null ? pm.avatarGO.transform : null;
+                if (statsRoot == target || target.IsChildOf(statsRoot) || (avatarRoot != null && (avatarRoot == target || target.IsChildOf(avatarRoot))))
+                    return pm.stats;
+            }
+        }
+
+        return null;
+    }
+
+    private Transform ResolvePartyAvatarRootFromTarget(Transform target)
+    {
+        if (target == null)
+            return null;
+
+        if (_party != null)
+        {
+            for (int i = 0; i < _party.Count; i++)
+            {
+                PartyMemberRuntime pm = _party[i];
+                if (pm == null)
+                    continue;
+
+                Transform avatarRoot = pm.avatarGO != null ? pm.avatarGO.transform : null;
+                if (avatarRoot != null && (avatarRoot == target || target.IsChildOf(avatarRoot)))
+                    return avatarRoot;
+
+                if (pm.stats != null)
+                {
+                    Transform statsRoot = pm.stats.transform;
+                    if (statsRoot == target || target.IsChildOf(statsRoot))
+                        return avatarRoot != null ? avatarRoot : statsRoot;
+                }
+            }
+        }
+
+        HeroStats hs = target.GetComponentInParent<HeroStats>();
+        return hs != null ? hs.transform : target;
+    }
+
+    public IReadOnlyList<Transform> GetCameraIsolationCandidateRoots()
+    {
+        List<Transform> roots = new List<Transform>(8);
+
+        if (_party != null)
+        {
+            for (int i = 0; i < _party.Count; i++)
+            {
+                PartyMemberRuntime pm = _party[i];
+                if (pm != null && pm.avatarGO != null)
+                    roots.Add(pm.avatarGO.transform);
+            }
+        }
+
+        if (_activeMonsters != null)
+        {
+            for (int i = 0; i < _activeMonsters.Count; i++)
+            {
+                Monster m = _activeMonsters[i];
+                if (m != null)
+                    roots.Add(m.transform);
+            }
+        }
+
+        return roots;
+    }
 
     private static T FindInSceneIncludingInactive<T>() where T : UnityEngine.Object
     {
@@ -1094,11 +1226,15 @@ private class EvolutionMapping
 
         if (visual == null)
         {
+            ConfigureImpactCameraContextForEnemyAttack(enemy, target);
             applyDamage?.Invoke();
+            ClearImpactCameraContext();
             yield break;
         }
 
         Vector3 startPos = visual.position;
+
+        ConfigureImpactCameraContextForEnemyAttack(enemy, target);
 
         // Optional animated monster driver (e.g., Skeleton).
         // If present, we drive walk/attack/idle via Animator while still using the existing lunge translation.
@@ -1204,6 +1340,7 @@ applyDamage?.Invoke();
         }
 
         visual.position = startPos;
+        ClearImpactCameraContext();
 
         if (animDriver != null)
             animDriver.PlayIdle();
@@ -3146,3 +3283,6 @@ if (logPassiveBridge)
     }
 
 }
+
+
+////////////////////////////////////////////////////////////

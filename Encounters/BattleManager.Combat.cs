@@ -1,3 +1,6 @@
+// PATH: Assets/Scripts/Encounters/BattleManager.Combat.cs
+// GUID: e608c79d28433d24296aa50aeb6669f8
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -553,3 +556,6 @@ private void EnsureHeroStatusStacks(Transform iconTf, int stacks)
     }
 
 }
+
+
+////////////////////////////////////////////////////////////

@@ -1,3 +1,6 @@
+// PATH: Assets/Scripts/Encounters/BattleManager.Abilities.cs
+// GUID: 086503e8a2281b644a98f9a1ad68431a
+////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -391,6 +394,7 @@ public partial class BattleManager : MonoBehaviour
 
         _impactFired = false;
         _attackFinished = false;
+        ClearImpactCameraContext();
 
         _pendingAction = PlayerActionType.Ability1;
         if (ability.targetType == AbilityTargetType.Enemy)
@@ -429,6 +433,40 @@ public partial class BattleManager : MonoBehaviour
 
         NotifyPartyChanged();
     }
+    private void ConfigureImpactCameraContextForAbility(PartyMemberRuntime actor, HeroStats actorStats, AbilityDefinitionSO ability, Monster enemyTarget)
+    {
+        if (actor == null || actorStats == null)
+        {
+            ClearImpactCameraContext();
+            return;
+        }
+
+        Transform attackerRoot = actor.avatarGO != null ? actor.avatarGO.transform : actorStats.transform;
+        Transform defenderRoot = null;
+        Transform focusTarget = null;
+
+        if (ability != null && ability.targetType == AbilityTargetType.Enemy && enemyTarget != null)
+        {
+            defenderRoot = enemyTarget.transform;
+            focusTarget = GetMonsterCenterPointTransform(enemyTarget.transform);
+        }
+        else if (ability != null && (ability.targetType == AbilityTargetType.Self || ability.targetType == AbilityTargetType.Ally))
+        {
+            int partyIndex = (ability.targetType == AbilityTargetType.Self) ? _pendingActorIndex : _selectedPartyTargetIndex;
+            if (IsValidPartyIndex(partyIndex) && _party[partyIndex] != null)
+            {
+                PartyMemberRuntime targetPm = _party[partyIndex];
+                defenderRoot = targetPm.avatarGO != null ? targetPm.avatarGO.transform : (targetPm.stats != null ? targetPm.stats.transform : null);
+                focusTarget = GetHeroCenterPointTransform(targetPm.stats, defenderRoot);
+            }
+        }
+
+        if (focusTarget == null)
+            focusTarget = GetHeroCenterPointTransform(actorStats, attackerRoot);
+
+        SetImpactCameraContext(focusTarget, attackerRoot, defenderRoot);
+    }
+
     private IEnumerator ResolvePendingAbility()
     {
         if (logFlow)
@@ -437,6 +475,7 @@ public partial class BattleManager : MonoBehaviour
         if (_pendingAbility == null || !IsValidPartyIndex(_pendingActorIndex))
         {
             if (logFlow) Debug.Log("[Battle][Resolve] Cancel: pending ability or actor invalid.", this);
+            ClearImpactCameraContext();
             CancelPendingAbility();
             yield break;
         }
@@ -445,6 +484,7 @@ public partial class BattleManager : MonoBehaviour
         if (ability == null)
         {
             if (logFlow) Debug.Log("[Battle][Resolve] Cancel: ability is null.", this);
+            ClearImpactCameraContext();
             CancelPendingAbility();
             yield break;
         }
@@ -457,6 +497,7 @@ public partial class BattleManager : MonoBehaviour
         if (actorStats == null || actor.IsDead)
         {
             if (logFlow) Debug.Log("[Battle][Resolve] Cancel: actorStats missing or actor dead.", this);
+            ClearImpactCameraContext();
             CancelPendingAbility();
             yield break;
         }
@@ -472,6 +513,7 @@ public partial class BattleManager : MonoBehaviour
             {
                 if (logFlow) Debug.Log("[Battle][Resolve] Abort: Enemy target required but not selected (or dead). Returning to awaiting target.", this);
                 _awaitingEnemyTarget = true;
+                ClearImpactCameraContext();
                 yield break;
             }
         }
@@ -482,9 +524,12 @@ public partial class BattleManager : MonoBehaviour
             {
                 if (logFlow) Debug.Log("[Battle][Resolve] Abort: Ally target required but not selected (or dead). Returning to awaiting party target.", this);
                 _awaitingPartyTarget = true;
+                ClearImpactCameraContext();
                 yield break;
             }
         }
+
+        ConfigureImpactCameraContextForAbility(actor, actorStats, ability, enemyTarget);
 
         PushSaveStateSnapshot();
 
@@ -1235,6 +1280,7 @@ public partial class BattleManager : MonoBehaviour
         UpdateEnemyTargetIndicators();
         _impactFired = false;
         _attackFinished = false;
+        ClearImpactCameraContext();
 
         if (AbilityCastState.Instance != null)
             AbilityCastState.Instance.ClearCast();
@@ -1304,3 +1350,6 @@ public partial class BattleManager : MonoBehaviour
 }
 
 
+
+
+////////////////////////////////////////////////////////////
