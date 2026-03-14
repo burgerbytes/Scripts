@@ -13,6 +13,13 @@ public class MonsterInfoController : MonoBehaviour
     [Tooltip("Root panel GameObject (the one you want enabled/disabled).")]
     [SerializeField] private GameObject monsterInfoPanel;
 
+    [Header("Shared Info Panel")]
+    [Tooltip("Optional. If assigned, this legacy controller will forward monster inspection to the shared InfoPanelController instead of using the old standalone MonsterInfoPanel.")]
+    [SerializeField] private InfoPanelController sharedInfoPanelController;
+
+    [Tooltip("If true and sharedInfoPanelController is assigned, Show/Hide will use the shared generic info panel shell.")]
+    [SerializeField] private bool preferSharedInfoPanel = true;
+
     [Header("Tabs")]
     [Tooltip("Root that contains the existing 'Info' text fields (name/stats/description).")]
     [SerializeField] private GameObject infoTabRoot;
@@ -20,11 +27,18 @@ public class MonsterInfoController : MonoBehaviour
     [Tooltip("Root for the Monster Reel tab content.")]
     [SerializeField] private GameObject monsterReelTabRoot;
 
+    [Tooltip("Root for the monster status tab content.")]
+    [SerializeField] private GameObject statusTabRoot;
+
     [SerializeField] private Button infoTabButton;
     [SerializeField] private Button reelTabButton;
+    [SerializeField] private Button statusTabButton;
 
     [Tooltip("Optional: component that drives the Monster Reel tab UI.")]
     [SerializeField] private MonsterReelPanelUI monsterReelPanelUI;
+
+    [Tooltip("Optional: component that drives the Monster Status tab UI.")]
+    [SerializeField] private MonsterStatusTabUI monsterStatusTabUI;
 
     [Header("Positioning")]
     [Tooltip("Optional. If null, we use monsterInfoPanel's RectTransform.")]
@@ -57,7 +71,8 @@ public class MonsterInfoController : MonoBehaviour
     private enum ActiveTab
     {
         Info = 0,
-        Reel = 1
+        Reel = 1,
+        Status = 2
     }
 
     [SerializeField] private ActiveTab defaultTab = ActiveTab.Info;
@@ -86,13 +101,15 @@ public class MonsterInfoController : MonoBehaviour
 
     private void Awake()
     {
+        if (sharedInfoPanelController == null)
+            sharedInfoPanelController = FindFirstObjectByType<InfoPanelController>(FindObjectsInactive.Include);
+
         if (panelRect == null && monsterInfoPanel != null)
             panelRect = monsterInfoPanel.GetComponent<RectTransform>();
 
         if (rootCanvas == null)
             rootCanvas = GetComponentInParent<Canvas>();
 
-        // Auto-find the reel panel UI under the reel tab root if not assigned.
         if (monsterReelPanelUI == null)
         {
             if (monsterReelTabRoot != null)
@@ -101,7 +118,14 @@ public class MonsterInfoController : MonoBehaviour
                 monsterReelPanelUI = GetComponentInChildren<MonsterReelPanelUI>(true);
         }
 
-        // Initially disabled
+        if (monsterStatusTabUI == null)
+        {
+            if (statusTabRoot != null)
+                monsterStatusTabUI = statusTabRoot.GetComponentInChildren<MonsterStatusTabUI>(true);
+            if (monsterStatusTabUI == null)
+                monsterStatusTabUI = GetComponentInChildren<MonsterStatusTabUI>(true);
+        }
+
         if (monsterInfoPanel != null)
             monsterInfoPanel.SetActive(false);
 
@@ -128,6 +152,12 @@ public class MonsterInfoController : MonoBehaviour
             reelTabButton.onClick.RemoveAllListeners();
             reelTabButton.onClick.AddListener(OnReelTabPressed);
         }
+
+        if (statusTabButton != null)
+        {
+            statusTabButton.onClick.RemoveAllListeners();
+            statusTabButton.onClick.AddListener(OnStatusTabPressed);
+        }
     }
 
     private void OnEnable()
@@ -142,13 +172,11 @@ public class MonsterInfoController : MonoBehaviour
 
     private void HandleTargetConfirmed()
     {
-        // Hide immediately after the player confirms a target (before attack anims).
         Hide();
     }
 
     public void Show(Monster monster)
     {
-        // Do NOT allow this panel to open while the player is in a cast/targeting state.
         if (IsPlayerCasting())
         {
             Hide();
@@ -158,6 +186,18 @@ public class MonsterInfoController : MonoBehaviour
         if (monster == null || monster.IsDead)
         {
             Hide();
+            return;
+        }
+
+        if (preferSharedInfoPanel && sharedInfoPanelController != null)
+        {
+            sharedInfoPanelController.ShowMonster(monster, new InfoPanelData
+            {
+                title = monster.DisplayName,
+                body = BuildStatsForPanel(monster) + " " + (monster.Description ?? string.Empty),
+                image = null
+            });
+            _currentMonster = monster;
             return;
         }
 
@@ -176,19 +216,16 @@ public class MonsterInfoController : MonoBehaviour
         if (monsterDescriptionText != null)
             monsterDescriptionText.text = monster.Description;
 
-        // Default tab each time we open (keeps behavior predictable).
         ActiveTab openingTab = defaultTab;
         if (openingTab == ActiveTab.Reel && !CurrentMonsterHasReelStrip())
             openingTab = ActiveTab.Info;
 
         SetActiveTab(openingTab, force: true);
-
         UpdatePanelPosition();
     }
 
     private void LateUpdate()
     {
-        // If the player enters cast/targeting state while this is open, force-hide it.
         if (monsterInfoPanel != null && monsterInfoPanel.activeSelf && IsPlayerCasting())
         {
             Hide();
@@ -214,7 +251,6 @@ public class MonsterInfoController : MonoBehaviour
         Vector3 world = _currentMonster.transform.position;
         Vector3 screen = cam.WorldToScreenPoint(world);
 
-        // Convert screen -> local point in canvas space.
         Canvas canvas = rootCanvas != null ? rootCanvas : GetComponentInParent<Canvas>();
         if (canvas == null) return;
 
@@ -238,7 +274,6 @@ public class MonsterInfoController : MonoBehaviour
 
         Vector2 desired = localPoint + offset;
 
-        // Clamp to canvas bounds so it doesn't go offscreen.
         Vector2 min = canvasRect.rect.min + new Vector2(panelHalfW, panelRect.rect.height * 0.5f);
         Vector2 max = canvasRect.rect.max - new Vector2(panelHalfW, panelRect.rect.height * 0.5f);
 
@@ -250,6 +285,12 @@ public class MonsterInfoController : MonoBehaviour
 
     public void Hide()
     {
+        if (preferSharedInfoPanel && sharedInfoPanelController != null && sharedInfoPanelController.IsOpen)
+            sharedInfoPanelController.Close();
+
+        if (monsterStatusTabUI != null)
+            monsterStatusTabUI.ShowForMonster(null);
+
         _currentMonster = null;
 
         if (reelTabButton != null)
@@ -280,9 +321,6 @@ public class MonsterInfoController : MonoBehaviour
         }
     }
 
-    // =======================
-    // Tabs
-    // =======================
     public void OnInfoTabPressed()
     {
         SetActiveTab(ActiveTab.Info);
@@ -300,6 +338,11 @@ public class MonsterInfoController : MonoBehaviour
         SetActiveTab(ActiveTab.Reel);
     }
 
+    public void OnStatusTabPressed()
+    {
+        SetActiveTab(ActiveTab.Status);
+    }
+
     private void SetActiveTab(ActiveTab tab, bool force = false)
     {
         if (tab == ActiveTab.Reel && !CurrentMonsterHasReelStrip())
@@ -314,19 +357,24 @@ public class MonsterInfoController : MonoBehaviour
         if (monsterReelTabRoot != null)
             monsterReelTabRoot.SetActive(tab == ActiveTab.Reel);
 
-        // When entering reel tab, refresh it for the current monster.
+        if (statusTabRoot != null)
+            statusTabRoot.SetActive(tab == ActiveTab.Status);
+
         if (tab == ActiveTab.Reel && monsterReelPanelUI != null)
             monsterReelPanelUI.ShowForMonster(_currentMonster);
 
-        // Keep the panel positioned correctly after layout changes.
+        if (monsterStatusTabUI != null)
+        {
+            if (tab == ActiveTab.Status)
+                monsterStatusTabUI.ShowForMonster(_currentMonster);
+            else
+                monsterStatusTabUI.ShowForMonster(null);
+        }
+
         if (monsterInfoPanel != null && monsterInfoPanel.activeSelf)
             UpdatePanelPosition();
     }
 
-    // =======================
-    // Stats formatting helpers
-    // =======================
-    // Expose the same stats formatting used by this panel so other UI can reuse it.
     public string BuildStatsForPanel(Monster monster)
     {
         if (monster == null) return string.Empty;
@@ -337,11 +385,9 @@ public class MonsterInfoController : MonoBehaviour
     {
         var sb = new StringBuilder(256);
 
-        // Core stats (always)
         sb.AppendLine($"HP: {monster.CurrentHp}/{monster.MaxHp}");
         sb.AppendLine($"Damage: {monster.GetDamage()}");
 
-        // Tags (optional; pulled via reflection so this script won't break if Monster changes)
         string tagsLine = TryBuildTagsLine(monster);
         if (!string.IsNullOrWhiteSpace(tagsLine))
         {
@@ -349,7 +395,6 @@ public class MonsterInfoController : MonoBehaviour
             sb.AppendLine(tagsLine);
         }
 
-        // Resistances (optional; pulled via reflection)
         string resBlock = TryBuildResistanceBlock(monster);
         if (!string.IsNullOrWhiteSpace(resBlock))
         {
@@ -362,8 +407,6 @@ public class MonsterInfoController : MonoBehaviour
 
     private static string TryBuildTagsLine(Monster monster)
     {
-        // Expected in Monster.cs:
-        //   public IReadOnlyList<MonsterTag> Tags { get; }
         try
         {
             PropertyInfo pi = monster.GetType().GetProperty("Tags", BindingFlags.Public | BindingFlags.Instance);
@@ -390,8 +433,6 @@ public class MonsterInfoController : MonoBehaviour
 
     private static string TryBuildResistanceBlock(Monster monster)
     {
-        // Monster currently has physicalResistance/electricResistance fields.
-        // We read them via reflection so this panel won't break if the model changes.
         try
         {
             var t = monster.GetType();

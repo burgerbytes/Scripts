@@ -28,3 +28,4 @@ public enum ItemEffect
     // Breaks (is destroyed/removed) the first time the hero takes HP damage while they have 0 Block.
     WornBuckler
 }
+
