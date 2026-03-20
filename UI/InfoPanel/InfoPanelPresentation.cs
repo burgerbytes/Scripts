@@ -1,3 +1,7 @@
+////////////////////////////////////////////////////////////
+// PATH: Assets/Scripts/UI/InfoPanel/InfoPanelPresentation.cs
+// GUID: b445544b3932b744496aefb7eaf08018
+////////////////////////////////////////////////////////////
 using System.Text;
 using UnityEngine;
 
@@ -103,7 +107,7 @@ public static class InfoPanelContentFactory
             SubjectKind = InfoPanelSubjectKind.Hero,
             DefaultTab = InfoPanelDefaultTab.Info,
             ShowInfoTab = true,
-            ShowReelTab = false,
+            ShowReelTab = MonsterReelPanelUI.HasDisplayableHeroAbilities(hero),
             ShowStatusTab = false,
             Info = new InfoPanelData
             {

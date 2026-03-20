@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using System.Text;
 using TMPro;
@@ -16,7 +17,7 @@ using UnityEngine.UI;
 ///
 /// Current hierarchy compatibility:
 /// - Works with the existing generic Info tab.
-/// - Works with the existing Monster Reel tab if wired.
+/// - Works with the existing Monster Reel / Abilities tab if wired.
 /// - Optionally works with a Status tab if/when a generic/shared status root is added.
 /// - Safely ignores any optional tabs that are not wired yet.
 /// </summary>
@@ -30,6 +31,9 @@ public class InfoPanelController : MonoBehaviour
 
     [Tooltip("Background button object (BG). Clicking it closes the panel (outside the panel bounds).")]
     [SerializeField] private Button backgroundButton;
+
+    [Tooltip("Optional in-panel close button. If left null, we auto-find common names.")]
+    [SerializeField] private Button closeButton;
 
     [Tooltip("Optional: PartyHUD reference for single-panel locking. If null, we auto-find one at runtime.")]
     [SerializeField] private PartyHUD partyHUD;
@@ -45,11 +49,12 @@ public class InfoPanelController : MonoBehaviour
     [SerializeField] private Button infoTabButton;
     [SerializeField] private Button reelTabButton;
     [SerializeField] private Button statusTabButton;
+    [SerializeField] private Button extraTabButton;
 
     [Header("Tab Roots")]
     [Tooltip("Root containing the shared generic info content.")]
     [SerializeField] private GameObject infoTabRoot;
-    [Tooltip("Root containing the monster reel UI.")]
+    [Tooltip("Root containing the shared abilities / reel UI.")]
     [SerializeField] private GameObject monsterReelTabRoot;
     [Tooltip("Optional shared status root. Safe to leave null until the hierarchy is updated.")]
     [SerializeField] private GameObject statusTabRoot;
@@ -102,6 +107,7 @@ public class InfoPanelController : MonoBehaviour
     private InfoPanelPresentation _lastPresentation;
     private RectTransform _panelRect;
     private GraphicRaycaster _raycaster;
+    private Coroutine _reelTabRefreshRoutine;
 
     private void Awake()
     {
@@ -111,42 +117,10 @@ public class InfoPanelController : MonoBehaviour
         if (partyHUD == null)
             partyHUD = FindFirstObjectByType<PartyHUD>(FindObjectsInactive.Include);
 
-        if (backgroundButton == null && infoPanelRoot != null)
-        {
-            Transform t = infoPanelRoot.transform.Find("BG");
-            if (t != null)
-                backgroundButton = t.GetComponent<Button>();
-        }
+        AutoWireButtons();
+        AutoWirePresenters();
 
-        if (monsterReelPanelUI == null && monsterReelTabRoot != null)
-            monsterReelPanelUI = monsterReelTabRoot.GetComponentInChildren<MonsterReelPanelUI>(true);
-
-        if (monsterStatusTabUI == null && statusTabRoot != null)
-            monsterStatusTabUI = statusTabRoot.GetComponentInChildren<MonsterStatusTabUI>(true);
-
-        if (backgroundButton != null)
-        {
-            backgroundButton.onClick.RemoveListener(OnBackgroundClicked);
-            backgroundButton.onClick.AddListener(OnBackgroundClicked);
-        }
-
-        if (infoTabButton != null)
-        {
-            infoTabButton.onClick.RemoveListener(OnInfoTabClicked);
-            infoTabButton.onClick.AddListener(OnInfoTabClicked);
-        }
-
-        if (reelTabButton != null)
-        {
-            reelTabButton.onClick.RemoveListener(OnReelTabClicked);
-            reelTabButton.onClick.AddListener(OnReelTabClicked);
-        }
-
-        if (statusTabButton != null)
-        {
-            statusTabButton.onClick.RemoveListener(OnStatusTabClicked);
-            statusTabButton.onClick.AddListener(OnStatusTabClicked);
-        }
+        WireButtonListeners();
 
         _raycaster = GetComponentInParent<GraphicRaycaster>();
         CachePanelRectAndInstallBackgroundFilter();
@@ -161,16 +135,28 @@ public class InfoPanelController : MonoBehaviour
         ShowInfoTab();
     }
 
+    private void OnEnable()
+    {
+        AutoWireButtons();
+        AutoWirePresenters();
+        WireButtonListeners();
+    }
+
     private void OnDestroy()
     {
+        if (_reelTabRefreshRoutine != null) StopCoroutine(_reelTabRefreshRoutine);
         if (backgroundButton != null)
             backgroundButton.onClick.RemoveListener(OnBackgroundClicked);
+        if (closeButton != null)
+            closeButton.onClick.RemoveListener(OnCloseButtonClicked);
         if (infoTabButton != null)
             infoTabButton.onClick.RemoveListener(OnInfoTabClicked);
         if (reelTabButton != null)
             reelTabButton.onClick.RemoveListener(OnReelTabClicked);
         if (statusTabButton != null)
             statusTabButton.onClick.RemoveListener(OnStatusTabClicked);
+        if (extraTabButton != null)
+            extraTabButton.onClick.RemoveAllListeners();
     }
 
     private void OnDisable()
@@ -349,8 +335,24 @@ public class InfoPanelController : MonoBehaviour
         if (monsterStatusTabUI != null)
             monsterStatusTabUI.ShowForMonster(null);
 
+        if (monsterReelPanelUI != null)
+            monsterReelPanelUI.ClearCurrentSelection();
+
         if (logFlow)
             Debug.Log($"{TAG} Close", this);
+    }
+
+    public void ClosePanel() => Close();
+    public void HidePanel() => Close();
+    public void ShowInfoTabFromButton() => SetActiveTab(ActiveTab.Info);
+    public void ShowReelTabFromButton() => SetActiveTab(ActiveTab.Reel);
+    public void ShowStatusTabFromButton() => SetActiveTab(ActiveTab.Status);
+
+    public void RewireButtonsNow()
+    {
+        AutoWireButtons();
+        AutoWirePresenters();
+        WireButtonListeners();
     }
 
     private void ApplyPresentation(InfoPanelPresentation presentation, bool openPanel)
@@ -362,21 +364,40 @@ public class InfoPanelController : MonoBehaviour
         ShowCore(presentation.Info);
 
         bool showInfoTab = presentation.ShowInfoTab;
-        bool showReelTab = presentation.ShowReelTab && monsterReelTabRoot != null && monsterReelPanelUI != null && _currentMonster != null && MonsterReelPanelUI.HasDisplayableReelStrip(_currentMonster);
-        bool showStatusTab = presentation.ShowStatusTab && statusTabRoot != null;
+        bool showReelTab = presentation.ShowReelTab && CanShowReelTabForCurrentSubject();
+
+        // Temporarily force Status off so we can isolate and validate the Reel tab path.
+        bool showStatusTab = false;
 
         ApplyTabVisibility(showInfoTab, showReelTab, showStatusTab, $"ApplyPresentation({presentation.SubjectKind})");
 
-        ActiveTab desiredDefault = ActiveTab.Info;
-        if (presentation.DefaultTab == InfoPanelDefaultTab.Reel && showReelTab)
-            desiredDefault = ActiveTab.Reel;
-        else if (presentation.DefaultTab == InfoPanelDefaultTab.Status && showStatusTab)
-            desiredDefault = ActiveTab.Status;
+        // Temporarily prefer Reel whenever it is available so the panel opens directly
+        // into the monster abilities/reel view for debugging.
+        ActiveTab desiredDefault = showReelTab ? ActiveTab.Reel : ActiveTab.Info;
+
+        if (logFlow)
+            Debug.Log($"{TAG} ApplyPresentation defaultTab={desiredDefault} showInfoTab={showInfoTab} showReelTab={showReelTab} showStatusTab={showStatusTab}", this);
 
         SetActiveTab(desiredDefault);
 
         if (openPanel)
             Open();
+    }
+
+    private bool CanShowReelTabForCurrentSubject()
+    {
+        if (monsterReelTabRoot == null || monsterReelPanelUI == null)
+            return false;
+
+        switch (_mode)
+        {
+            case Mode.Monster:
+                return MonsterReelPanelUI.HasDisplayableReelStrip(_currentMonster);
+            case Mode.Hero:
+                return MonsterReelPanelUI.HasDisplayableHeroAbilities(_currentHero);
+            default:
+                return false;
+        }
     }
 
     private void ShowCore(InfoPanelData data)
@@ -395,14 +416,36 @@ public class InfoPanelController : MonoBehaviour
     }
 
     private void OnBackgroundClicked() => Close();
-    private void OnInfoTabClicked() => SetActiveTab(ActiveTab.Info);
-    private void OnReelTabClicked() => SetActiveTab(ActiveTab.Reel);
-    private void OnStatusTabClicked() => SetActiveTab(ActiveTab.Status);
+    private void OnCloseButtonClicked() => Close();
+
+    private void OnInfoTabClicked()
+    {
+        if (logFlow)
+            Debug.Log($"{TAG} Info tab click", this);
+        SetActiveTab(ActiveTab.Info);
+    }
+
+    private void OnReelTabClicked()
+    {
+        if (logFlow)
+            Debug.Log($"{TAG} Reel tab click", this);
+        SetActiveTab(ActiveTab.Reel);
+    }
+
+    private void OnStatusTabClicked()
+    {
+        if (logFlow)
+            Debug.Log($"{TAG} Status tab click", this);
+        SetActiveTab(ActiveTab.Status);
+    }
 
     private void SetActiveTab(ActiveTab tab)
     {
-        bool canShowReel = _lastPresentation != null && _lastPresentation.ShowReelTab && monsterReelTabRoot != null && monsterReelPanelUI != null && _currentMonster != null && MonsterReelPanelUI.HasDisplayableReelStrip(_currentMonster);
-        bool canShowStatus = _lastPresentation != null && _lastPresentation.ShowStatusTab && statusTabRoot != null;
+        AutoWirePresenters();
+
+        ActiveTab requestedTab = tab;
+        bool canShowReel = _lastPresentation != null && _lastPresentation.ShowReelTab && CanShowReelTabForCurrentSubject();
+        bool canShowStatus = _lastPresentation != null && _lastPresentation.ShowStatusTab && statusTabRoot != null && _currentMonster != null;
 
         if (tab == ActiveTab.Reel && !canShowReel)
             tab = ActiveTab.Info;
@@ -420,8 +463,42 @@ public class InfoPanelController : MonoBehaviour
         if (statusTabRoot != null)
             statusTabRoot.SetActive(tab == ActiveTab.Status && canShowStatus);
 
-        if (tab == ActiveTab.Reel && canShowReel)
-            monsterReelPanelUI.ShowForMonster(_currentMonster);
+        if (logFlow)
+        {
+            Debug.Log($"{TAG} SetActiveTab requested={requestedTab} actual={tab} mode={_mode} canShowReel={canShowReel} canShowStatus={canShowStatus} monster={(_currentMonster != null ? _currentMonster.name : "<null>")} hero={(_currentHero != null ? _currentHero.name : "<null>")}", this);
+            Debug.Log($"{TAG} TAB ROOT STATES => InfoRoot={(infoTabRoot != null && infoTabRoot.activeSelf)} | ReelRoot={(monsterReelTabRoot != null && monsterReelTabRoot.activeSelf)} | StatusRoot={(statusTabRoot != null && statusTabRoot.activeSelf)}", this);
+            Debug.Log($"{TAG} TAB BUTTON STATES => InfoBtn={(infoTabButton != null && infoTabButton.gameObject.activeSelf)} | ReelBtn={(reelTabButton != null && reelTabButton.gameObject.activeSelf)} | StatusBtn={(statusTabButton != null && statusTabButton.gameObject.activeSelf)} | ExtraBtn={(extraTabButton != null && extraTabButton.gameObject.activeSelf)}", this);
+        }
+
+        if (tab == ActiveTab.Reel && canShowReel && monsterReelPanelUI != null)
+        {
+            if (logFlow)
+                Debug.Log($"{TAG} ReelPanelUI state before init => activeSelf={monsterReelPanelUI.gameObject.activeSelf} inHierarchy={monsterReelPanelUI.gameObject.activeInHierarchy} reelRootActive={(monsterReelTabRoot != null && monsterReelTabRoot.activeInHierarchy)}", monsterReelPanelUI);
+
+            monsterReelPanelUI.gameObject.SetActive(true);
+
+            if (logFlow)
+                Debug.Log($"{TAG} ReelPanelUI state after SetActive(true) => activeSelf={monsterReelPanelUI.gameObject.activeSelf} inHierarchy={monsterReelPanelUI.gameObject.activeInHierarchy}", monsterReelPanelUI);
+
+            if (_mode == Mode.Monster)
+            {
+                if (logFlow)
+                    Debug.Log($"{TAG} Initializing reel tab for monster '{(_currentMonster != null ? _currentMonster.name : "<null>")}'", this);
+                monsterReelPanelUI.ShowForMonster(_currentMonster);
+            }
+            else if (_mode == Mode.Hero)
+            {
+                if (logFlow)
+                    Debug.Log($"{TAG} Initializing reel tab for hero '{(_currentHero != null ? _currentHero.name : "<null>")}'", this);
+                monsterReelPanelUI.ShowForHero(_currentHero);
+            }
+
+            StartDeferredReelRefresh();
+        }
+        else if (tab != ActiveTab.Reel && monsterReelPanelUI != null)
+        {
+            monsterReelPanelUI.ClearCurrentSelection();
+        }
 
         if (monsterStatusTabUI != null)
         {
@@ -432,6 +509,37 @@ public class InfoPanelController : MonoBehaviour
         }
     }
 
+
+    private void StartDeferredReelRefresh()
+    {
+        if (_reelTabRefreshRoutine != null)
+            StopCoroutine(_reelTabRefreshRoutine);
+
+        _reelTabRefreshRoutine = StartCoroutine(DeferredReelRefresh());
+    }
+
+    private IEnumerator DeferredReelRefresh()
+    {
+        yield return null;
+        Canvas.ForceUpdateCanvases();
+        yield return null;
+
+        if (_activeTab != ActiveTab.Reel || monsterReelPanelUI == null)
+            yield break;
+
+        if (logFlow)
+            Debug.Log($"{TAG} Deferred reel refresh running. reelRootActive={(monsterReelTabRoot != null && monsterReelTabRoot.activeInHierarchy)} panelActive={monsterReelPanelUI.gameObject.activeInHierarchy}", monsterReelPanelUI);
+
+        monsterReelPanelUI.gameObject.SetActive(true);
+        monsterReelPanelUI.RefreshCurrentSubject();
+        monsterReelPanelUI.ForceRebuildVisibleState();
+
+        if (logFlow)
+            Debug.Log($"{TAG} Deferred reel refresh finished.", monsterReelPanelUI);
+
+        _reelTabRefreshRoutine = null;
+    }
+
     private void ApplyTabVisibility(bool infoEnabled, bool reelEnabled, bool statusEnabled, string caller)
     {
         bool anyTabsEnabled = infoEnabled || reelEnabled || statusEnabled;
@@ -439,17 +547,13 @@ public class InfoPanelController : MonoBehaviour
         if (tabBarRoot != null)
             tabBarRoot.SetActive(anyTabsEnabled);
 
-        if (infoTabButton != null)
-            infoTabButton.gameObject.SetActive(infoEnabled);
-
-        if (reelTabButton != null)
-            reelTabButton.gameObject.SetActive(reelEnabled);
-
-        if (statusTabButton != null)
-            statusTabButton.gameObject.SetActive(statusEnabled);
+        SetTabButtonVisible(infoTabButton, infoEnabled);
+        SetTabButtonVisible(reelTabButton, reelEnabled);
+        SetTabButtonVisible(statusTabButton, statusEnabled);
+        SetTabButtonVisible(extraTabButton, false);
 
         if (logFlow)
-            Debug.Log($"{TAG} ApplyTabVisibility caller={caller} info={infoEnabled} reel={reelEnabled} status={statusEnabled}", this);
+            Debug.Log($"{TAG} ApplyTabVisibility caller={caller} info={infoEnabled} reel={reelEnabled} status={statusEnabled} extra={false}", this);
 
         if (!anyTabsEnabled)
         {
@@ -457,6 +561,28 @@ public class InfoPanelController : MonoBehaviour
             if (monsterReelTabRoot != null) monsterReelTabRoot.SetActive(false);
             if (statusTabRoot != null) statusTabRoot.SetActive(false);
         }
+    }
+
+    private void SetTabButtonVisible(Button button, bool visible)
+    {
+        if (button == null)
+            return;
+
+        GameObject go = button.gameObject;
+        go.SetActive(visible);
+        button.interactable = visible;
+
+        CanvasGroup cg = go.GetComponent<CanvasGroup>();
+        if (cg != null)
+        {
+            cg.alpha = visible ? 1f : 0f;
+            cg.interactable = visible;
+            cg.blocksRaycasts = visible;
+        }
+
+        Graphic[] graphics = go.GetComponentsInChildren<Graphic>(true);
+        for (int i = 0; i < graphics.Length; i++)
+            graphics[i].raycastTarget = visible;
     }
 
     private void ShowInfoTab() => SetActiveTab(ActiveTab.Info);
@@ -509,6 +635,146 @@ public class InfoPanelController : MonoBehaviour
             filter = backgroundButton.gameObject.AddComponent<InfoPanelBackgroundRaycastFilter>();
 
         filter.SetPanelRect(_panelRect);
+    }
+
+    private void AutoWireButtons()
+    {
+        if (infoPanelRoot == null)
+            infoPanelRoot = gameObject;
+
+        if (backgroundButton == null && infoPanelRoot != null)
+        {
+            Transform bg = infoPanelRoot.transform.Find("BG");
+            if (bg != null)
+            {
+                backgroundButton = bg.GetComponent<Button>();
+                if (backgroundButton == null)
+                {
+                    Transform bgButtonChild = bg.Find("Button");
+                    if (bgButtonChild != null)
+                        backgroundButton = bgButtonChild.GetComponent<Button>();
+                }
+
+                if (backgroundButton == null)
+                    backgroundButton = bg.GetComponentInChildren<Button>(true);
+            }
+        }
+
+        Transform panel = infoPanelRoot != null ? infoPanelRoot.transform.Find("BG/Panel") : null;
+        Transform tabBar = tabBarRoot != null ? tabBarRoot.transform : (panel != null ? FindChildByTrimmedName(panel, "TabBarRoot") : null);
+
+        if (tabBarRoot == null && tabBar != null)
+            tabBarRoot = tabBar.gameObject;
+
+        if (infoTabButton == null && tabBar != null)
+            infoTabButton = FindButtonByName(tabBar, "InfoTabButton") ?? FindButtonByName(tabBar, "Info Tab Button");
+
+        if (reelTabButton == null && tabBar != null)
+            reelTabButton = FindButtonByName(tabBar, "ReelTabButton") ?? FindButtonByName(tabBar, "AbilitiesTabButton") ?? FindButtonByName(tabBar, "AbilityTabButton");
+
+        if (statusTabButton == null && tabBar != null)
+            statusTabButton = FindButtonByName(tabBar, "StatusTabButton") ?? FindButtonByName(tabBar, "Status Tab Button");
+
+        if (extraTabButton == null && tabBar != null)
+            extraTabButton = FindButtonByName(tabBar, "ExtraTabButton") ?? FindButtonByName(tabBar, "Extra Tab Button");
+
+        if (closeButton == null && infoPanelRoot != null)
+        {
+            closeButton = FindButtonByName(infoPanelRoot.transform, "CloseButton")
+                       ?? FindButtonByName(infoPanelRoot.transform, "Close Button")
+                       ?? FindButtonByName(infoPanelRoot.transform, "Close")
+                       ?? FindButtonByName(infoPanelRoot.transform, "XButton");
+        }
+    }
+
+    private void WireButtonListeners()
+    {
+        if (backgroundButton != null)
+        {
+            backgroundButton.onClick.RemoveListener(OnBackgroundClicked);
+            backgroundButton.onClick.AddListener(OnBackgroundClicked);
+        }
+
+        if (closeButton != null)
+        {
+            closeButton.onClick.RemoveListener(OnCloseButtonClicked);
+            closeButton.onClick.AddListener(OnCloseButtonClicked);
+        }
+
+        if (infoTabButton != null)
+        {
+            infoTabButton.onClick.RemoveListener(OnInfoTabClicked);
+            infoTabButton.onClick.AddListener(OnInfoTabClicked);
+        }
+
+        if (reelTabButton != null)
+        {
+            reelTabButton.onClick.RemoveListener(OnReelTabClicked);
+            reelTabButton.onClick.AddListener(OnReelTabClicked);
+        }
+
+        if (statusTabButton != null)
+        {
+            statusTabButton.onClick.RemoveListener(OnStatusTabClicked);
+            statusTabButton.onClick.AddListener(OnStatusTabClicked);
+        }
+    }
+
+    private void AutoWirePresenters()
+    {
+        Transform panel = infoPanelRoot != null ? infoPanelRoot.transform.Find("BG/Panel") : null;
+
+        if (infoTabRoot == null && panel != null)
+        {
+            Transform t = FindChildByTrimmedName(panel, "InfoTabRoot");
+            if (t != null) infoTabRoot = t.gameObject;
+        }
+
+        if (monsterReelTabRoot == null && panel != null)
+        {
+            Transform t = FindChildByTrimmedName(panel, "MonsterReelTabRoot");
+            if (t != null) monsterReelTabRoot = t.gameObject;
+        }
+
+        if (statusTabRoot == null && panel != null)
+        {
+            Transform t = FindChildByTrimmedName(panel, "StatusTabRoot");
+            if (t != null) statusTabRoot = t.gameObject;
+        }
+
+        if (monsterReelPanelUI == null && monsterReelTabRoot != null)
+            monsterReelPanelUI = monsterReelTabRoot.GetComponentInChildren<MonsterReelPanelUI>(true);
+
+        if (monsterStatusTabUI == null && statusTabRoot != null)
+            monsterStatusTabUI = statusTabRoot.GetComponentInChildren<MonsterStatusTabUI>(true);
+    }
+
+    private static Button FindButtonByName(Transform root, string childName)
+    {
+        if (root == null || string.IsNullOrWhiteSpace(childName))
+            return null;
+
+        foreach (Transform t in root.GetComponentsInChildren<Transform>(true))
+        {
+            if (t != null && string.Equals(t.name.Trim(), childName.Trim(), System.StringComparison.Ordinal))
+                return t.GetComponent<Button>();
+        }
+
+        return null;
+    }
+
+    private static Transform FindChildByTrimmedName(Transform root, string childName)
+    {
+        if (root == null || string.IsNullOrWhiteSpace(childName))
+            return null;
+
+        foreach (Transform t in root.GetComponentsInChildren<Transform>(true))
+        {
+            if (t != null && string.Equals(t.name.Trim(), childName.Trim(), System.StringComparison.Ordinal))
+                return t;
+        }
+
+        return null;
     }
 
     private void DumpTopRaycastHits(string reason)
@@ -572,3 +838,8 @@ public class InfoPanelBackgroundRaycastFilter : MonoBehaviour, ICanvasRaycastFil
         return !overPanel;
     }
 }
+
+////////////////////////////////////////////////////////////
+
+
+////////////////////////////////////////////////////////////
