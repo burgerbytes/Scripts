@@ -77,6 +77,17 @@ public class InfoPanelController : MonoBehaviour
     [Tooltip("If true, non-interactive content graphics (title/body/icon) will have Raycast Target disabled so they don't block tab button clicks.")]
     [SerializeField] private bool disableContentRaycastTargets = true;
 
+
+    [Header("Rendering")]
+    [Tooltip("If true, the info panel root gets its own nested Canvas so it renders above world-space combat and grid visuals.")]
+    [SerializeField] private bool useDedicatedPanelCanvas = true;
+
+    [Tooltip("Sorting layer used by the dedicated info panel canvas.")]
+    [SerializeField] private string dedicatedCanvasSortingLayerName = "UI";
+
+    [Tooltip("Sorting order used by the dedicated info panel canvas.")]
+    [SerializeField] private int dedicatedCanvasSortingOrder = 5100;
+
     [Header("Debug")]
     [SerializeField] private bool logFlow = false;
 
@@ -122,6 +133,7 @@ public class InfoPanelController : MonoBehaviour
 
         WireButtonListeners();
 
+        EnsureDedicatedPanelCanvas();
         _raycaster = GetComponentInParent<GraphicRaycaster>();
         CachePanelRectAndInstallBackgroundFilter();
 
@@ -135,11 +147,83 @@ public class InfoPanelController : MonoBehaviour
         ShowInfoTab();
     }
 
+
+    private void EnsureDedicatedPanelCanvas()
+    {
+        if (!useDedicatedPanelCanvas)
+            return;
+
+        if (infoPanelRoot == null)
+            infoPanelRoot = gameObject;
+
+        EnsureDedicatedCanvasOnTarget(infoPanelRoot, "panel-root", dedicatedCanvasSortingOrder);
+
+        if (infoPanelRoot != gameObject)
+            EnsureDedicatedCanvasOnTarget(gameObject, "controller-root", Mathf.Max(0, dedicatedCanvasSortingOrder - 1));
+    }
+
+    private void EnsureDedicatedCanvasOnTarget(GameObject target, string label, int sortingOrder)
+    {
+        if (target == null)
+        {
+            if (logFlow)
+                Debug.LogWarning($"{TAG} Dedicated canvas skipped for {label}: target is NULL.", this);
+            return;
+        }
+
+        Canvas parentCanvas = target.transform.parent != null ? target.transform.parent.GetComponentInParent<Canvas>(true) : GetComponentInParent<Canvas>(true);
+        Canvas ownCanvas = target.GetComponent<Canvas>();
+        bool addedCanvas = false;
+        if (ownCanvas == null)
+        {
+            ownCanvas = target.AddComponent<Canvas>();
+            addedCanvas = true;
+        }
+
+        ownCanvas.overrideSorting = true;
+        if (!string.IsNullOrWhiteSpace(dedicatedCanvasSortingLayerName))
+            ownCanvas.sortingLayerName = dedicatedCanvasSortingLayerName;
+        ownCanvas.sortingOrder = sortingOrder;
+
+        if (parentCanvas != null)
+        {
+            ownCanvas.renderMode = parentCanvas.renderMode;
+            ownCanvas.worldCamera = parentCanvas.worldCamera;
+            ownCanvas.planeDistance = parentCanvas.planeDistance;
+            ownCanvas.pixelPerfect = parentCanvas.pixelPerfect;
+            ownCanvas.additionalShaderChannels = parentCanvas.additionalShaderChannels;
+        }
+        else
+        {
+            ownCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        }
+
+        GraphicRaycaster raycaster = target.GetComponent<GraphicRaycaster>();
+        bool addedRaycaster = false;
+        if (raycaster == null)
+        {
+            raycaster = target.AddComponent<GraphicRaycaster>();
+            addedRaycaster = true;
+        }
+
+        if (ReferenceEquals(target, infoPanelRoot))
+            _raycaster = raycaster;
+
+        Canvas[] localCanvases = target.GetComponents<Canvas>();
+        if (logFlow)
+        {
+            Debug.Log(
+                $"{TAG} Dedicated canvas ensured on '{target.name}' ({label}) | addedCanvas={addedCanvas} addedRaycaster={addedRaycaster} activeSelf={target.activeSelf} activeInHierarchy={target.activeInHierarchy} parentCanvas={(parentCanvas != null ? parentCanvas.name : "<none>")} renderMode={ownCanvas.renderMode} worldCamera={(ownCanvas.worldCamera != null ? ownCanvas.worldCamera.name : "<none>")} layer={ownCanvas.sortingLayerName} order={ownCanvas.sortingOrder} localCanvasCount={localCanvases.Length}",
+                target);
+        }
+    }
+
     private void OnEnable()
     {
         AutoWireButtons();
         AutoWirePresenters();
         WireButtonListeners();
+        EnsureDedicatedPanelCanvas();
     }
 
     private void OnDestroy()
@@ -311,6 +395,7 @@ public class InfoPanelController : MonoBehaviour
 
         if (!IsOpen)
         {
+            EnsureDedicatedPanelCanvas();
             infoPanelRoot.SetActive(true);
             reelDisableManager?.DisableReels();
             CachePanelRectAndInstallBackgroundFilter();
@@ -353,6 +438,7 @@ public class InfoPanelController : MonoBehaviour
         AutoWireButtons();
         AutoWirePresenters();
         WireButtonListeners();
+        EnsureDedicatedPanelCanvas();
     }
 
     private void ApplyPresentation(InfoPanelPresentation presentation, bool openPanel)
@@ -841,5 +927,7 @@ public class InfoPanelBackgroundRaycastFilter : MonoBehaviour, ICanvasRaycastFil
 
 ////////////////////////////////////////////////////////////
 
+
+////////////////////////////////////////////////////////////
 
 ////////////////////////////////////////////////////////////

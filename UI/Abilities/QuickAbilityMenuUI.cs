@@ -47,6 +47,17 @@ public class QuickAbilityMenuUI : MonoBehaviour
     [Tooltip("Screen-space offset applied from the hero position to the ability section anchor.")]
     [SerializeField] private Vector2 heroSectionScreenOffset = new Vector2(84f, 0f);
 
+
+    [Header("Rendering")]
+    [Tooltip("If true, the quick ability panel root gets its own nested Canvas so it always renders above world-space combat visuals.")]
+    [SerializeField] private bool useDedicatedPanelCanvas = true;
+
+    [Tooltip("Sorting layer used by the dedicated quick ability panel canvas.")]
+    [SerializeField] private string dedicatedCanvasSortingLayerName = "UI";
+
+    [Tooltip("Sorting order used by the dedicated quick ability panel canvas.")]
+    [SerializeField] private int dedicatedCanvasSortingOrder = 5000;
+
     [Header("Debug")]
     [SerializeField] private bool debugLogs = true;
 
@@ -79,11 +90,77 @@ public class QuickAbilityMenuUI : MonoBehaviour
             resourcePool = ResourcePool.Instance != null ? ResourcePool.Instance : FindFirstObjectByType<ResourcePool>();
 
         AutoWireIfMissing();
+        EnsureDedicatedPanelCanvas();
         ApplyLayoutSettings();
         HideDetails();
 
         if (root != null)
             root.SetActive(false);
+    }
+
+
+    private void EnsureDedicatedPanelCanvas()
+    {
+        if (!useDedicatedPanelCanvas)
+            return;
+
+        EnsureDedicatedCanvasOnTarget(root != null ? root : gameObject, "menu-root", dedicatedCanvasSortingOrder);
+
+        if (root != null && root != gameObject)
+            EnsureDedicatedCanvasOnTarget(gameObject, "controller-root", Mathf.Max(0, dedicatedCanvasSortingOrder - 1));
+    }
+
+    private void EnsureDedicatedCanvasOnTarget(GameObject target, string label, int sortingOrder)
+    {
+        if (target == null)
+        {
+            if (debugLogs)
+                Debug.LogWarning($"[QuickAbilityMenuUI] Dedicated canvas skipped for {label}: target is NULL.", this);
+            return;
+        }
+
+        Canvas parentCanvas = target.transform.parent != null ? target.transform.parent.GetComponentInParent<Canvas>(true) : GetComponentInParent<Canvas>(true);
+        Canvas ownCanvas = target.GetComponent<Canvas>();
+        bool addedCanvas = false;
+        if (ownCanvas == null)
+        {
+            ownCanvas = target.AddComponent<Canvas>();
+            addedCanvas = true;
+        }
+
+        ownCanvas.overrideSorting = true;
+        if (!string.IsNullOrWhiteSpace(dedicatedCanvasSortingLayerName))
+            ownCanvas.sortingLayerName = dedicatedCanvasSortingLayerName;
+        ownCanvas.sortingOrder = sortingOrder;
+
+        if (parentCanvas != null)
+        {
+            ownCanvas.renderMode = parentCanvas.renderMode;
+            ownCanvas.worldCamera = parentCanvas.worldCamera;
+            ownCanvas.planeDistance = parentCanvas.planeDistance;
+            ownCanvas.pixelPerfect = parentCanvas.pixelPerfect;
+            ownCanvas.additionalShaderChannels = parentCanvas.additionalShaderChannels;
+        }
+        else
+        {
+            ownCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        }
+
+        GraphicRaycaster raycaster = target.GetComponent<GraphicRaycaster>();
+        bool addedRaycaster = false;
+        if (raycaster == null)
+        {
+            raycaster = target.AddComponent<GraphicRaycaster>();
+            addedRaycaster = true;
+        }
+
+        Canvas[] localCanvases = target.GetComponents<Canvas>();
+        if (debugLogs)
+        {
+            Debug.Log(
+                $"[QuickAbilityMenuUI] Dedicated canvas ensured on '{target.name}' ({label}) | addedCanvas={addedCanvas} addedRaycaster={addedRaycaster} activeSelf={target.activeSelf} activeInHierarchy={target.activeInHierarchy} parentCanvas={(parentCanvas != null ? parentCanvas.name : "<none>")} renderMode={ownCanvas.renderMode} worldCamera={(ownCanvas.worldCamera != null ? ownCanvas.worldCamera.name : "<none>")} layer={ownCanvas.sortingLayerName} order={ownCanvas.sortingOrder} localCanvasCount={localCanvases.Length}",
+                target);
+        }
     }
 
     private void OnEnable()
@@ -117,6 +194,7 @@ public class QuickAbilityMenuUI : MonoBehaviour
     public void Toggle()
     {
         AutoWireIfMissing();
+        EnsureDedicatedPanelCanvas();
         ApplyLayoutSettings();
 
         if (onlyUsableDuringPlayerPhase && battleManager != null && !battleManager.IsPlayerPhase)
@@ -737,3 +815,6 @@ public class QuickAbilityMenuUI : MonoBehaviour
         }
     }
 }
+
+
+////////////////////////////////////////////////////////////
