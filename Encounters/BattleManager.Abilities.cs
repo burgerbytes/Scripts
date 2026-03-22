@@ -1,6 +1,3 @@
-// PATH: Assets/Scripts/Encounters/BattleManager.Abilities.cs
-// GUID: 086503e8a2281b644a98f9a1ad68431a
-////////////////////////////////////////////////////////////
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -380,6 +377,7 @@ public partial class BattleManager : MonoBehaviour
         _pendingActorIndex = actorIndex;
         _pendingAbility = ability;
         _selectedEnemyTarget = null;
+        _selectedFieldObjectTarget = null;
         _previewPartyTargetIndex = -1;
         _selectedPartyTargetIndex = -1;
         HideConfirmText();
@@ -506,16 +504,26 @@ public partial class BattleManager : MonoBehaviour
             performanceTracker.RecordAbilityUse(actorStats, ability);
 
         Monster enemyTarget = _selectedEnemyTarget;
+        FieldObjectInstance fieldTarget = _selectedFieldObjectTarget;
 
         if (ability.targetType == AbilityTargetType.Enemy)
         {
-            if (enemyTarget == null || enemyTarget.IsDead)
+            bool noMonster = (enemyTarget == null || enemyTarget.IsDead);
+            if (noMonster && fieldTarget == null)
             {
-                if (logFlow) Debug.Log("[Battle][Resolve] Abort: Enemy target required but not selected (or dead). Returning to awaiting target.", this);
+                if (logFlow) Debug.Log("[Battle][Resolve] Abort: Enemy/field target required but not selected. Returning to awaiting target.", this);
                 _awaitingEnemyTarget = true;
                 ClearImpactCameraContext();
                 yield break;
             }
+        }
+
+        if (!IsPendingAbilityTargetInRange(actorStats, enemyTarget, fieldTarget, ability))
+        {
+            Debug.Log($"[Battle][Range] '{ability.abilityName}' is out of range for the selected target.", this);
+            ClearImpactCameraContext();
+            CancelPendingAbility();
+            yield break;
         }
 
         if (ability.targetType == AbilityTargetType.Ally && ability.shieldAmount > 0)
@@ -838,7 +846,12 @@ public partial class BattleManager : MonoBehaviour
 
             // Non-damaging abilities (isDamaging == false) should NEVER apply any damage by default.
             // This makes utility abilities like Taunt/Focus Rune safe even if the caster has high Attack.
-            bool doesDamage = (ability != null && ability.isDamaging);
+            if (fieldTarget != null && battleGridSystem != null)
+            {
+                fieldTarget.TriggerDirectInteraction(battleGridSystem, this);
+            }
+
+            bool doesDamage = (ability != null && ability.isDamaging && fieldTarget == null);
 
             if (!doesDamage && logFlow)
                 Debug.Log($"[Battle][Resolve] Non-damaging ability -> skipping damage application. ability={ability.abilityName}", this);
@@ -973,6 +986,10 @@ public partial class BattleManager : MonoBehaviour
                         classAttackModifier: 1f,
                         element: ability.element,
                         abilityTags: ability.tags);
+
+                    TryApplyAbilityKnockback(actorStats, target, ability);
+                    if (castsExecuted == 0)
+                        ApplyGridSplashDamage(actorStats, target, ability, totalBaseDamage);
 
                     if (debugEnemyHpBarDrop && target != null)
                     {
@@ -1273,6 +1290,7 @@ public partial class BattleManager : MonoBehaviour
         _awaitingEnemyTarget = false;
         _awaitingPartyTarget = false;
         _selectedEnemyTarget = null;
+        _selectedFieldObjectTarget = null;
         _previewPartyTargetIndex = -1;
         _selectedPartyTargetIndex = -1;
         HideConfirmText();
@@ -1349,6 +1367,10 @@ public partial class BattleManager : MonoBehaviour
 
 }
 
+
+
+
+////////////////////////////////////////////////////////////
 
 
 

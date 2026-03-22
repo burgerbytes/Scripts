@@ -10,6 +10,12 @@ public enum AbilityTargetType
     Ally
 }
 
+public enum CombatAbilityRange
+{
+    Melee,
+    Ranged
+}
+
 public enum AbilityTag
 {
     Assassinate,
@@ -65,6 +71,17 @@ public class AbilityDefinitionSO : ScriptableObject
 
     [Header("Targeting")]
     public AbilityTargetType targetType = AbilityTargetType.Enemy;
+    public CombatAbilityRange rangeType = CombatAbilityRange.Ranged;
+
+    [Tooltip("If true, this ability is treated as a board-space AoE centered on the primary target.")]
+    public bool useGridAoe = false;
+
+    [Min(0)]
+    [Tooltip("Tile radius for the board-space AoE. 0 = single target only.")]
+    public int aoeRadiusTiles = 0;
+
+    [Tooltip("If true, this ability knocks the primary target back 1 tile directly away from the attacker.")]
+    public bool hasKnockback = false;
 
     [Header("Costs")]
     public ResourceCost cost = new ResourceCost(0, 0, 0, 0);
@@ -79,8 +96,6 @@ public class AbilityDefinitionSO : ScriptableObject
     [Header("Debug")]
     [Tooltip("If true, this ability is intended for debug/dev only (e.g., Judgment). It can be globally disabled so it won\'t appear or be cast.")]
     public bool isDebugOnly = false;
-
-
 
     [Header("Damage / Defense")]
     public int baseDamage = 0;
@@ -107,7 +122,6 @@ public class AbilityDefinitionSO : ScriptableObject
     [Tooltip("If spendAllAttackResources is true, this many bonus damage is added per Attack resource consumed.")]
     public int bonusDamagePerAttackResource = 2;
 
-
     [Tooltip("If true, this ability costs 0 Attack while the user is Hidden.")]
     public bool freeIfHidden = false;
 
@@ -127,7 +141,6 @@ public class AbilityDefinitionSO : ScriptableObject
     [Tooltip("If true, killing an enemy with this ability triggers an immediate bonus spin on the caster's reel and instantly cashes out ONLY that reel.")]
     public bool momentumOnKill = false;
 
-    
     [Header("Combo")]
     [Tooltip("If true, casting this ability performs one or more bonus one-reel spins (does not consume SpinsRemaining). Each time a spin lands on comboTriggerType, the ability will queue additional casts based on the resource gain. This can chain until comboMaxTotalCasts is reached.")]
     public bool hasCombo = false;
@@ -169,8 +182,6 @@ public class AbilityDefinitionSO : ScriptableObject
     [Tooltip("How many Sabotage stacks to add when this ability is used. When the sabotaged attack is used, the enemy takes self-damage equal to the current stacks.")]
     [Min(1)] public int sabotageStacks = 1;
 
-
-
     [Header("Summon (Experimental)")]
     [Tooltip("Optional: if assigned, this ability can summon a monster prefab. (Requires battle-side support for ally summons; currently used for enemy summons.)")]
     public GameObject summonPrefab;
@@ -179,12 +190,6 @@ public class AbilityDefinitionSO : ScriptableObject
     [Min(1)]
     public int summonCount = 1;
 
-    /// <summary>
-    /// Returns the resolved animation key string used for lookup in CasterAnimationProfile.
-    /// - If Animation Key is Custom, returns customAnimationKey.
-    /// - Otherwise returns the enum name (e.g. BasicAttack).
-    /// - If enum is None and legacy key exists, returns legacy key (backwards compatibility).
-    /// </summary>
     public string GetAnimationKeyString()
     {
         if (animationKey == AbilityAnimationKey.Custom)
@@ -193,37 +198,20 @@ public class AbilityDefinitionSO : ScriptableObject
         if (animationKey != AbilityAnimationKey.None)
             return animationKey.ToString();
 
-        // Legacy fallback (old projects stored a string key)
         return string.IsNullOrWhiteSpace(legacyAnimationKey) ? string.Empty : legacyAnimationKey;
     }
 
 #if UNITY_EDITOR
-    // Editor-only: try to auto-migrate legacy string values into the enum where possible.
     private void OnValidate()
     {
-        // Only attempt migration if enum is unset and we have a legacy string.
         if (animationKey != AbilityAnimationKey.None) return;
         if (string.IsNullOrWhiteSpace(legacyAnimationKey)) return;
 
-        // If the legacy key matches an enum name, migrate it.
         if (Enum.TryParse<AbilityAnimationKey>(legacyAnimationKey, ignoreCase: true, out var parsed) &&
             parsed != AbilityAnimationKey.None && parsed != AbilityAnimationKey.Custom)
         {
             animationKey = parsed;
-            // Keep legacyAnimationKey populated as a safety net.
         }
     }
 #endif
 }
-
-
-////////////////////////////////////////////////////////////
-
-////////////////////////////////////////////////////////////
-
-
-
-
-
-
-////////////////////////////////////////////////////////////

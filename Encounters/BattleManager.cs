@@ -905,6 +905,16 @@ if (_monsterInfoHoldArmed)
 
         if (clicked == null)
         {
+            FieldObjectInstance clickedFieldObject = TryGetClickedFieldObject();
+            if (clickedFieldObject != null)
+            {
+                if (_awaitingEnemyTarget)
+                {
+                    SelectFieldObjectTarget(clickedFieldObject);
+                    return;
+                }
+            }
+
             // Allow clicking hero world sprites (their prefab colliders) to select ally/self targets.
             // This prevents "clicked elsewhere -> cancel" when the player is actually clicking the ally to heal/shield.
             int clickedPartyIndex = TryGetClickedPartyMemberIndex();
@@ -1376,6 +1386,8 @@ ResetPartyRoundFlags();
         }
         ApplyPartyHiddenVisuals();
         SpawnEncounterMonsters();
+        InitializeBattleGridForMonstersAndObjects();
+        SetBattleGridVisualsActive(true);
 
         if (performanceTracker != null)
         {
@@ -2263,8 +2275,25 @@ else if (rewardChoice == RewardsTablePanel.RewardsTableChoice.TreasureReels)
         StartBattle();
     }
 
+    private void SetBattleGridVisualsActive(bool active)
+    {
+        if (battleGridSystem == null)
+            return;
+
+        battleGridSystem.SetGridVisualActive(active);
+    }
+
+    private void HideBattleGridVisualsImmediate()
+    {
+        if (battleGridSystem == null)
+            return;
+
+        battleGridSystem.SetGridVisualActive(false);
+    }
+
     private void CleanupExistingEncounter()
     {
+        HideBattleGridVisualsImmediate();
         CleanupEnemyTargetIndicators();
 
         for (int i = 0; i < _activeMonsters.Count; i++)
@@ -3286,3 +3315,4 @@ if (logPassiveBridge)
 
 
 ////////////////////////////////////////////////////////////
+

@@ -90,6 +90,8 @@ if (reelSpinSystem != null)
         ConfigureReelSpinSystemCashoutHooks();
         }
 
+        InitializeBattleGridForParty();
+
         _activePartyIndex = GetFirstAlivePartyIndex();
         OnActivePartyMemberChanged?.Invoke(_activePartyIndex);
         NotifyPartyChanged();
@@ -401,3 +403,4 @@ private bool TryRunLevel5EvolutionNow()
     }
 
 }
+

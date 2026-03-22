@@ -103,6 +103,7 @@ public partial class BattleManager : MonoBehaviour
         }
 
         _selectedEnemyTarget = target;
+        _selectedFieldObjectTarget = null;
         _awaitingEnemyTarget = false;
 
         ClearEnemyTargetPreview();
@@ -438,3 +439,4 @@ private IEnumerator SpawnSpellEffectOnTargetRoutine(Monster target)
     }
 
 }
+
